@@ -128,5 +128,8 @@
   "panel.usage.note": "The ledger keeps time and sticker id only, never conversation text.",
   "panel.usage.ok": "Outcome",
   "panel.usage.sent": "Sent",
-  "panel.usage.source": "Source"
+  "panel.usage.source": "Source",
+  "plugin.name": "Sticker Manager",
+  "plugin.short_description": "Collect and send stickers: you manage the library in the panel, she picks one and sends it herself",
+  "plugin.description": "Give her a sticker collection of her own: you add, describe and tag stickers in the panel, and she picks one to send in chat. png/jpg/gif/webp with animations preserved; every send is logged so you can see what she has been using lately."
 }

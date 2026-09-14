@@ -4,6 +4,9 @@
 
 - **显示名改为「表情包管理」**（只动 `[plugin].name`、面板标题四处与文档题头；
 id / entry / 类名 / 仓名不变，装机兼容）——在插件市场里比「表情包管理器」好听得多了
+- **补 `plugin.name`/`plugin.description`/`plugin.short_description` 双语 i18n 键**：宿主已安装卡片
+  优先读插件语言包的 `plugin.name`（回落才是 toml name），en 用户不再看到中文回落名；
+  改显示名今后要两处一起改（已成文进 DESIGN Identity Lock 段）
 
 - 工具注册心跳（移植 our_life v0.5.0 已验证方案，适配本插件两工具面）：
 

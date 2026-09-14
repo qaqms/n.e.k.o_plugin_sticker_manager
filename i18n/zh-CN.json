@@ -128,5 +128,8 @@
   "panel.usage.note": "台账只记时刻与表情 id，不含对话原文。",
   "panel.usage.ok": "结果",
   "panel.usage.sent": "已发出",
-  "panel.usage.source": "来源"
+  "panel.usage.source": "来源",
+  "plugin.name": "表情包管理",
+  "plugin.short_description": "表情包收藏与发送：面板管理库，猫娘通过工具自主挑图发到聊天",
+  "plugin.description": "给她一个自己的表情包收藏间：你在面板里收藏、写描述、打标签，她在对话里自己挑一张发出去。支持 png/jpg/gif/webp，动图保留动画；每次发送都记台账，面板能看到她最近爱用什么。"
 }
