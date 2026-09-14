@@ -10,6 +10,10 @@ v0.1.0「能收能发」：主人在面板里收藏表情包（上传、写描�
 发送走 `push_message` 的 image part（≤ 内联预算直发原字节，大图换 URL part），
 每次成败都记进使用台账，面板能看到"她最近爱用什么"。
 
+v0.1.4「不再静默缺席」：工具注册心跳（services/tool_watch）——main_server 重启或
+晚于插件启动时，她的 `sticker_list` / `sticker_send` 会静默缺席，巡检器每 5 分钟
+点名补挂。
+
 三条硬约束（源码核实，见 DESIGN.md「已知陷阱」）：
 1. `ctx.images.upload()` 会把图**归一成 JPEG**——gif 动图会被压平，所以动图只走
    内联通道，内联预算装不下就如实拒绝，不上报假成功。
@@ -35,6 +39,7 @@ from plugin.sdk.plugin import (
     llm_tool,
     neko_plugin,
     plugin_entry,
+    timer_interval,
     tr,
     ui,
 )
@@ -49,7 +54,7 @@ from .core import (
     search_stickers,
     validate_desc,
 )
-from .services import Library, Sender
+from .services import Library, Sender, ToolWatch
 
 __all__ = ["StickerManagerPlugin"]
 
@@ -66,6 +71,10 @@ class StickerManagerPlugin(NekoPluginBase):
         self._settings = StickerManagerSettings.defaults()
         self._library = Library(self.data_path("library"), logger=self.logger)
         self._sender = Sender(self, self._library, logger=self.logger)
+        # 工具注册心跳（v0.1.4）：@llm_tool 只在启动时发一次 IPC，main_server 没就绪
+        # 或重启后她的两个工具会静默缺席（见 services/tool_watch.py 模块 docstring）。
+        # 与总开关无关：注册韧性是宿主层面的在场性，不随业务冻结而应冻结。
+        self._tool_watch = ToolWatch(self, logger=self.logger)
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -105,6 +114,22 @@ class StickerManagerPlugin(NekoPluginBase):
             probe.ok,
         )
         return Ok({"status": "stopped", "stickers": self._library.count()})
+
+    # ------------------------------------------------------------------
+    # 工具注册心跳（v0.1.4）
+    # ------------------------------------------------------------------
+
+    @timer_interval(id="watch", seconds=60, name="sticker_manager tool watch")
+    async def on_watch(self, **_):
+        # 每 60s 递一下心跳器，内部按 300s 自节流（首拍即查，早发现竞态窗）。
+        # timer 每拍跑在新 event loop 且无 watchdog：异常必须自己兜住（陷阱 §3）。
+        # maybe_run 内部已经吞一切，这里是双保险——心跳坏掉不许把表标黄。
+        try:
+            result = await self._tool_watch.maybe_run(now=time.time())
+        except Exception:  # noqa: BLE001 - timer 无 watchdog，异常漏出去会停不了但也静默
+            self.logger.warning("sticker_manager tool watch leaked", exc_info=True)
+            result = {"status": "leaked"}
+        return Ok(result)
 
     # ------------------------------------------------------------------
     # 管理入口（面板 + 命令面板共用）

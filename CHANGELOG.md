@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.4
+工具注册心跳（移植 our_life v0.5.0 已验证方案，适配本插件两工具面）：
+
+- **`services/tool_watch.py`（新）**：低频巡检器——每 5 分钟回环 `GET /api/tools`
+  点名缺席的 `sticker_list` / `sticker_send`，只对"可达且真缺席"补挂（走基类
+  `_notify_llm_tool_registered` IPC 重发，replace 幂等；`getattr` 取用，宿主改名
+  时降级为日志不是崩溃）；不可达零动作（不盲挂、不每拍追打）；认不出的响应形状
+  按"全场无工具"处理（幂等重发比漏挂安全）
+- **病因**：`@llm_tool` 只在启动时发一次 IPC；main_server 晚起或重启后注册表全丢
+  且不重试，她的发表情通道**静默失效**没人发现（宿主 docstring 自己写着
+  "The plugin can re-register later"，官方 tool-calling 文档钦定周期巡检解法）
+- **新 timer `on_watch`（60s 一拍，内部按 300s 自节流，首拍即查）**：本插件此前
+  无后台拍；timer 无 watchdog，入口层双保险吞异常。心跳与 `[sticker_manager].enabled`
+  无关：注册韧性是在场性，不随业务冻结而冻结
+- 间隔不进配置：可靠性参数不是行为参数（与冷却只在内存同等待遇）
+- 测试 108 → 121（新 `tests/test_tool_watch.py` 13 条：形状差集×4 / 间隔自节流×2 /
+  不可达不盲挂 / 点名补挂 / 单名失败不连坐 / protected 面缺席降级 / fetch 异常吞掉 /
+  间隔常量钉住 / timer 入口离线可跑）；DESIGN 风险区销账 + 陷阱 15
+
 ## 0.1.3
 实机首测修复（Steam 宿主日志钉的坑）：
 

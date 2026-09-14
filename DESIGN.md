@@ -23,6 +23,9 @@
 - 批量导入（v0.1.2，思路参致 astrbot）：面板原生 multiple 文件框逐张走 add 通道；`data/library/inbox/` 目录由 `import_inbox` 服务端整批收（描述取自文件名，成功/重复源删、超限/坏图留）
 - 内容指纹查重（v0.1.1）：入库记 sha256，同图回 `duplicate_image`；旧条目在查重/体检时 lazy 回填（catalog schema 不变，宽松兼容）
 - 工具面：`sticker_list`（目录）、`sticker_send`（按 id 或关键词发）
+- 工具注册心跳（v0.1.4，移植 our_life v0.5.0）：`@timer_interval("watch", 60s)` 拍上挂
+  `services/tool_watch.ToolWatch`（300s 自节流，首拍即查）：回环 `GET /api/tools` 点名缺席、
+  只对真缺席补挂（IPC 重发 replace 幂等）；不可达零动作；永不炸拍
 - 发送链路：≤256KiB 内联 image data part（gif 恒走内联保动画）；更大走 `ctx.images.upload()` 换 URL part
 - 频控：按角色卡内存冷却（默认 20s）；`push_message(visibility=["chat"], ai_behavior="read")`
 - i18n：zh-CN + en（Python `tr()` 与 TSX `t()` 键全部入文件，有门钉着）
@@ -32,7 +35,7 @@
 - qq_auto_reply 的 QQ 表情目录联动（`call_entry` 通道存在，要做需单独立项）
 - 表情包分组/套图（tags 已留扩展位）
 - 定期目录注入（现在靠她主动调 `sticker_list`；若实测"她想不起来有表情"再加注入通道）
-- 工具重注册心跳（宿主重启时序问题，见风险；our_life 同款缺口，跟它一起解）
+- ~~工具重注册心跳~~ —— **v0.1.4 已做**（our_life v0.5.0 方案移植，见上面的工具面与陷阱 15）
 
 ## Inferred Technical Needs
 - plugin.toml：`[plugin]` `[plugin.sdk]` `[plugin.i18n]` `[plugin.ui]+panel` `[plugin_runtime]`(auto_start=true) + 业务段 `[sticker_manager]/.send/.storage`
@@ -66,6 +69,12 @@
     所以 preview 是**分段协议**（offset → chunk_base64/next_offset/done，宽 3MiB=3 的倍数
     保证 base64 无填充可串接）；任何入口都不许把 MB 级 base64 塞进返回值。
     注意发送链路的 `images.upload` 走的是另一条专用媒体通道（单张 8MiB），不受此限。
+15. **心跳补挂只能走基类 protected 面**（`_notify_llm_tool_registered`，一律 `getattr`）：
+    公开 `register_llm_tool` 重调会撞 SDK `_llm_tools` 里的同名条目（EntryConflictError），
+    "先 unregister 再 register"有本地已删、远端又失败的窗口——都比原地重发更糟。
+    另外两条纪律：不可达≠缺席（main_server 没起时盲重注册是每拍追打）；
+    `no_tools`（工具还没收集齐）**不推进时钟**，收集齐后下一拍就查。心跳与 `[].enabled`
+    无关：注册韧性是在场性，不随业务冻结而冻结。
 
 ## Read Context Plan
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）
@@ -76,5 +85,6 @@
 `F:\ai\neko kaifa2\n.e.k.o_plugin_sticker_manager`（独立 Git 仓；宿主仓同级）
 
 ## Risk Follow-ups
-- llm_tool 注册表在宿主重启后即丢且无自动重注册（缺口 #4 同源）→ 她可能"突然不会发表情"；解法与 our_life 心跳一起立项。
+- ~~llm_tool 注册表在宿主重启后即丢且无自动重注册~~ —— **v0.1.4 已解**
+  （`services/tool_watch.py`，our_life v0.5.0 同方案；间隔 300s，与 fc/our_life 同量级）。
 - 上传图无内容审核：库是主人手动收藏的，风险面与在线图源不同；若未来开"她自己去网上抓图入库"，必须接宿主 `utils/meme_moderation` 等价物。
