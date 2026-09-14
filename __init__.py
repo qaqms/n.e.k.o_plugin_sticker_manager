@@ -40,6 +40,7 @@ from plugin.sdk.plugin import (
 )
 
 from .core import (
+    MAX_STICKER_BYTES,
     Sticker,
     StickerManagerSettings,
     format_catalog_for_model,
@@ -159,7 +160,7 @@ class StickerManagerPlugin(NekoPluginBase):
             payload = base64.b64decode(data_base64, validate=False)
         except (binascii.Error, ValueError):
             return Err(SdkError("image_undecodable"))
-        if len(payload) > 8 * 1024 * 1024:
+        if len(payload) > MAX_STICKER_BYTES:
             return Err(SdkError("image_too_large"))
         sticker, error = self._library.add(
             data=payload,
@@ -437,6 +438,35 @@ class StickerManagerPlugin(NekoPluginBase):
         counts = self._library.repair()
         return Ok({"note": "library_repaired", **counts})
 
+    @ui.action(
+        id="import_inbox",
+        label=tr("actions.import_inbox.label", default="Import"),
+        tone="primary",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="import_inbox",
+        name=tr("entries.import_inbox.name", default="导入收件箱里的图片"),
+        description=tr(
+            "entries.import_inbox.description",
+            default="把收件箱目录里的图片逐张收进库（描述取自文件名，重复自动跳过）；成功与重复的源文件会被删掉，超限/坏图保留原地可重试",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "tags": {"type": "string", "description": tr("fields.tags", default="标签，逗号分隔（可选，整批共用）")},
+            },
+        },
+        llm_result_fields=["note", "imported", "duplicates", "rejected", "failed"],
+        timeout=120.0,
+    )
+    async def import_inbox_entry(self, tags: str = "", **_):
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        summary = self._library.ingest_inbox(tags=parse_tags_field(tags))
+        return Ok({"note": "inbox_imported", **summary})
+
     # ------------------------------------------------------------------
     # 面板上下文
     # ------------------------------------------------------------------
@@ -457,6 +487,10 @@ class StickerManagerPlugin(NekoPluginBase):
             },
             "stickers": [s.as_dict() for s in stickers],
             "usage": self._library.read_usage(limit=12),
+            "inbox": {
+                "pending": len(self._library.inbox_files()),
+                "path": str(self._library.inbox_dir),
+            },
             "config": {
                 "cooldown_sec": settings.send.cooldown_sec,
                 "inline_max_bytes": settings.send.inline_max_bytes,

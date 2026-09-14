@@ -5,8 +5,10 @@
 """
 
 from .catalog import (
+    MAX_STICKER_BYTES,
     Sticker,
     content_sha256,
+    desc_from_filename,
     detect_image_format,
     format_catalog_for_model,
     new_sticker_id,
@@ -18,11 +20,13 @@ from .catalog import (
 from .configuration import SendSettings, StickerManagerSettings, StorageSettings
 
 __all__ = [
+    "MAX_STICKER_BYTES",
     "SendSettings",
     "Sticker",
     "StorageSettings",
     "StickerManagerSettings",
     "content_sha256",
+    "desc_from_filename",
     "detect_image_format",
     "format_catalog_for_model",
     "new_sticker_id",

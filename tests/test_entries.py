@@ -268,3 +268,38 @@ class TestDedupAndRepair:
         row = run_async(plugin.list_entry()).value["stickers"][0]
         assert row["id"] == sid
         assert row["sha256"] == hashlib.sha256(PNG_BYTES).hexdigest()
+
+
+class TestInboxEntry:
+    def test_import_inbox_counts_and_context_pending(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        inbox = tmp_path / "library" / "inbox"
+        inbox.mkdir(parents=True)
+        (inbox / "挥手_cat.png").write_bytes(PNG_BYTES)
+        (inbox / "hi.gif").write_bytes(GIF_BYTES)
+        (inbox / "hi_copy.gif").write_bytes(GIF_BYTES)  # 与上一张内容相同 → 重复
+        pending = run_async(plugin.dashboard_context(**_ctx("K")))
+        assert pending["inbox"]["pending"] == 3
+        result = run_async(plugin.import_inbox_entry(tags="批量,导入"))
+        assert result.is_ok()
+        payload = result.value
+        assert payload["note"] == "inbox_imported"
+        assert payload["imported"] == 2
+        assert payload["duplicates"] == 1
+        assert payload["rejected"] == 0 and payload["failed"] == 0
+        listed = run_async(plugin.list_entry())
+        descs = {row["desc"] for row in listed.value["stickers"]}
+        assert descs == {"挥手 cat", "hi"}
+        assert all(row["tags"] == ["批量", "导入"] for row in listed.value["stickers"])
+        after = run_async(plugin.dashboard_context(**_ctx("K")))
+        assert after["inbox"]["pending"] == 0
+        assert after["inbox"]["path"]
+
+    def test_import_inbox_works_while_disabled(self, tmp_path, run_async):
+        # fail-closed 只管"发"，收的通道（含收件箱）不受开关影响
+        plugin, _host = _make(tmp_path, enabled=False)
+        inbox = tmp_path / "library" / "inbox"
+        inbox.mkdir(parents=True)
+        (inbox / "hi.png").write_bytes(PNG_BYTES)
+        result = run_async(plugin.import_inbox_entry())
+        assert result.is_ok() and result.value["imported"] == 1

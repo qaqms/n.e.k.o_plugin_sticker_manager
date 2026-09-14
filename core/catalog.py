@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -33,6 +34,24 @@ _MAGIC_FORMATS: tuple[tuple[bytes, str, str], ...] = (
 DESC_MAX_CHARS = 200
 TAG_MAX_CHARS = 24
 TAGS_MAX_COUNT = 12
+# 单张表情图的字节上限：入口层（base64 解码后）与收件箱目录扫描共用同一个数字。
+MAX_STICKER_BYTES = 8 * 1024 * 1024
+
+# 收件箱导入时文件名清洗成描述的规则：删扩展名、分隔符换空格、连续空白压扁。
+# 面板浏览器侧有一份等价的几行小函数；那是跨运行时的重复（iframe 里碰不到
+# Python），不抽同进程方法——改规则时两边一起改（DESIGN.md 陷阱 11）。
+_DESC_SEPARATORS = re.compile(r"[_\-+.]+")
+_DESC_BLANKS = re.compile(r"\s+")
+
+
+def desc_from_filename(name: str) -> str:
+    """把文件名（可带路径）洗成一句能当描述的骨干；洗空了给稳定兜底串。"""
+    base = (name or "").replace("\\", "/").rstrip("/").split("/")[-1]
+    stem = base.rsplit(".", 1)[0] if "." in base else base
+    cleaned = _DESC_BLANKS.sub(" ", _DESC_SEPARATORS.sub(" ", stem)).strip()
+    if not cleaned:
+        return "sticker"  # 空骨干兜底：desc 必填是硬契约，这里造一个中性占位
+    return cleaned[:DESC_MAX_CHARS]
 
 
 def detect_image_format(data: bytes) -> tuple[str, str] | None:

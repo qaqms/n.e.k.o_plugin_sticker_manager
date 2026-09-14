@@ -17,12 +17,23 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..core.catalog import Sticker, content_sha256, detect_image_format, new_sticker_id
+from ..core.catalog import (
+    MAX_STICKER_BYTES,
+    Sticker,
+    content_sha256,
+    desc_from_filename,
+    detect_image_format,
+    new_sticker_id,
+)
 
 CATALOG_VERSION = 1
 CATALOG_FILENAME = "catalog.json"
 USAGE_FILENAME = "usage.json"
 STICKER_DIRNAME = "stickers"
+# 收件箱：用户把一堆图片文件丢这里，面板点"导入收件箱"逐张收进库。
+# 选目录而不是浏览器多选当唯一批量通道：免 base64 膨胀、免逐次往返、
+# 成百张也不怕；点不到的文件（隐藏/子目录）一律不碰不删。
+INBOX_DIRNAME = "inbox"
 
 # 稳定错误码（面板与模型各自翻译/理解，见 DESIGN.md 的错误码契约）
 ERR_IO = "library_io_error"
@@ -63,6 +74,23 @@ class Library:
     @property
     def stickers_dir(self) -> Path:
         return self._root / STICKER_DIRNAME
+
+    @property
+    def inbox_dir(self) -> Path:
+        return self._root / INBOX_DIRNAME
+
+    def inbox_files(self) -> list[Path]:
+        """收件箱里可见的候选文件（排序稳定；不递归、不碰隐藏项）。"""
+        try:
+            if not self.inbox_dir.is_dir():
+                return []
+            return sorted(
+                p for p in self.inbox_dir.iterdir()
+                if p.is_file() and not p.name.startswith(".")
+            )
+        except Exception:
+            self._log("inbox scan failed")
+            return []
 
     @property
     def catalog_path(self) -> Path:
@@ -329,6 +357,53 @@ class Library:
             "purged_files": purged_files,
             "backfilled_hashes": backfilled,
         }
+
+    # ------------------------------------------------------------------
+    # 收件箱导入
+    # ------------------------------------------------------------------
+
+    def ingest_inbox(
+        self, *, tags: list[str], max_bytes: int = MAX_STICKER_BYTES
+    ) -> dict[str, int]:
+        """把收件箱里的图片逐张收进库（描述取自文件名，走 add 的全部规则：
+        魔数、查重、原子写盘）。
+
+        处置纪律：成功与重复的源文件删掉（重复件留着只会在下次体检里再报一遍）；
+        超限/坏图/读不动的**保留原地**，让用户能改好后重试。
+        返回四类计数：imported / duplicates / rejected / failed（隐藏文件不计）。
+        """
+        summary = {"imported": 0, "duplicates": 0, "rejected": 0, "failed": 0}
+        for path in self.inbox_files():
+            try:
+                data = path.read_bytes()
+            except Exception:
+                summary["failed"] += 1
+                continue
+            if len(data) > max_bytes:
+                summary["rejected"] += 1
+                continue
+            sticker, error = self.add(
+                data=data, desc=desc_from_filename(path.name), tags=tags, now=time.time()
+            )
+            if error == ERR_DUPLICATE:
+                summary["duplicates"] += 1
+                self._discard_inbox_file(path)
+            elif error:
+                summary["rejected"] += 1  # invalid_image / io_error：文件留着
+            else:
+                summary["imported"] += 1
+                self._discard_inbox_file(path)
+        self._log(
+            "inbox ingested: imported={imported} duplicates={duplicates} "
+            "rejected={rejected} failed={failed}".format(**summary)
+        )
+        return summary
+
+    def _discard_inbox_file(self, path: Path) -> None:
+        try:
+            path.unlink(missing_ok=True)
+        except Exception:
+            self._log(f"inbox file discard failed: {path.name}")
 
     # ------------------------------------------------------------------
     # 使用台账

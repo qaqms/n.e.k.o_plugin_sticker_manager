@@ -58,6 +58,7 @@ type State = {
   counts?: { total?: number; enabled?: number; sent_total?: number }
   stickers?: StickerRow[]
   usage?: UsageRow[]
+  inbox?: { pending?: number; path?: string }
   config?: { cooldown_sec?: number; inline_max_bytes?: number; catalog_limit_for_model?: number }
   error_code?: string
 }
@@ -78,6 +79,32 @@ function artifactFileName(artifact: any): string {
   const name = String((artifact && (artifact.filename || artifact.name)) || "")
   const base = name.split(/[\\/]/).pop() || ""
   return base.replace(/\.[A-Za-z0-9]+$/, "").replace(/[_\-]+/g, " ").trim()
+}
+
+// 批量通道单次上限：防一次拖几百张把插件子进程堆满 base64；超出部分如实报数。
+const MAX_BATCH_FILES = 64
+// 与 core.catalog.MAX_STICKER_BYTES 同数（iframe 碰不到 Python，跨运行时重复）。
+const MAX_STICKER_BYTES = 8 * 1024 * 1024
+
+// 与 core.catalog.desc_from_filename 同步修改（跨运行时的等价小函数）。
+function guessDesc(name: string): string {
+  const base = String(name || "").split(/[\\/]/).pop() || ""
+  const stem = base.replace(/\.[^.]+$/, "")
+  const cleaned = stem.replace(/[_\-+.]+/g, " ").replace(/\s+/g, " ").trim()
+  return (cleaned || "sticker").slice(0, 200)
+}
+
+function readAsDataUrl(file: any): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      resolve(String(reader.result || ""))
+    }
+    reader.onerror = () => {
+      resolve("")
+    }
+    reader.readAsDataURL(file)
+  })
 }
 
 function formatTime(seconds: number | undefined): string {
@@ -223,6 +250,8 @@ function AddForm(props: { surface: Surface }) {
   const [desc, setDesc] = useState("")
   const [tags, setTags] = useState("")
   const [busy, setBusy] = useState(false)
+  const [batchBusy, setBatchBusy] = useState(false)
+  const [batchNote, setBatchNote] = useState("")
   // 反馈：{kind: ""|"ok"|"err", text}。重复入库（duplicate_image）等失败必须让用户看见，
   // 只 console.warn 等于静默吞掉。
   const [feedback, setFeedback] = useState<{ kind: string; text: string }>({ kind: "", text: "" })
@@ -237,6 +266,60 @@ function AddForm(props: { surface: Surface }) {
         setDesc(guess)
       }
     }
+  }
+
+  // 批量多选：逐张走已测的 add 通道（魔数/查重/体积限制全复用），
+  // 描述取自文件名，收完在库里逐个编辑。失败按四类计数，不拼长报告。
+  const importMany = async (files: any) => {
+    const list: any[] = Array.from(files || [])
+    if (!list.length || batchBusy) {
+      return
+    }
+    const taken = list.slice(0, MAX_BATCH_FILES)
+    setBatchBusy(true)
+    let ok = 0
+    let dup = 0
+    let big = 0
+    let fail = 0
+    for (let i = 0; i < taken.length; i += 1) {
+      const file = taken[i]
+      if (Number(file.size) > MAX_STICKER_BYTES) {
+        big += 1
+      } else {
+        const b64 = dataUrlToBase64(await readAsDataUrl(file))
+        if (!b64) {
+          fail += 1
+        } else {
+          try {
+            const result = await callAction(surface, "add", {
+              data_base64: b64,
+              desc: guessDesc(String(file.name || "")),
+              tags: tags,
+            })
+            if (result && result.note === "sticker_added") {
+              ok += 1
+            } else {
+              fail += 1
+            }
+          } catch (error) {
+            const raw = error instanceof Error ? error.message : String(error ?? "")
+            if (extractCode(raw) === "duplicate_image") {
+              dup += 1
+            } else {
+              fail += 1
+            }
+          }
+        }
+      }
+      setBatchNote(t("panel.batch.busy", { done: i + 1, total: taken.length, defaultValue: "收藏中 {done}/{total}…" }))
+    }
+    setBatchBusy(false)
+    await surface.api.refresh()
+    const extra = list.length - taken.length
+    setBatchNote(
+      t("panel.batch.done", { ok: ok, dup: dup, big: big, fail: fail, defaultValue: "已收 {ok} · 重复跳过 {dup} · 超限略过 {big} · 失败 {fail}" }) +
+        (extra > 0 ? t("panel.batch.more", { extra: extra, defaultValue: "；本次未处理 {extra} 张" }) : ""),
+    )
   }
 
   const submit = async () => {
@@ -296,6 +379,20 @@ function AddForm(props: { surface: Surface }) {
           ? t("panel.add.busy", { defaultValue: "收藏中…" })
           : t("panel.add.submit", { defaultValue: "收进表情库" })}
       </Button>
+      <Divider />
+      <Field label={t("panel.batch.label", { defaultValue: "批量收藏：多选文件，文件名当描述，收完可逐个编辑" })}>
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          multiple
+          disabled={batchBusy}
+          onChange={(event: any) => {
+            importMany(event.target.files)
+            event.target.value = ""
+          }}
+        />
+      </Field>
+      {batchNote ? <Text>{batchNote}</Text> : null}
     </Stack>
   )
 }
@@ -304,15 +401,15 @@ export default function Panel(props: Surface) {
   const state = props.state || {}
   const t = props.t
   const [query, setQuery] = useState("")
-  const [repairNote, setRepairNote] = useState("")
+  const [libraryNote, setLibraryNote] = useState("")
   const stickers = state.stickers || []
 
   const repair = async () => {
-    setRepairNote("")
+    setLibraryNote("")
     try {
       const result = await callAction(props, "repair", {})
       if (result) {
-        setRepairNote(
+        setLibraryNote(
           t("panel.repair.done", {
             entries: result.removed_entries ?? 0,
             files: result.purged_files ?? 0,
@@ -324,7 +421,29 @@ export default function Panel(props: Surface) {
       await props.api.refresh()
     } catch (error) {
       const raw = error instanceof Error ? error.message : String(error ?? "failed")
-      setRepairNote(t("panel.toast.failed", { code: extractCode(raw), defaultValue: "操作失败：{code}" }))
+      setLibraryNote(t("panel.toast.failed", { code: extractCode(raw), defaultValue: "操作失败：{code}" }))
+    }
+  }
+
+  const importInbox = async () => {
+    setLibraryNote("")
+    try {
+      const result = await callAction(props, "import_inbox", {})
+      if (result) {
+        setLibraryNote(
+          t("panel.inbox.done", {
+            imported: result.imported ?? 0,
+            duplicates: result.duplicates ?? 0,
+            rejected: result.rejected ?? 0,
+            failed: result.failed ?? 0,
+            defaultValue: "导入完成：收进 {imported}、重复跳过 {duplicates}、坏图/超限 {rejected}、失败 {failed}",
+          }),
+        )
+      }
+      await props.api.refresh()
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error ?? "failed")
+      setLibraryNote(t("panel.toast.failed", { code: extractCode(raw), defaultValue: "操作失败：{code}" }))
     }
   }
 
@@ -390,6 +509,15 @@ export default function Panel(props: Surface) {
             <Inline gap={8} align="center" wrap>
               <Input value={query} onChange={setQuery} placeholder={t("panel.search", { defaultValue: "按描述 / 标签 / id 过滤" })} />
               <Button
+                tone="primary"
+                onClick={() => {
+                  importInbox()
+                }}
+              >
+                {(t("panel.inbox.button", { defaultValue: "导入收件箱" }) as string) +
+                  (state.inbox && state.inbox.pending ? " (" + state.inbox.pending + ")" : "")}
+              </Button>
+              <Button
                 tone="warning"
                 onClick={() => {
                   repair()
@@ -398,7 +526,10 @@ export default function Panel(props: Surface) {
                 {t("panel.repair.button", { defaultValue: "体检与修复" })}
               </Button>
             </Inline>
-            {repairNote ? <Text>{repairNote}</Text> : null}
+            {state.inbox && state.inbox.path ? (
+              <Text>{t("panel.inbox.hint", { path: state.inbox.path, defaultValue: "把图片文件放进 {path} 后点「导入收件箱」；描述取自文件名。" })}</Text>
+            ) : null}
+            {libraryNote ? <Text>{libraryNote}</Text> : null}
             {rows.length === 0 ? (
               <EmptyState
                 title={t("panel.empty.title", { defaultValue: "库还是空的" })}

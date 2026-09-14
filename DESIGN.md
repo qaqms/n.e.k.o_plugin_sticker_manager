@@ -19,7 +19,8 @@
 ## First Version Scope
 - 表情库：`data/library/catalog.json` + `data/library/stickers/<id>.<ext>` + `data/library/usage.json`
 - 格式：png / jpg / gif / webp，**只认文件头魔数**；单张 ≤8MiB
-- 入口面：add / update / remove / send / list / preview / history / switch / repair（全 `@ui.action`）+ `@ui.context("dashboard")`
+- 入口面：add / update / remove / send / list / preview / history / switch / repair / import_inbox（全 `@ui.action`）+ `@ui.context("dashboard")`
+- 批量导入（v0.1.2，思路参致 astrbot）：面板原生 multiple 文件框逐张走 add 通道；`data/library/inbox/` 目录由 `import_inbox` 服务端整批收（描述取自文件名，成功/重复源删、超限/坏图留）
 - 内容指纹查重（v0.1.1）：入库记 sha256，同图回 `duplicate_image`；旧条目在查重/体检时 lazy 回填（catalog schema 不变，宽松兼容）
 - 工具面：`sticker_list`（目录）、`sticker_send`（按 id 或关键词发）
 - 发送链路：≤256KiB 内联 image data part（gif 恒走内联保动画）；更大走 `ctx.images.upload()` 换 URL part
@@ -51,6 +52,14 @@
 8. release 门要求挂载副本里有 `tests/test_smoke.py`（manifest 扫描看源码树），且副本不能含高压缩比垃圾目录（.tmpgate 已排除）。
 9. 冷却在内存：重启清零是刻意行为，别"顺手"持久化。
 10. ruff 门跑 `--ignore-noqa`：noqa 注释不作数，E731（lambda 赋值）这类要真的改掉。
+11. **文件名→描述清洗有两份**（`core.catalog.desc_from_filename` 与面板 `guessDesc`）：
+    iframe 碰不到 Python，这是跨运行时的必要重复不是偷懒——改规则必须两边一起改，
+    否则批量两通道入库的描述形态会分叉。同理单张上限 `MAX_STICKER_BYTES`（Python）与
+    面板同名常量两处同数。
+12. **hosted TSX 里 `Array.from(x || [])` 推成 `unknown[]`**：取 `.size/.name` 直接
+    tsc 报错（hosted-tsx 门真跑类型检查）——要写 `const list: any[] = Array.from(...)`。
+13. 收件箱导入的处置纪律：**成功/重复的源文件删，超限/坏图留**（删留着重试）；
+    删重复件是因为不删会每轮重报同一批；隐藏项（点开头）不碰不删。
 
 ## Read Context Plan
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）

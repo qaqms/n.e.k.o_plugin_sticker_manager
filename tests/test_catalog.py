@@ -6,7 +6,9 @@ import time
 
 from conftest import GIF_BYTES, JPEG_BYTES, NOT_AN_IMAGE, PNG_BYTES, WEBP_BYTES
 from sticker_manager.core.catalog import (
+    DESC_MAX_CHARS,
     Sticker,
+    desc_from_filename,
     detect_image_format,
     format_catalog_for_model,
     is_animated_gif,
@@ -164,3 +166,21 @@ class TestCatalogForModel:
 
     def test_empty_library_is_empty_string(self):
         assert format_catalog_for_model([], 10) == ""
+
+
+class TestDescFromFilename:
+    def test_strips_extension_and_separators(self):
+        assert desc_from_filename("happy_cat-01.png") == "happy cat 01"
+
+    def test_takes_basename_of_path(self):
+        assert desc_from_filename(r"C:\pics\歪头.webp") == "歪头"
+
+    def test_collapses_whitespace(self):
+        assert desc_from_filename("a +.. b.gif") == "a b"
+
+    def test_empty_stem_falls_back(self):
+        assert desc_from_filename("...png") == "sticker"
+        assert desc_from_filename("") == "sticker"
+
+    def test_capped_at_desc_max(self):
+        assert len(desc_from_filename("x" * 500)) == DESC_MAX_CHARS

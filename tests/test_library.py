@@ -199,3 +199,50 @@ class TestRepair:
     def test_repair_on_empty_library_is_clean(self, tmp_path):
         lib = _library(tmp_path)
         assert lib.repair() == {"removed_entries": 0, "purged_files": 0, "backfilled_hashes": 0}
+
+
+class TestInbox:
+    def _put(self, lib, name, data):
+        lib.inbox_dir.mkdir(parents=True, exist_ok=True)
+        (lib.inbox_dir / name).write_bytes(data)
+
+    def test_imports_with_filename_desc_and_removes_sources(self, tmp_path):
+        lib = _library(tmp_path)
+        self._put(lib, "开心_cat.png", PNG_BYTES)
+        self._put(lib, "无语.jpg", JPEG_BYTES)
+        assert lib.ingest_inbox is not None
+        summary = lib.ingest_inbox(tags=["批量"])
+        assert summary == {"imported": 2, "duplicates": 0, "rejected": 0, "failed": 0}
+        rows = lib.all()
+        descs = {s.desc for s in rows}
+        assert descs == {"开心 cat", "无语"}
+        assert all(s.tags == ["批量"] for s in rows)
+        # 成功的源文件被消耗掉
+        assert lib.inbox_files() == []
+
+    def test_duplicates_skipped_and_source_removed(self, tmp_path):
+        lib = _library(tmp_path)
+        assert lib.add(data=PNG_BYTES, desc="原版", tags=[])[1] == ""
+        self._put(lib, "same.png", PNG_BYTES)
+        summary = lib.ingest_inbox(tags=[])
+        assert summary["duplicates"] == 1 and summary["imported"] == 0
+        assert lib.inbox_files() == []  # 重复件也删，不然每轮重报
+        assert lib.count() == 1
+
+    def test_oversize_and_bad_files_stay_for_retry(self, tmp_path):
+        lib = _library(tmp_path)
+        self._put(lib, "big.png", b"\x89PNG\r\n\x1a\n" + b"1" * 120)
+        self._put(lib, "fake.png", NOT_AN_IMAGE)
+        summary = lib.ingest_inbox(tags=[], max_bytes=64)
+        assert summary["rejected"] == 2
+        names = [p.name for p in lib.inbox_files()]
+        assert names == ["big.png", "fake.png"]  # 留着让用户处置
+        assert lib.count() == 0
+
+    def test_hidden_and_empty_inbox(self, tmp_path):
+        lib = _library(tmp_path)
+        assert lib.ingest_inbox(tags=[]) == {"imported": 0, "duplicates": 0, "rejected": 0, "failed": 0}
+        self._put(lib, ".desktop.ini", b"junk")
+        assert lib.inbox_files() == []  # 隐藏项不进计数也不进导入
+        assert lib.ingest_inbox(tags=[])["imported"] == 0
+        assert (lib.inbox_dir / ".desktop.ini").exists()
