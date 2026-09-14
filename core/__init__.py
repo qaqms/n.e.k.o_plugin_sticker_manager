@@ -6,6 +6,7 @@
 
 from .catalog import (
     Sticker,
+    content_sha256,
     detect_image_format,
     format_catalog_for_model,
     new_sticker_id,
@@ -21,6 +22,7 @@ __all__ = [
     "Sticker",
     "StorageSettings",
     "StickerManagerSettings",
+    "content_sha256",
     "detect_image_format",
     "format_catalog_for_model",
     "new_sticker_id",

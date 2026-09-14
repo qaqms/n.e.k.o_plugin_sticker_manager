@@ -131,3 +131,71 @@ class TestUsageLedger:
     def test_missing_usage_file_is_empty(self, tmp_path):
         lib = _library(tmp_path)
         assert lib.read_usage() == []
+
+
+class TestDeduplication:
+    def test_same_bytes_rejected_as_duplicate(self, tmp_path):
+        lib = _library(tmp_path)
+        first, error = lib.add(data=PNG_BYTES, desc="笑", tags=[])
+        assert error == "" and first.sha256  # 新入库即带内容指纹
+        second, error = lib.add(data=PNG_BYTES, desc="又笑", tags=[])
+        assert second is None and error == "duplicate_image"
+        # 被拒的图不许留下孤儿文件
+        files = list(lib.stickers_dir.iterdir())
+        assert [f.name for f in files] == [first.file]
+
+    def test_different_bytes_still_accepted(self, tmp_path):
+        lib = _library(tmp_path)
+        assert lib.add(data=PNG_BYTES, desc="甲", tags=[])[1] == ""
+        assert lib.add(data=JPEG_BYTES, desc="乙", tags=[])[1] == ""
+
+    def test_legacy_entry_without_hash_detected_and_backfilled(self, tmp_path):
+        lib = _library(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES, desc="旧", tags=[])
+        # 模拟 v0.1.1 之前的旧数据：catalog 里没有 sha256 键
+        raw = json.loads(lib.catalog_path.read_text(encoding="utf-8"))
+        for entry in raw["stickers"]:
+            entry.pop("sha256", None)
+        lib.catalog_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+        legacy = _library(tmp_path)
+        assert legacy.get(sticker.id).sha256 == ""
+        dup, error = legacy.add(data=PNG_BYTES, desc="重", tags=[])
+        assert dup is None and error == "duplicate_image"
+        # 查重时顺手回填：重载后旧条目带上指纹
+        after = _library(tmp_path)
+        assert after.get(sticker.id).sha256 != ""
+
+
+class TestRepair:
+    def test_removes_entries_with_missing_files_and_orphans(self, tmp_path):
+        lib = _library(tmp_path)
+        keep, _ = lib.add(data=PNG_BYTES, desc="留", tags=[])
+        gone, _ = lib.add(data=JPEG_BYTES, desc="图没了", tags=[])
+        lib.image_path(gone).unlink()
+        orphan = lib.stickers_dir / "deadbeef00.png"
+        orphan.write_bytes(b"\x89PNG\r\n\x1a\n" + b"1" * 32)
+        counts = lib.repair()
+        assert counts["removed_entries"] == 1
+        assert counts["purged_files"] == 1
+        assert counts["backfilled_hashes"] == 0
+        assert lib.get(keep.id) is not None and lib.get(gone.id) is None
+        assert not orphan.exists()
+        after = _library(tmp_path)
+        assert after.get(gone.id) is None
+
+    def test_backfills_hashes_of_legacy_entries(self, tmp_path):
+        lib = _library(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES, desc="旧", tags=[])
+        raw = json.loads(lib.catalog_path.read_text(encoding="utf-8"))
+        for entry in raw["stickers"]:
+            entry.pop("sha256", None)
+        lib.catalog_path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+        legacy = _library(tmp_path)
+        counts = legacy.repair()
+        assert counts["backfilled_hashes"] == 1
+        assert counts["removed_entries"] == 0
+        assert legacy.get(sticker.id).sha256 != ""
+
+    def test_repair_on_empty_library_is_clean(self, tmp_path):
+        lib = _library(tmp_path)
+        assert lib.repair() == {"removed_entries": 0, "purged_files": 0, "backfilled_hashes": 0}

@@ -7,9 +7,10 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 from dataclasses import replace
 
-from conftest import GIF_BYTES, NOT_AN_IMAGE, PNG_BYTES, FakeConfig, FakeHostContext, build_plugin
+from conftest import GIF_BYTES, JPEG_BYTES, NOT_AN_IMAGE, PNG_BYTES, FakeConfig, FakeHostContext, build_plugin
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings, StorageSettings
 
 
@@ -236,3 +237,34 @@ class TestDashboardContext:
         (tmp_path / "library" / "catalog.json").write_text("{ broken", encoding="utf-8")
         payload = run_async(plugin.dashboard_context(**_ctx("K")))
         assert payload["error_code"] == "library_io_error"
+
+
+class TestDedupAndRepair:
+    def test_add_duplicate_returns_stable_code(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        assert run_async(_add(plugin)).is_ok()
+        again = run_async(_add(plugin, desc="换个字也一样"))
+        assert not again.is_ok()
+        assert str(again.error) == "duplicate_image"
+
+    def test_repair_entry_reports_counts(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        keep = run_async(_add(plugin)).value["id"]
+        broken = run_async(_add(plugin, desc="坏", data=JPEG_BYTES)).value["id"]
+        (tmp_path / "library" / "stickers" / f"{broken}.jpg").unlink()
+        result = run_async(plugin.repair_entry())
+        assert result.is_ok()
+        payload = result.value
+        assert payload["note"] == "library_repaired"
+        assert payload["removed_entries"] == 1
+        assert payload["purged_files"] == 0
+        assert payload["backfilled_hashes"] == 0
+        listed = run_async(plugin.list_entry())
+        assert [s["id"] for s in listed.value["stickers"]] == [keep]
+
+    def test_sticker_rows_carry_sha256(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        sid = run_async(_add(plugin)).value["id"]
+        row = run_async(plugin.list_entry()).value["stickers"][0]
+        assert row["id"] == sid
+        assert row["sha256"] == hashlib.sha256(PNG_BYTES).hexdigest()

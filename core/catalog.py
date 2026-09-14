@@ -10,10 +10,13 @@
    真语义检索是宿主记忆层的事，不在插件里造第二套。
 4. 目录文案的纪律沿用 our_life 的注入契约：不给模型看原始路径、
    不堆砌形容词，一行一条。
+5. **查重只认内容指纹（sha256），不认文件名/扩展名**——与魔数嗅探同理，
+   文件名来自客户端，不可信。
 """
 
 from __future__ import annotations
 
+import hashlib
 import secrets
 from dataclasses import dataclass, field
 from typing import Any, Iterable
@@ -55,6 +58,11 @@ def is_animated_gif(data: bytes) -> bool:
     return data[:6] in (b"GIF87a", b"GIF89a") and (
         data.count(b"\x00\x21\xf9\x04") > 1 or b"NETSCAPE2.0" in data[:4096]
     )
+
+
+def content_sha256(data: bytes) -> str:
+    """图片本体的内容指纹（查重用）。放 core 层：入口、持久层、repair 共用同一算法。"""
+    return hashlib.sha256(data or b"").hexdigest()
 
 
 def new_sticker_id(existing: Iterable[str]) -> str:
@@ -121,6 +129,7 @@ class Sticker:
     added_at: float = 0.0
     use_count: int = 0
     last_used_at: float = 0.0
+    sha256: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -132,6 +141,7 @@ class Sticker:
             "added_at": self.added_at,
             "use_count": self.use_count,
             "last_used_at": self.last_used_at,
+            "sha256": self.sha256,
         }
 
     @classmethod
@@ -155,6 +165,7 @@ class Sticker:
             added_at=float(raw.get("added_at") or 0.0),
             use_count=int(raw.get("use_count") or 0),
             last_used_at=float(raw.get("last_used_at") or 0.0),
+            sha256=raw.get("sha256") if isinstance(raw.get("sha256"), str) else "",
         )
 
     def with_touch(self, *, now: float) -> "Sticker":
@@ -167,6 +178,21 @@ class Sticker:
             added_at=self.added_at,
             use_count=self.use_count + 1,
             last_used_at=now,
+            sha256=self.sha256,
+        )
+
+    def with_sha256(self, digest: str) -> "Sticker":
+        """补指纹的副本（v0.1.1 前的旧条目回填用；frozen dataclass 不改原地对象）。"""
+        return Sticker(
+            id=self.id,
+            file=self.file,
+            desc=self.desc,
+            tags=list(self.tags),
+            disabled=self.disabled,
+            added_at=self.added_at,
+            use_count=self.use_count,
+            last_used_at=self.last_used_at,
+            sha256=digest,
         )
 
 

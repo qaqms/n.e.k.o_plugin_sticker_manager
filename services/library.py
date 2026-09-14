@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from ..core.catalog import Sticker, detect_image_format, new_sticker_id
+from ..core.catalog import Sticker, content_sha256, detect_image_format, new_sticker_id
 
 CATALOG_VERSION = 1
 CATALOG_FILENAME = "catalog.json"
@@ -28,6 +28,7 @@ STICKER_DIRNAME = "stickers"
 ERR_IO = "library_io_error"
 ERR_NOT_FOUND = "sticker_not_found"
 ERR_EMPTY = "library_empty"
+ERR_DUPLICATE = "duplicate_image"
 
 
 @dataclass
@@ -147,6 +148,27 @@ class Library:
     # 写路径
     # ------------------------------------------------------------------
 
+    def _find_duplicate(self, digest: str) -> Sticker | None:
+        """按内容指纹找同图。旧条目（v0.1.1 前入库、无指纹）现算并回填——
+        回填是顺手的、幂等的；算不动（文件坏了）则跳过该条目，不阻断查重。
+        """
+        backfilled = False
+        hit: Sticker | None = None
+        for sticker in list(self._stickers.values()):
+            sha = sticker.sha256
+            if not sha:
+                try:
+                    sha = content_sha256(self.image_path(sticker).read_bytes())
+                except Exception:
+                    continue
+                self._stickers[sticker.id] = sticker.with_sha256(sha)
+                backfilled = True
+            if sha == digest and hit is None:
+                hit = sticker
+        if backfilled:
+            self.save()  # 回填失败不阻断入库（下次 repair/查重会再试）
+        return hit
+
     def add(
         self,
         *,
@@ -157,11 +179,15 @@ class Library:
     ) -> tuple[Sticker | None, str]:
         """入库一张图。返回 (条目, 错误码)；成功时错误码为空。
 
-        错误码：invalid_image（不是受支持的图片格式）/ io_error。
+        错误码：invalid_image（不是受支持的图片格式）/ duplicate_image（库里已有同图）/ io_error。
+        查重只认内容指纹，不认文件名（见 core/catalog 设计决定 5）。
         """
         detected = detect_image_format(data or b"")
         if detected is None:
             return None, "invalid_image"
+        digest = content_sha256(data)
+        if self._find_duplicate(digest) is not None:
+            return None, ERR_DUPLICATE
         moment = time.time() if now is None else now
         try:
             sticker_id = new_sticker_id(self._stickers.keys())
@@ -185,6 +211,7 @@ class Library:
             desc=desc,
             tags=list(tags),
             added_at=moment,
+            sha256=digest,
         )
         self._stickers[sticker_id] = sticker
         saved = self.save()
@@ -246,6 +273,62 @@ class Library:
             self._log(f"sticker file removal failed: id={sticker_id}")
         self._log(f"sticker removed: id={sticker_id}")
         return ""
+
+    # ------------------------------------------------------------------
+    # 自修复
+    # ------------------------------------------------------------------
+
+    def repair(self) -> dict[str, int]:
+        """库体检：清掉文件已丢失的条目、删掉没人引用的孤儿文件、回填旧条目指纹。
+
+        返回计数字典（面板如实展示）：removed_entries / purged_files / backfilled_hashes。
+        纪律：只在自己生成的 `stickers/` 目录里活动；条目表就是引用集，
+        不在表里的文件视为孤儿（目录里的文件全部由 add() 生成，无用户自放位）。
+        """
+        removed_entries = 0
+        purged_files = 0
+        backfilled = 0
+        referenced: set[str] = set()
+        dirty = False
+        for sticker_id in list(self._stickers.keys()):
+            sticker = self._stickers[sticker_id]
+            path = self.image_path(sticker)
+            if not path.is_file():
+                self._stickers.pop(sticker_id)
+                removed_entries += 1
+                dirty = True
+                continue
+            referenced.add(sticker.file)
+            if not sticker.sha256:
+                try:
+                    digest = content_sha256(path.read_bytes())
+                except Exception:
+                    continue  # 读不动的图：不回填也不删条目，交给下次体检
+                self._stickers[sticker_id] = sticker.with_sha256(digest)
+                backfilled += 1
+                dirty = True
+        if dirty:
+            self.save()
+        try:
+            if self.stickers_dir.is_dir():
+                for candidate in self.stickers_dir.iterdir():
+                    if candidate.is_file() and candidate.name not in referenced:
+                        try:
+                            candidate.unlink()
+                            purged_files += 1
+                        except Exception:
+                            self._log(f"orphan purge failed: {candidate.name}")
+        except Exception:
+            self._log("orphan scan failed")
+        self._log(
+            f"library repaired: entries_removed={removed_entries} "
+            f"orphans_purged={purged_files} hashes_backfilled={backfilled}"
+        )
+        return {
+            "removed_entries": removed_entries,
+            "purged_files": purged_files,
+            "backfilled_hashes": backfilled,
+        }
 
     # ------------------------------------------------------------------
     # 使用台账

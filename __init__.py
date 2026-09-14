@@ -413,6 +413,30 @@ class StickerManagerPlugin(NekoPluginBase):
         await self._reload_settings()
         return Ok({"note": "enabled" if enabled else "disabled", "enabled": self._settings.enabled})
 
+    @ui.action(
+        id="repair",
+        label=tr("actions.repair.label", default="Repair"),
+        tone="warning",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="repair",
+        name=tr("entries.repair.name", default="库体检与自修复"),
+        description=tr(
+            "entries.repair.description",
+            default="清掉图片文件已丢失的条目、删掉没人引用的孤儿文件、补齐旧条目的内容指纹；返回各项计数",
+        ),
+        input_schema={"type": "object", "properties": {}},
+        llm_result_fields=["note", "removed_entries", "purged_files", "backfilled_hashes"],
+        timeout=30.0,
+    )
+    async def repair_entry(self, **_):
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        counts = self._library.repair()
+        return Ok({"note": "library_repaired", **counts})
+
     # ------------------------------------------------------------------
     # 面板上下文
     # ------------------------------------------------------------------

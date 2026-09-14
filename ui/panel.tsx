@@ -67,6 +67,19 @@ type Surface = PluginSurfaceProps<State>
 // 预览缓存：id -> dataUrl。失败记空串，避免每张坏图都重试一轮。
 const previewCache: Record<string, string> = {}
 
+// 后端 Err 抛出的 message 里抓稳定 ASCII 码（^[a-z][a-z0-9_]*$，DESIGN.md 错误码契约）；
+// 抓不到就原样直出（宿主/网络错误的原文比编一个码诚实）。
+function extractCode(raw: string): string {
+  const m = raw.match(/[a-z][a-z0-9_]*/)
+  return m ? m[0] : raw
+}
+
+function artifactFileName(artifact: any): string {
+  const name = String((artifact && (artifact.filename || artifact.name)) || "")
+  const base = name.split(/[\\/]/).pop() || ""
+  return base.replace(/\.[A-Za-z0-9]+$/, "").replace(/[_\-]+/g, " ").trim()
+}
+
 function formatTime(seconds: number | undefined): string {
   if (!seconds || seconds <= 0) return "—"
   return new Date(seconds * 1000).toLocaleString()
@@ -210,30 +223,51 @@ function AddForm(props: { surface: Surface }) {
   const [desc, setDesc] = useState("")
   const [tags, setTags] = useState("")
   const [busy, setBusy] = useState(false)
+  // 反馈：{kind: ""|"ok"|"err", text}。重复入库（duplicate_image）等失败必须让用户看见，
+  // 只 console.warn 等于静默吞掉。
+  const [feedback, setFeedback] = useState<{ kind: string; text: string }>({ kind: "", text: "" })
+  // 用户亲手改过描述后，不再用文件名覆盖它。
+  const [descTouched, setDescTouched] = useState(false)
+
+  const pick = (next: any) => {
+    setArtifact(next)
+    if (!descTouched) {
+      const guess = artifactFileName(next)
+      if (guess) {
+        setDesc(guess)
+      }
+    }
+  }
 
   const submit = async () => {
     const dataUrl = String((artifact && artifact.dataUrl) || "")
     if (!dataUrl) {
-      setBusy(false)
+      setFeedback({ kind: "err", text: t("panel.add.need_image", { defaultValue: "先选一张图" }) })
       return
     }
     if (!desc.trim()) {
-      setBusy(false)
+      setFeedback({ kind: "err", text: t("panel.add.need_desc", { defaultValue: "描述必填：那是她选图的唯一依据" }) })
       return
     }
     setBusy(true)
+    setFeedback({ kind: "", text: "" })
     try {
-      await callAction(surface, "add", {
+      const result = await callAction(surface, "add", {
         data_base64: dataUrlToBase64(dataUrl),
         desc: desc.trim(),
         tags: tags,
       })
-      setArtifact(null)
-      setDesc("")
-      setTags("")
-      await surface.api.refresh()
+      if (result && result.note === "sticker_added") {
+        setFeedback({ kind: "ok", text: t("panel.add.ok", { defaultValue: "已收进她的表情库" }) })
+        setArtifact(null)
+        setDesc("")
+        setTags("")
+        setDescTouched(false)
+        await surface.api.refresh()
+      }
     } catch (error) {
-      console.warn("sticker_manager add failed", error)
+      const raw = error instanceof Error ? error.message : String(error ?? "failed")
+      setFeedback({ kind: "err", text: t("panel.add.fail", { code: extractCode(raw), defaultValue: "收藏失败：{code}" }) })
     } finally {
       setBusy(false)
     }
@@ -241,17 +275,18 @@ function AddForm(props: { surface: Surface }) {
 
   return (
     <Stack gap={8}>
+      {feedback.text ? <Alert tone={feedback.kind === "ok" ? "success" : "danger"} message={feedback.text} /> : null}
       <Field label={t("panel.add.image", { defaultValue: "图片（png / jpg / gif / webp，≤8MiB）" })} required>
         <ImageUpload
           value={artifact}
           accept="image/png,image/jpeg,image/gif,image/webp"
           maxBytes={8 * 1024 * 1024}
           label={t("panel.add.pick", { defaultValue: "选择图片" })}
-          onChange={setArtifact}
+          onChange={pick}
         />
       </Field>
       <Field label={t("panel.edit.desc", { defaultValue: "描述（她选图的唯一依据）" })} required>
-        <Input value={desc} onChange={setDesc} placeholder={t("panel.add.desc.ph", { defaultValue: "例如：猫咪开心挥手" })} />
+        <Input value={desc} onChange={(next: string) => { setDescTouched(true); setDesc(next) }} placeholder={t("panel.add.desc.ph", { defaultValue: "例如：猫咪开心挥手" })} />
       </Field>
       <Field label={t("panel.edit.tags", { defaultValue: "标签（逗号分隔）" })}>
         <Input value={tags} onChange={setTags} placeholder="开心, 猫" />
@@ -269,7 +304,30 @@ export default function Panel(props: Surface) {
   const state = props.state || {}
   const t = props.t
   const [query, setQuery] = useState("")
+  const [repairNote, setRepairNote] = useState("")
   const stickers = state.stickers || []
+
+  const repair = async () => {
+    setRepairNote("")
+    try {
+      const result = await callAction(props, "repair", {})
+      if (result) {
+        setRepairNote(
+          t("panel.repair.done", {
+            entries: result.removed_entries ?? 0,
+            files: result.purged_files ?? 0,
+            hashes: result.backfilled_hashes ?? 0,
+            defaultValue: "体检完成：清理条目 {entries}、孤儿文件 {files}、回填指纹 {hashes}",
+          }),
+        )
+      }
+      await props.api.refresh()
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error ?? "failed")
+      setRepairNote(t("panel.toast.failed", { code: extractCode(raw), defaultValue: "操作失败：{code}" }))
+    }
+  }
+
   const term = query.trim().toLowerCase()
   const rows = term
     ? stickers.filter((row) => {
@@ -329,7 +387,18 @@ export default function Panel(props: Surface) {
         </Grid>
         <Card title={t("panel.card.library", { defaultValue: "她的表情库" })}>
           <Stack gap={10}>
-            <Input value={query} onChange={setQuery} placeholder={t("panel.search", { defaultValue: "按描述 / 标签 / id 过滤" })} />
+            <Inline gap={8} align="center" wrap>
+              <Input value={query} onChange={setQuery} placeholder={t("panel.search", { defaultValue: "按描述 / 标签 / id 过滤" })} />
+              <Button
+                tone="warning"
+                onClick={() => {
+                  repair()
+                }}
+              >
+                {t("panel.repair.button", { defaultValue: "体检与修复" })}
+              </Button>
+            </Inline>
+            {repairNote ? <Text>{repairNote}</Text> : null}
             {rows.length === 0 ? (
               <EmptyState
                 title={t("panel.empty.title", { defaultValue: "库还是空的" })}

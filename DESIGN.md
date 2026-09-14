@@ -19,7 +19,8 @@
 ## First Version Scope
 - 表情库：`data/library/catalog.json` + `data/library/stickers/<id>.<ext>` + `data/library/usage.json`
 - 格式：png / jpg / gif / webp，**只认文件头魔数**；单张 ≤8MiB
-- 入口面：add / update / remove / send / list / preview / history / switch（全 `@ui.action`）+ `@ui.context("dashboard")`
+- 入口面：add / update / remove / send / list / preview / history / switch / repair（全 `@ui.action`）+ `@ui.context("dashboard")`
+- 内容指纹查重（v0.1.1）：入库记 sha256，同图回 `duplicate_image`；旧条目在查重/体检时 lazy 回填（catalog schema 不变，宽松兼容）
 - 工具面：`sticker_list`（目录）、`sticker_send`（按 id 或关键词发）
 - 发送链路：≤256KiB 内联 image data part（gif 恒走内联保动画）；更大走 `ctx.images.upload()` 换 URL part
 - 频控：按角色卡内存冷却（默认 20s）；`push_message(visibility=["chat"], ai_behavior="read")`
@@ -37,7 +38,7 @@
 - 不声明 `[plugin.store]`：持久化走 `data_path` 文件通道（失败是响亮的，规避 store 静默失效坑）
 - SDK surfaces：`plugin.sdk.plugin` 唯一门面；`ctx.push_message` / `ctx.images.upload`（仅 entry/tool 里用，lifecycle 不可）
 - UI：hosted-tsx；`ImageUpload`/`ImagePreview` 是 kit 现成件；缩略图懒加载走 `preview` action（context 不带图字节）
-- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required / desc_too_long / image_too_large / image_undecodable）
+- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / duplicate_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required / desc_too_long / image_too_large / image_undecodable）
 
 ## 已知陷阱（本机/宿主源码核实，改动前先读）
 1. `ctx.images.upload()` 会把图**归一成 JPEG**——动图被压平，所以 gif 只走内联，内联不下就如实拒绝（`services/sender.py`）。
