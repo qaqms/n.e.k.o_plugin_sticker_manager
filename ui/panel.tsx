@@ -1,4 +1,4 @@
-// Hosted TSX 面板：表情包管理器。只从 `@neko/plugin-ui` 导入，业务逻辑全在 Python 侧。
+// Hosted TSX 面板：表情包管理。只从 `@neko/plugin-ui` 导入，业务逻辑全在 Python 侧。
 //
 // 契约要点（照 plugin/sdk/hosted-ui/index.d.ts 的精确签名写）：
 // - 动作调用返回信封 `{plugin_id, action_id, result}`，真正的返回值在 `.result`。
@@ -483,7 +483,7 @@ export default function Panel(props: Surface) {
     : stickers
 
   return (
-    <Page title={t("panel.title", { defaultValue: "表情包管理器" })} subtitle={state.lanlan || ""}>
+    <Page title={t("panel.title", { defaultValue: "表情包管理" })} subtitle={state.lanlan || ""}>
       <Stack gap={12}>
         {state.error_code ? (
           <Alert tone="danger" message={t(`panel.error.${state.error_code}`, { defaultValue: state.error_code })} />

@@ -1,4 +1,4 @@
-"""表情包管理器 (sticker_manager) —— 让她收藏、送出自己的表情包。
+"""表情包管理 (sticker_manager) —— 让她收藏、送出自己的表情包。
 
 架构（一段话）：`core/` 是零 SDK 依赖的纯函数层（条目形状 / 格式嗅探 / 检索 /
 目录文案 / 配置视图），`services/` 是有状态层（`data/` 下的 JSON 目录 + 图片文件、
@@ -514,7 +514,7 @@ class StickerManagerPlugin(NekoPluginBase):
     # 面板上下文
     # ------------------------------------------------------------------
 
-    @ui.context(id="dashboard", title=tr("panel.title", default="表情包管理器"))
+    @ui.context(id="dashboard", title=tr("panel.title", default="表情包管理"))
     async def dashboard_context(self, **kwargs: Any) -> dict[str, Any]:
         loaded = self._library.load()
         settings = self._settings

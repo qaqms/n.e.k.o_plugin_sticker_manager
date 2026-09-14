@@ -1,9 +1,9 @@
-# 表情包管理器 (sticker_manager) Design Brief
+# 表情包管理 (sticker_manager) Design Brief
 
 ## Identity Lock
 - plugin_id: `sticker_manager`
 - folder: 开发仓 `n.e.k.o_plugin_sticker_manager`；挂载态必须叫 `sticker_manager`（目录名==entry 包名，软链接无效，唯一挂载方式是复制）
-- name: 表情包管理器
+- name: 表情包管理
 - entry: `plugin.plugins.sticker_manager:StickerManagerPlugin`
 - main class: `StickerManagerPlugin`
 

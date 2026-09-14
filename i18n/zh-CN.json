@@ -40,7 +40,7 @@
   "fields.offset": "从第几字节取（0 = 从头）",
   "fields.query": "关键词，留空=全部",
   "fields.tags": "标签，逗号分隔（可选）",
-  "panel.title": "表情包管理器",
+  "panel.title": "表情包管理",
   "panel.action.disable": "禁用",
   "panel.action.edit": "编辑",
   "panel.action.enable": "恢复启用",

@@ -1,4 +1,4 @@
-# 表情包管理器 (sticker_manager)
+# 表情包管理 (sticker_manager)
 
 给她一个自己的表情包收藏间。
 
