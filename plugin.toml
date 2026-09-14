@@ -1,0 +1,74 @@
+[plugin]
+id = "sticker_manager"
+name = "表情包管理器"
+description = "给她一个自己的表情包收藏间：你在面板里收藏、写描述、打标签，她在对话里自己挑一张发出去。支持 png/jpg/gif/webp，动图保留动画；每次发送都记台账，面板能看到她最近爱用什么、哪张想发却没发出去。"
+short_description = "表情包收藏与发送：面板管理库，猫娘通过工具自主挑图发到聊天"
+keywords = [
+    "表情包",
+    "贴纸",
+    "收藏",
+    "聊天",
+    "图片",
+    "sticker",
+    "meme",
+    "gallery",
+]
+version = "0.1.0"
+type = "plugin"
+entry = "plugin.plugins.sticker_manager:StickerManagerPlugin"
+
+[plugin.author]
+name = "qaqms"
+
+[plugin.sdk]
+recommended = ">=0.1.0,<0.2.0"
+supported = ">=0.1.0,<0.3.0"
+
+[plugin.i18n]
+default_locale = "zh-CN"
+locales_dir = "i18n"
+
+[plugin.ui]
+enabled = true
+
+[[plugin.ui.panel]]
+id = "main"
+title = "表情包管理器"
+entry = "ui/panel.tsx"
+context = "dashboard"
+# state:read 读目录快照；config:read 读当前配置形状；action:call 才能点按钮。
+# 写库不经过 config 通道（走 entry），所以不声明 config:write。
+permissions = ["state:read", "config:read", "action:call"]
+
+[plugin_runtime]
+enabled = true
+# 随宿主自动启动：她的工具（sticker_list / sticker_send）要在对话里随时可用。
+# 知情同意由总开关 [sticker_manager].enabled = false（fail-closed）保证——
+# 未显式打开前她不发图、看不到目录，管理入口仍可用。
+auto_start = true
+
+# ---------------------------------------------------------------------------
+# 业务配置。这里的值是「默认值」；用户在 <用户数据根>/plugins/sticker_manager/
+# config/plugin.toml 里的覆盖层优先。config.example.toml 是同一份形状的镜像
+# （那份不含任何 [plugin*] 表）。core/configuration.py 的 dataclass 默认值是
+# 第三个来源——三处由 tests/test_config_docs_sync.py 钉死同源。
+# ---------------------------------------------------------------------------
+
+[sticker_manager]
+# fail-closed 总开关：false = 她不发图、看不到目录；库的增删改不受影响。
+enabled = false
+
+[sticker_manager.send]
+# 同一角色卡两次发送之间的最小间隔（秒）。防刷屏，也防模型连着甩图。
+cooldown_sec = 20.0
+# 静态图走内联通道的字节上限；超过改走宿主上传换 URL（gif 例外：
+# 上传会把动图压平成 JPEG，动图内联不下就如实拒绝）。
+inline_max_bytes = 262144
+# 是否允许动图也走上传通道（代价：动画被压平）。默认关闭。
+animated_via_upload = false
+
+[sticker_manager.storage]
+# 给模型看的目录最多列几条（按最近使用排序）。
+catalog_limit_for_model = 80
+# 使用台账保留多少条。
+usage_history_keep = 200

@@ -1,0 +1,64 @@
+# 表情包管理器 (sticker_manager) Design Brief
+
+## Identity Lock
+- plugin_id: `sticker_manager`
+- folder: 开发仓 `n.e.k.o_plugin_sticker_manager`；挂载态必须叫 `sticker_manager`（目录名==entry 包名，软链接无效，唯一挂载方式是复制）
+- name: 表情包管理器
+- entry: `plugin.plugins.sticker_manager:StickerManagerPlugin`
+- main class: `StickerManagerPlugin`
+
+## Purpose
+给宿主主对话里的猫娘一个**自己的表情包收藏间**：主人在面板里收藏/描述/打标签/禁用/删除，
+她通过 llm_tool 在对话里自主挑一张发出去；每次成败记使用台账。
+
+## Package Type and Capabilities
+- package type: plugin（独立功能，不挂宿主扩展点）
+- capabilities: UI 面板（hosted-tsx）+ entries + llm_tools + 生命周期 + 文件持久化
+- inferred architecture: core 纯函数层 / services 有状态层 / 根模块只做装配（our_life 同款三段式）
+
+## First Version Scope
+- 表情库：`data/library/catalog.json` + `data/library/stickers/<id>.<ext>` + `data/library/usage.json`
+- 格式：png / jpg / gif / webp，**只认文件头魔数**；单张 ≤8MiB
+- 入口面：add / update / remove / send / list / preview / history / switch（全 `@ui.action`）+ `@ui.context("dashboard")`
+- 工具面：`sticker_list`（目录）、`sticker_send`（按 id 或关键词发）
+- 发送链路：≤256KiB 内联 image data part（gif 恒走内联保动画）；更大走 `ctx.images.upload()` 换 URL part
+- 频控：按角色卡内存冷却（默认 20s）；`push_message(visibility=["chat"], ai_behavior="read")`
+- i18n：zh-CN + en（Python `tr()` 与 TSX `t()` 键全部入文件，有门钉着）
+
+## Out of Scope（v0.1.0 刻意不做）
+- 宿主 proactive_chat 的**在线 meme 图源链路**（meme_fetcher 抓图）——平台层，插件无 hook，管不到也不该管
+- qq_auto_reply 的 QQ 表情目录联动（`call_entry` 通道存在，要做需单独立项）
+- 表情包分组/套图（tags 已留扩展位）
+- 定期目录注入（现在靠她主动调 `sticker_list`；若实测"她想不起来有表情"再加注入通道）
+- 工具重注册心跳（宿主重启时序问题，见风险；our_life 同款缺口，跟它一起解）
+
+## Inferred Technical Needs
+- plugin.toml：`[plugin]` `[plugin.sdk]` `[plugin.i18n]` `[plugin.ui]+panel` `[plugin_runtime]`(auto_start=true) + 业务段 `[sticker_manager]/.send/.storage`
+- 不声明 `[plugin.store]`：持久化走 `data_path` 文件通道（失败是响亮的，规避 store 静默失效坑）
+- SDK surfaces：`plugin.sdk.plugin` 唯一门面；`ctx.push_message` / `ctx.images.upload`（仅 entry/tool 里用，lifecycle 不可）
+- UI：hosted-tsx；`ImageUpload`/`ImagePreview` 是 kit 现成件；缩略图懒加载走 `preview` action（context 不带图字节）
+- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required / desc_too_long / image_too_large / image_undecodable）
+
+## 已知陷阱（本机/宿主源码核实，改动前先读）
+1. `ctx.images.upload()` 会把图**归一成 JPEG**——动图被压平，所以 gif 只走内联，内联不下就如实拒绝（`services/sender.py`）。
+2. 角色归属只认本次调用注入的 `_ctx["lanlan_name"]`；`ctx._current_lanlan` 是脏值。
+3. `push_message` 的 `submitted=True` ≠ 宿主已消费；lifecycle 里推送会被静默丢弃（本插件只在 entry/tool 里发）。
+4. 整条 payload ≤512KiB：`inline_max_bytes` 默认 256KiB 留了 base64 膨胀（4/3）与封装余量。
+5. 挂载态目录名必须等于 entry 包名；仓名 `n.e.k.o_plugin_sticker_manager` 永远挂不上，只能复制（release_gate 已代劳）。
+6. 三处同源：`core/configuration.py` 默认值 == `plugin.toml` 业务段 == `config.example.toml`（`tests/test_config_docs_sync.py` 钉死）；改配置三处一起改。
+7. i18n 键插入必须文本级（json.dump 会重排+CRLF→LF）；TSX 检查器是文本级规则：**裸 `api` 标识符直接拒收**，一律 `props.surface.api` 成员访问。
+8. release 门要求挂载副本里有 `tests/test_smoke.py`（manifest 扫描看源码树），且副本不能含高压缩比垃圾目录（.tmpgate 已排除）。
+9. 冷却在内存：重启清零是刻意行为，别"顺手"持久化。
+10. ruff 门跑 `--ignore-noqa`：noqa 注释不作数，E731（lambda 赋值）这类要真的改掉。
+
+## Read Context Plan
+- `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）
+- 同工作区 `n.e.k.o_plugin_our_life`（工程基线与五门）；`plugin/plugins/qq_auto_reply`（sticker 目录注入先例）
+- `问题清单/已知问题.md`（本机环境坑）
+
+## Write Workspace
+`F:\ai\neko kaifa2\n.e.k.o_plugin_sticker_manager`（独立 Git 仓；宿主仓同级）
+
+## Risk Follow-ups
+- llm_tool 注册表在宿主重启后即丢且无自动重注册（缺口 #4 同源）→ 她可能"突然不会发表情"；解法与 our_life 心跳一起立项。
+- 上传图无内容审核：库是主人手动收藏的，风险面与在线图源不同；若未来开"她自己去网上抓图入库"，必须接宿主 `utils/meme_moderation` 等价物。

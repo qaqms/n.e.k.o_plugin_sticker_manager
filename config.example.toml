@@ -1,0 +1,31 @@
+# 运行时配置模板 / Runtime config template
+#
+# 本文件只展示「用户可以覆盖的形状」，不含任何 [plugin] 表（校验会报 error）。
+# N.E.K.O 首次需要运行配置时会把本文件复制到用户数据目录：
+#   <用户数据根>/plugins/sticker_manager/config/plugin.toml
+# 已存在则不覆盖；用户改过的键作为覆盖层叠加在 plugin.toml 的默认值之上。
+
+[plugin_runtime]
+enabled = true
+# 随宿主自动启动：她的表情工具要在对话里随时可用。
+# 是否真的会发图由下面的 [sticker_manager].enabled 决定。
+auto_start = true
+
+[sticker_manager]
+# fail-closed 总开关。false = 她不发图、看不到目录；库的增删改不受影响。
+enabled = false
+
+[sticker_manager.send]
+# 同一角色卡两次发送之间的最小间隔（秒）。
+cooldown_sec = 20.0
+# 静态图走内联通道的字节上限（256 KiB）；超过改走宿主上传换 URL。
+# 整条消息 payload 上限 512 KiB（base64 膨胀 4/3），这里已留余量。
+inline_max_bytes = 262144
+# 是否允许动图也走上传通道（代价：gif 动画被归一成 JPEG 压平）。默认关闭。
+animated_via_upload = false
+
+[sticker_manager.storage]
+# 给模型看的目录最多列几条（按最近使用排序）。
+catalog_limit_for_model = 80
+# 使用台账保留多少条。
+usage_history_keep = 200
