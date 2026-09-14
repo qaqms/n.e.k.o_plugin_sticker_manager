@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.3
+实机首测修复（Steam 宿主日志钉的坑）：
+
+- **大图预览超时（真 bug）**：宿主 entry 回包走 ZeroMQ 控制通道，单帧硬上限
+  4,784,128 字节；3.95MB 图的 dataUrl（base64 后 5.27MB）被传输层拒发，
+  宿主干等到 15s 超时→面板只剩一句 500。preview 改为**分段协议**
+  （offset / chunk_base64 / next_offset / done，宽 3MiB 且是 3 的倍数，
+  base64 段无填充可直接串接），任意 ≤8MiB 的图都能拼回预览；面板逐段拉取
+- **失败不再静默**：卡片上的发送/编辑/禁用/删除出错现在在卡内出 Alert，
+  稳定码带中文文案（`panel.error.*` 十八码全盖）：send_cooldown 这类
+  正常拦截终于能看懂“刚发过一张，让她缓一下”
+- 新增 i18n：18 个 panel.error.* + fields.offset；preview 描述重写
+- 测试 106 → 108（分段拼回/越界钳位/脏 offset 三道门）；
+  DESIGN 陷阱 14 把控制通道 vs 媒体通道的区别成文
+
 ## 0.1.2
 批量导入（思路参致 astrbot 表情包管理器，代码自写）：
 

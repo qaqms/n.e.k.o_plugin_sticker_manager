@@ -41,6 +41,7 @@ from plugin.sdk.plugin import (
 
 from .core import (
     MAX_STICKER_BYTES,
+    PREVIEW_CHUNK_BYTES,
     Sticker,
     StickerManagerSettings,
     format_catalog_for_model,
@@ -52,8 +53,6 @@ from .services import Library, Sender
 
 __all__ = ["StickerManagerPlugin"]
 
-# 面板预览的读取上限：超过就不给 dataUrl（表情包不该是这个量级）。
-_PREVIEW_MAX_BYTES = 4 * 1024 * 1024
 # 上传解码前的字节上限提示（真正的 8 MiB 判定在 add 入口）。
 _MAX_BASE64_CHARS = 12 * 1024 * 1024
 
@@ -330,18 +329,25 @@ class StickerManagerPlugin(NekoPluginBase):
     @plugin_entry(
         id="preview",
         name=tr("entries.preview.name", default="取一张表情包的预览"),
-        description=tr("entries.preview.description", default="返回 dataUrl（base64 图片），面板懒加载缩略图用"),
+        description=tr(
+            "entries.preview.description",
+            default="按段返回图片字节（base64）：面板逐段拉取拼回 dataUrl。分段是为了躲宿主控制通道单帧上限（实测 3.95MB 图整张回包会被拒发导致超时）",
+        ),
         input_schema={
             "type": "object",
             "properties": {
                 "id": {"type": "string", "description": tr("fields.id", default="表情包 id")},
+                "offset": {
+                    "type": "integer",
+                    "description": tr("fields.offset", default="从第几字节取（0 = 从头）"),
+                },
             },
             "required": ["id"],
             "additionalProperties": False,
         },
         timeout=15.0,
     )
-    async def preview_entry(self, id: str = "", **_):  # noqa: A002
+    async def preview_entry(self, id: str = "", offset: int = 0, **_):  # noqa: A002
         sticker = self._library.get(id) if isinstance(id, str) else None
         if sticker is None:
             return Err(SdkError("sticker_not_found"))
@@ -351,13 +357,25 @@ class StickerManagerPlugin(NekoPluginBase):
             return Err(SdkError("sticker_file_missing"))
         except Exception:
             return Err(SdkError("sticker_image_unreadable"))
-        if len(data) > _PREVIEW_MAX_BYTES:
-            return Err(SdkError("sticker_too_large"))
         mime = _mime_for_file(sticker.file)
         if mime is None:
             return Err(SdkError("sticker_image_unreadable"))
-        encoded = base64.b64encode(data).decode("ascii")
-        return Ok({"note": "preview", "id": sticker.id, "data_url": f"data:{mime};base64,{encoded}"})
+        start = offset if isinstance(offset, int) and not isinstance(offset, bool) and offset > 0 else 0
+        start = min(start, len(data))
+        end = min(start + PREVIEW_CHUNK_BYTES, len(data))
+        chunk = base64.b64encode(data[start:end]).decode("ascii")
+        return Ok(
+            {
+                "note": "preview",
+                "id": sticker.id,
+                "mime": mime,
+                "size": len(data),
+                "offset": start,
+                "next_offset": end,
+                "chunk_base64": chunk,
+                "done": end >= len(data),
+            }
+        )
 
     @ui.action(
         id="history",

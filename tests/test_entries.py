@@ -133,13 +133,6 @@ class TestSendAndPreview:
         assert str(result.error) == "not_enabled"
         assert host.push.calls == []
 
-    def test_preview_returns_data_url(self, tmp_path, run_async):
-        plugin, _host = _make(tmp_path)
-        sid = run_async(_add(plugin, data=GIF_BYTES)).value["id"]
-        result = run_async(plugin.preview_entry(id=sid))
-        assert result.is_ok()
-        assert result.value["data_url"].startswith("data:image/gif;base64,")
-
     def test_preview_missing_file(self, tmp_path, run_async):
         plugin, _host = _make(tmp_path)
         sid = run_async(_add(plugin)).value["id"]
@@ -303,3 +296,44 @@ class TestInboxEntry:
         (inbox / "hi.png").write_bytes(PNG_BYTES)
         result = run_async(plugin.import_inbox_entry())
         assert result.is_ok() and result.value["imported"] == 1
+
+
+class TestPreviewChunks:
+    """分段协议门：大图必须能被逐段拉全（躲宿主回包单帧上限）。"""
+
+    def test_large_sticker_reassembles_via_chunks(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        big = bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) + b"k" * (3 * 1024 * 1024 + 7)  # 跨两块
+        sid = run_async(_add(plugin, data=big)).value["id"]
+        parts: list[bytes] = []
+        offset = 0
+        for _ in range(8):
+            result = run_async(plugin.preview_entry(id=sid, offset=offset))
+            assert result.is_ok()
+            payload = result.value
+            chunk = base64.b64decode(payload["chunk_base64"])
+            parts.append(chunk)
+            if payload["done"]:
+                assert chunk  # 收尾段不许空转
+                break
+            assert payload["next_offset"] == offset + len(chunk)
+            offset = payload["next_offset"]
+        else:
+            raise AssertionError("chunk loop never finished")
+        assert b"".join(parts) == big
+
+    def test_offset_past_end_is_clean_done(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        sid = run_async(_add(plugin, data=PNG_BYTES)).value["id"]
+        result = run_async(plugin.preview_entry(id=sid, offset=9999))
+        assert result.is_ok()
+        payload = result.value
+        assert payload["done"] is True and payload["chunk_base64"] == ""
+
+    def test_junk_offset_falls_back_to_zero(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        sid = run_async(_add(plugin, data=PNG_BYTES)).value["id"]
+        for junk in (-5, "3", True, None):
+            result = run_async(plugin.preview_entry(id=sid, offset=junk))
+            assert result.is_ok() and result.value["offset"] == 0
+

@@ -6,6 +6,7 @@
 
 from .catalog import (
     MAX_STICKER_BYTES,
+    PREVIEW_CHUNK_BYTES,
     Sticker,
     content_sha256,
     desc_from_filename,
@@ -21,6 +22,7 @@ from .configuration import SendSettings, StickerManagerSettings, StorageSettings
 
 __all__ = [
     "MAX_STICKER_BYTES",
+    "PREVIEW_CHUNK_BYTES",
     "SendSettings",
     "Sticker",
     "StorageSettings",

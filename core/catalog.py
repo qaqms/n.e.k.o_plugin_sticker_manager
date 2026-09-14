@@ -36,6 +36,16 @@ TAG_MAX_CHARS = 24
 TAGS_MAX_COUNT = 12
 # 单张表情图的字节上限：入口层（base64 解码后）与收件箱目录扫描共用同一个数字。
 MAX_STICKER_BYTES = 8 * 1024 * 1024
+# 预览分段大小（原始字节）：必须是 3 的倍数，这样每段的 base64 无填充、
+# 可直接串接。3MiB 原图→4MiB base64，加信封仍低于宿主控制通道
+# 单帧上限 PLUGIN_ZMQ_CONTROL_UPLINK_MAX_BYTES（≈4.56MiB）：
+# entry 返回值超这个数会被传输层拒发，宿主只能等到超时（实机日志钉的坑）。
+PREVIEW_CHUNK_BYTES = 3 * 1024 * 1024
+# 预览分段宽度：必须是 3 的倍数（base64 分段才能无填充拼接）。宿主入口回包走
+# ZeroMQ 控制通道，单帧硬上限 4,784,128 字节（plugin/settings.py
+# PLUGIN_ZMQ_CONTROL_UPLINK_MAX_BYTES，宿主源码实测：3.95MB 图整张 dataUrl=5.27MB
+# 直接超出→响应被拒→宿主 15s 超时）。3MiB 原始→4MiB base64，给 JSON 封套留余量。
+PREVIEW_CHUNK_BYTES = 3 * 1024 * 1024
 
 # 收件箱导入时文件名清洗成描述的规则：删扩展名、分隔符换空格、连续空白压扁。
 # 面板浏览器侧有一份等价的几行小函数；那是跨运行时的重复（iframe 里碰不到

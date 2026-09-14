@@ -128,6 +128,7 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
   const t = surface.t
   const confirm = useConfirm()
   const [preview, setPreview] = useState<string>(previewCache[row.id] || "")
+  const [note, setNote] = useState("")
   const [editing, setEditing] = useState<boolean>(false)
   const [editDesc, setEditDesc] = useState<string>(row.desc || "")
   const [editTags, setEditTags] = useState<string>((row.tags || []).join(","))
@@ -139,8 +140,28 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
     }
     let dataUrl = ""
     try {
-      const result = await callAction(surface, "preview", { id: row.id })
-      dataUrl = String((result && result.data_url) || "")
+      // 分段拉取拼回 dataUrl：宿主 entry 回包单帧上限≈4.56MiB，整张大图会被
+      // 传输层拒发（实机超时钉的坑）。循环有护栏，坏协议不许无限转。
+      let offset = 0
+      let mime = ""
+      const parts: string[] = []
+      for (let guard = 0; guard < 16; guard += 1) {
+        const result = await callAction(surface, "preview", { id: row.id, offset: offset })
+        if (!result) {
+          break
+        }
+        mime = String(result.mime || mime)
+        parts.push(String(result.chunk_base64 || ""))
+        if (result.done) {
+          dataUrl = "data:" + mime + ";base64," + parts.join("")
+          break
+        }
+        const next = Number(result.next_offset || 0)
+        if (next <= offset) {
+          break // 协议不推进：当作坏图，不原地踏步
+        }
+        offset = next
+      }
     } catch (error) {
       dataUrl = ""
     }
@@ -149,12 +170,17 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
   }
 
   const run = async (actionId: string, args: Record<string, any>) => {
+    setNote("")
     try {
       await callAction(surface, actionId, args)
       await surface.api.refresh()
     } catch (error) {
-      // 错误码是稳定 ASCII（契约见 DESIGN.md）；toast 直出码，面板不猜文案。
+      // 错误码是稳定 ASCII（契约见 DESIGN.md）：能翻的翻，翻不动直出码。
+      // 只 console.warn 等于静默吞掉——send_cooldown 这类实机反馈要求看得见。
       console.warn("sticker_manager action failed", actionId, error)
+      const raw = error instanceof Error ? error.message : String(error ?? "failed")
+      const code = extractCode(raw)
+      setNote(t(`panel.error.${code}`, { defaultValue: code }))
     }
   }
 
@@ -214,6 +240,7 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
             {t("panel.action.remove", { defaultValue: "删除" })}
           </Button>
         </Inline>
+        {note ? <Alert tone="danger" message={note} /> : null}
       </Stack>
       <Modal open={editing} title={t("panel.edit.title", { defaultValue: "编辑这条表情包" })} onClose={() => { setEditing(false) }}>
         <Stack gap={8}>

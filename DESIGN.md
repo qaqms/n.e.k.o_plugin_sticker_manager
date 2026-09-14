@@ -60,6 +60,12 @@
     tsc 报错（hosted-tsx 门真跑类型检查）——要写 `const list: any[] = Array.from(...)`。
 13. 收件箱导入的处置纪律：**成功/重复的源文件删，超限/坏图留**（删留着重试）；
     删重复件是因为不删会每轮重报同一批；隐藏项（点开头）不碰不删。
+14. **entry 回包走宿主 ZeroMQ 控制通道，单帧硬上限 4,784,128 字节**
+    （`plugin/settings.py` PLUGIN_ZMQ_CONTROL_UPLINK_MAX_BYTES，Steam 实机日志钉的坑：
+    3.95MB 图整张 dataUrl=5.27MB 被传输层拒发，宿主干等 15s 超时→面板 500）。
+    所以 preview 是**分段协议**（offset → chunk_base64/next_offset/done，宽 3MiB=3 的倍数
+    保证 base64 无填充可串接）；任何入口都不许把 MB 级 base64 塞进返回值。
+    注意发送链路的 `images.upload` 走的是另一条专用媒体通道（单张 8MiB），不受此限。
 
 ## Read Context Plan
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）
