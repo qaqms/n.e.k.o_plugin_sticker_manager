@@ -23,7 +23,7 @@
 - 表情库：`data/library/catalog.json` + `data/library/stickers/<id>.<ext>` + `data/library/usage.json`
 - 格式：png / jpg / gif / webp，**只认文件头魔数**；单张 ≤8MiB
 - 入口面：add / update / remove / send / list / preview / history / switch / repair / import_inbox（全 `@ui.action`）+ `@ui.context("dashboard")`
-- 批量导入（v0.1.2，思路参致 astrbot）：面板原生 multiple 文件框逐张走 add 通道；`data/library/inbox/` 目录由 `import_inbox` 服务端整批收（描述取自文件名，成功/重复源删、超限/坏图留）
+- 批量导入（v0.1.2，思路参致外部系统）：面板原生 multiple 文件框逐张走 add 通道；`data/library/inbox/` 目录由 `import_inbox` 服务端整批收（描述取自文件名，成功/重复源删、超限/坏图留）
 - 内容指纹查重（v0.1.1）：入库记 sha256，同图回 `duplicate_image`；旧条目在查重/体检时 lazy 回填（catalog schema 不变，宽松兼容）
 - 工具面：`sticker_list`（目录）、`sticker_send`（id 或关键词）；轮 C（v0.4.0）升级：
   query 经 `resolve_send_target` 判定——最优严格唯一直发，头部并列回 top-5 候选清单
@@ -40,8 +40,8 @@
   目录行 `[id] 描述（套图：G；标签：a/b）`、面板 chips 过滤与编辑框全贯通
 - 套图包导出/导入（v0.2.0）：`data/library/exports/*.zip`（manifest.json + stickers/）；
   导入走收件箱通道认 `.zip`（manifest 优先、裸图包按文件名清洗）；zip 条目名只当包内定位符，
-  落盘永远走 add() 服务端发号（zip-slip 免疫）；刻意不兼容 astrbot memes_data.json
-- 语义元数据层（v0.3.0 轮 A，学习 astrbot 数据层，见 docs/astrbot-study.md）：
+  落盘永远走 add() 服务端发号（zip-slip 免疫）；刻意不兼容外部系统的 memes_data.json
+- 语义元数据层（v0.3.0 轮 A，学习外部系统 数据层，见 docs/sticker-system-study.md）：
   `Sticker.caption`（梗义 ≤300，"这张图在回复什么/什么上一句触发"，可选）+
   `Sticker.visible_text`（图内原文 ≤200，只检索不上目录）；目录行正文 `catalog_body()`
   一把尺（caption 优先回落 desc，sticker_list 与 awareness 同源自动同步）；
@@ -56,7 +56,7 @@
 - 宿主 proactive_chat 的**在线 meme 图源链路**（meme_fetcher 抓图）——平台层，插件无 hook，管不到也不该管
 - ~~表情包分组/套图~~ —— **v0.2.0 已做**（`Sticker.group` + 面板 chips + 套图包导入导出；跨会话选包规则不做，我们只有一张收藏间）
 - ~~定期目录注入~~ —— **v0.2.0 已做**（存在感注入 awareness，见上面能力面与陷阱 16）；
-  astrbot 那种"改 prompt + 回复流标记解析器"做不了（平台钩子），插件侧等价物就是静默注入 + llm_tool
+  外部系统那种"改 prompt + 回复流标记解析器"做不了（平台钩子），插件侧等价物就是静默注入 + llm_tool
 - ~~工具重注册心跳~~ —— **v0.1.4 已做**（our_life v0.5.0 方案移植，见上面的工具面与陷阱 15）
 
 ## Inferred Technical Needs
@@ -112,7 +112,7 @@
 
 ## Read Context Plan
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）
-- 本仓 `docs/astrbot-study.md`（astrbot 表情包管理器机制剖析与分轮移植方案，2026-09-15）
+- 本仓 `docs/sticker-system-study.md`（外部表情包管理系统机制剖析与分轮移植方案，2026-09-15）
 - 同工作区 `n.e.k.o_plugin_our_life`（工程基线与五门）；`plugin/plugins/qq_auto_reply`（sticker 目录注入先例）
 - `问题清单/已知问题.md`（本机环境坑）
 
@@ -120,6 +120,11 @@
 `F:\ai\neko kaifa2\n.e.k.o_plugin_sticker_manager`（独立 Git 仓；宿主仓同级）
 
 ## Risk Follow-ups
+- **轮 B（VLM 自动标注）挂起（2026-09-15 拍板）**：库改由**预制表情包**供给——主人自己做包，
+  每张图的梗义在做包时写进 manifest（轮 A 的 v2 已支持 caption/visible_text 随包迁移，
+  导入走收件箱 zip 通道），插件侧能力已就绪零新代码；做包手法与重启条件见
+  `docs/sticker-system-study.md` 轮 B'。另：本文档及仓内所有描述对参考来源一律匿名
+  （"外部系统"），不指名具体项目——后续轮次保持此纪律。
 - ~~llm_tool 注册表在宿主重启后即丢且无自动重注册~~ —— **v0.1.4 已解**
   （`services/tool_watch.py`，our_life v0.5.0 同方案；间隔 300s，与 fc/our_life 同量级）。
 - 上传图无内容审核：库是主人手动收藏的，风险面与在线图源不同；若未来开"她自己去网上抓图入库"，必须接宿主 `utils/meme_moderation` 等价物。

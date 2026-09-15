@@ -32,7 +32,7 @@ _MAGIC_FORMATS: tuple[tuple[bytes, str, str], ...] = (
 )
 
 DESC_MAX_CHARS = 200
-# 梗义（v0.3.0，学习 astrbot CAPTION_PROMPT 的数据层落点）：一到两句"这张图在回复什么、
+# 梗义（v0.3.0，学习 外部系统的标注提示词 的数据层落点）：一到两句"这张图在回复什么、
 # 什么上一句会触发发它"，不是画面描述。可选字段——老库无此键回空，目录行自动回落 desc。
 CAPTION_MAX_CHARS = 300
 # 图内原文（同理）：只进检索打分，**不进目录行**（避免把长图里的小字挤进她的注意力）。
@@ -50,7 +50,7 @@ MAX_STICKER_BYTES = 8 * 1024 * 1024
 # 直接超出→响应被拒→宿主 15s 超时）。3MiB 原始→4MiB base64，给 JSON 封套留余量。
 PREVIEW_CHUNK_BYTES = 3 * 1024 * 1024
 
-# query 选图的候选上限（轮 C，与 astrbot top_k=5 同量级）：头部并列时不替她拍板，
+# query 选图的候选上限（轮 C，与 外部系统 top_k=5 同量级）：头部并列时不替她拍板，
 # 回一屏能读完的候选清单让她用 id 定夺。
 SEND_CANDIDATES_MAX = 5
 
