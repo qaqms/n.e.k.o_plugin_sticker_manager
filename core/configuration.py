@@ -51,6 +51,22 @@ class StorageSettings:
 
 
 @dataclass(frozen=True)
+class AwarenessSettings:
+    """存在感注入（v0.2.0）的行为参数。
+
+    与总开关的关系是**与**：`[sticker_manager].enabled=false` 时这里全不生效。
+    节奏刻意保守——没有真机基线之前，宁可不注也不轰炸上下文。
+    """
+
+    # 子开关：默认开（总开关才是那道 fail-closed 闸）。
+    enabled: bool = True
+    # 同一角色卡两次存在感注入的最小间隔（秒）。默认一小时。
+    interval_sec: float = 3600.0
+    # 注入文本里"最近常用"最多带几行。
+    max_recent_lines: int = 5
+
+
+@dataclass(frozen=True)
 class StickerManagerSettings:
     """插件总配置视图。"""
 
@@ -59,6 +75,7 @@ class StickerManagerSettings:
     enabled: bool = False
     send: SendSettings = field(default_factory=SendSettings)
     storage: StorageSettings = field(default_factory=StorageSettings)
+    awareness: AwarenessSettings = field(default_factory=AwarenessSettings)
 
     @classmethod
     def defaults(cls) -> "StickerManagerSettings":
@@ -66,6 +83,7 @@ class StickerManagerSettings:
             enabled=False,
             send=SendSettings(),
             storage=StorageSettings(),
+            awareness=AwarenessSettings(),
         )
 
     @classmethod
@@ -77,8 +95,12 @@ class StickerManagerSettings:
         storage_raw = (
             section.get("storage") if isinstance(section.get("storage"), dict) else {}
         )
+        awareness_raw = (
+            section.get("awareness") if isinstance(section.get("awareness"), dict) else {}
+        )
         send_default = SendSettings()
         storage_default = StorageSettings()
+        awareness_default = AwarenessSettings()
         return cls(
             enabled=_as_bool(section.get("enabled"), False),
             send=SendSettings(
@@ -114,6 +136,26 @@ class StickerManagerSettings:
                     ),
                     20,
                     2000,
+                ),
+            ),
+            awareness=AwarenessSettings(
+                enabled=_as_bool(awareness_raw.get("enabled"), awareness_default.enabled),
+                interval_sec=float(
+                    _clamp_int(
+                        _as_number(
+                            awareness_raw.get("interval_sec"), awareness_default.interval_sec
+                        ),
+                        60.0,
+                        86400.0,
+                    )
+                ),
+                max_recent_lines=_clamp_int(
+                    _as_int(
+                        awareness_raw.get("max_recent_lines"),
+                        awareness_default.max_recent_lines,
+                    ),
+                    1,
+                    20,
                 ),
             ),
         )

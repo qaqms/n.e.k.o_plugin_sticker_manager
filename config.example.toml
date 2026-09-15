@@ -29,3 +29,12 @@ animated_via_upload = false
 catalog_limit_for_model = 80
 # 使用台账保留多少条。
 usage_history_keep = 200
+
+[sticker_manager.awareness]
+# 存在感注入：低频把「你有一间表情收藏间 + 最近常用的几张」静默注进她的上下文
+# （visibility=[] 用户看不见；ai_behavior="read" 不起话轮）。与总开关是「与」关系。
+enabled = true
+# 同一角色卡两次注入的最小间隔（秒）。默认一小时。
+interval_sec = 3600.0
+# 注入文本里"最近常用"最多带几行。
+max_recent_lines = 5

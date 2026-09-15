@@ -8,7 +8,12 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from sticker_manager.core.configuration import SendSettings, StickerManagerSettings, StorageSettings
+from sticker_manager.core.configuration import (
+    AwarenessSettings,
+    SendSettings,
+    StickerManagerSettings,
+    StorageSettings,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -48,6 +53,9 @@ def _dataclass_defaults() -> dict[str, object]:
         "sticker_manager.send.animated_via_upload": settings.send.animated_via_upload,
         "sticker_manager.storage.catalog_limit_for_model": settings.storage.catalog_limit_for_model,
         "sticker_manager.storage.usage_history_keep": settings.storage.usage_history_keep,
+        "sticker_manager.awareness.enabled": settings.awareness.enabled,
+        "sticker_manager.awareness.interval_sec": float(settings.awareness.interval_sec),
+        "sticker_manager.awareness.max_recent_lines": settings.awareness.max_recent_lines,
     }
 
 
@@ -77,3 +85,4 @@ def test_dataclass_section_dataclasses_have_no_undeclared_extra():
     """dataclass 加了键但没进 _dataclass_defaults —— 用字段数钉住。"""
     assert len(SendSettings.__dataclass_fields__) == 3
     assert len(StorageSettings.__dataclass_fields__) == 2
+    assert len(AwarenessSettings.__dataclass_fields__) == 3

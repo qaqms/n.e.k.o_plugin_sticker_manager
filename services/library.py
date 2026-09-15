@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,21 +26,33 @@ from ..core.catalog import (
     detect_image_format,
     new_sticker_id,
 )
+from ..core.pack import (
+    PACK_DIR_PREFIX,
+    PACK_MANIFEST_FILENAME,
+    PACK_MAX_ENTRIES,
+    build_manifest,
+    parse_manifest,
+    safe_member_name,
+)
 
 CATALOG_VERSION = 1
 CATALOG_FILENAME = "catalog.json"
 USAGE_FILENAME = "usage.json"
 STICKER_DIRNAME = "stickers"
-# 收件箱：用户把一堆图片文件丢这里，面板点"导入收件箱"逐张收进库。
+# 收件箱：用户把一堆图片文件（或套图 zip 包）丢这里，面板点"导入收件箱"逐张收进库。
 # 选目录而不是浏览器多选当唯一批量通道：免 base64 膨胀、免逐次往返、
 # 成百张也不怕；点不到的文件（隐藏/子目录）一律不碰不删。
 INBOX_DIRNAME = "inbox"
+# 导出物（v0.2.0）：套图 zip 落这里。面板拿不到文件句柄（iframe），
+# 只能显示路径让主人自己取——与 inbox 是一对镜像（进/出都走文件系统）。
+EXPORTS_DIRNAME = "exports"
 
 # 稳定错误码（面板与模型各自翻译/理解，见 DESIGN.md 的错误码契约）
 ERR_IO = "library_io_error"
 ERR_NOT_FOUND = "sticker_not_found"
 ERR_EMPTY = "library_empty"
 ERR_DUPLICATE = "duplicate_image"
+ERR_PACK_UNREADABLE = "pack_unreadable"
 
 
 @dataclass
@@ -204,11 +217,13 @@ class Library:
         desc: str,
         tags: list[str],
         now: float | None = None,
+        group: str = "",
     ) -> tuple[Sticker | None, str]:
         """入库一张图。返回 (条目, 错误码)；成功时错误码为空。
 
         错误码：invalid_image（不是受支持的图片格式）/ duplicate_image（库里已有同图）/ io_error。
         查重只认内容指纹，不认文件名（见 core/catalog 设计决定 5）。
+        group 由入口层 normalize_group 收敛后才进来（core 层负责合法性，这里只搬运）。
         """
         detected = detect_image_format(data or b"")
         if detected is None:
@@ -240,6 +255,7 @@ class Library:
             tags=list(tags),
             added_at=moment,
             sha256=digest,
+            group=group,
         )
         self._stickers[sticker_id] = sticker
         saved = self.save()
@@ -256,8 +272,13 @@ class Library:
         desc: str | None = None,
         tags: list[str] | None = None,
         disabled: bool | None = None,
+        group: str | None = None,
     ) -> tuple[Sticker | None, str]:
-        """改描述/标签/禁用态；None = 不改那一项（描述合法性由入口层把关）。"""
+        """改描述/标签/禁用态/分组；None = 不改那一项（描述合法性由入口层把关）。
+
+        v0.2.0 修回归：旧版重建 Sticker 时漏了 `sha256`——每编辑一次指纹就丢一次，
+        全靠下次查重的 lazy 回填救。指纹是**文件本体**的属性，与描述无关，必须原地保住。
+        """
         sticker = self._stickers.get(sticker_id)
         if sticker is None:
             return None, ERR_NOT_FOUND
@@ -270,6 +291,8 @@ class Library:
             added_at=sticker.added_at,
             use_count=sticker.use_count,
             last_used_at=sticker.last_used_at,
+            sha256=sticker.sha256,
+            group=sticker.group if group is None else group,
         )
         self._stickers[sticker_id] = updated
         saved = self.save()
@@ -359,21 +382,170 @@ class Library:
         }
 
     # ------------------------------------------------------------------
+    # 套图包导出 / 导入（v0.2.0）
+    # ------------------------------------------------------------------
+
+    @property
+    def exports_dir(self) -> Path:
+        return self._root / EXPORTS_DIRNAME
+
+    def export_pack(self, *, now: float | None = None) -> tuple[dict[str, Any], str]:
+        """把整本库打成套图 zip 写进 `exports/`。返回 (结果, 错误码)。
+
+        结果是给面板的小回包：`{"file": 路径, "exported": n, "skipped": n}`——
+        **绝不回包字节**（ZeroMQ 控制帧 4.56MiB 上限，见 DESIGN 陷阱 14；
+        图字节只进磁盘，不进返回值）。
+        """
+        moment = time.time() if now is None else now
+        stickers = self.all()
+        if not stickers:
+            return {}, ERR_EMPTY
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(moment))
+        try:
+            self.exports_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            return {}, ERR_IO
+        target = self.exports_dir / f"stickers-{stamp}.zip"
+        suffix = 0
+        while target.exists():  # 同一秒连点两次导出：如实换名，不覆盖
+            suffix += 1
+            target = self.exports_dir / f"stickers-{stamp}-{suffix}.zip"
+        exported = 0
+        skipped = 0
+        included: list[Sticker] = []
+        for sticker in stickers:
+            try:
+                self.image_path(sticker).read_bytes()  # 只验可读，字节由 zip 自己写
+            except Exception:
+                skipped += 1
+                continue
+            included.append(sticker)
+            exported += 1
+        try:
+            with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as pack:
+                pack.writestr(
+                    PACK_MANIFEST_FILENAME,
+                    json.dumps(build_manifest(included), ensure_ascii=False, indent=2),
+                )
+                for sticker in included:
+                    pack.write(
+                        self.image_path(sticker), arcname=f"{PACK_DIR_PREFIX}{sticker.file}"
+                    )
+        except Exception:
+            try:
+                target.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return {}, ERR_IO
+        self._log(f"pack exported: file={target.name} stickers={exported} skipped={skipped}")
+        return {"file": str(target), "exported": exported, "skipped": skipped}, ""
+
+    def import_pack(
+        self, path: Path, *, group: str = "", tags: list[str] | None = None
+    ) -> dict[str, int]:
+        """导入一个套图 zip（manifest 协议见 core/pack）。返回与收件箱同款四类计数。
+
+        纪律：
+        - **zip-slip**：条目名过 `safe_member_name`（core 层唯一的门），目录/上跳/隐藏一律拒；
+        - 单张字节上限先查 `ZipInfo.file_size` 再读（防 zip bomb 把解压撑进内存）；
+        - 图字节仍走 add 的全套规则（魔数/查重/原子写盘），不造第二条入库路；
+        - 有 manifest 认 manifest（描述/标签/分组随行就市），没有就按裸图集处理，
+          描述取文件名清洗——与收件箱单文件通道同一形态；两种形态都吃整批 tags/group 兜底。
+        """
+        summary = {"imported": 0, "duplicates": 0, "rejected": 0, "failed": 0}
+        try:
+            pack = zipfile.ZipFile(path)
+        except Exception:
+            self._log(f"pack unreadable: {path.name}")
+            summary["failed"] += 1
+            return summary
+        with pack:
+            try:
+                manifest_raw = json.loads(pack.read(PACK_MANIFEST_FILENAME).decode("utf-8"))
+            except KeyError:
+                manifest_raw = None
+            except Exception:
+                # manifest 在但坏了：图仍可救（按裸包处理），如实记一笔日志。
+                self._log(f"pack manifest broken, falling back to bare mode: {path.name}")
+                manifest_raw = None
+            parsed = parse_manifest(manifest_raw) if manifest_raw is not None else []
+            if parsed:
+                members = {
+                    f"{PACK_DIR_PREFIX}{entry.file}": entry for entry in parsed
+                }
+            else:
+                members = {
+                    name: None for name in pack.namelist() if safe_member_name(name)
+                }
+            if len(members) > PACK_MAX_ENTRIES:
+                # 超大包：收下前 PACK_MAX_ENTRIES 个，多出的整批计 rejected。
+                summary["rejected"] += len(members) - PACK_MAX_ENTRIES
+                members = dict(list(members.items())[:PACK_MAX_ENTRIES])
+            for name, entry in members.items():
+                try:
+                    info = pack.getinfo(name)
+                except KeyError:
+                    summary["failed"] += 1  # manifest 报了名但包里没有：如实计
+                    continue
+                if info.is_dir() or info.file_size > MAX_STICKER_BYTES:
+                    summary["rejected"] += 1
+                    continue
+                try:
+                    data = pack.read(name)
+                except Exception:
+                    summary["failed"] += 1
+                    continue
+                file_name = safe_member_name(name)
+                entry_group = entry.group if entry is not None else ""
+                entry_tags = list(entry.tags) if entry is not None and entry.tags else list(tags or [])
+                sticker, error = self.add(
+                    data=data,
+                    desc=entry.desc if entry is not None else desc_from_filename(file_name),
+                    tags=entry_tags,
+                    group=entry_group or group,
+                    now=time.time(),
+                )
+                if error == ERR_DUPLICATE:
+                    summary["duplicates"] += 1
+                elif error:
+                    summary["rejected"] += 1
+                else:
+                    summary["imported"] += 1
+        self._log(
+            "pack ingested: {} imported={imported} duplicates={duplicates} "
+            "rejected={rejected} failed={failed}".format(path.name, **summary)
+        )
+        return summary
+
+    # ------------------------------------------------------------------
     # 收件箱导入
     # ------------------------------------------------------------------
 
     def ingest_inbox(
-        self, *, tags: list[str], max_bytes: int = MAX_STICKER_BYTES
+        self,
+        *,
+        tags: list[str],
+        group: str = "",
+        max_bytes: int = MAX_STICKER_BYTES,
     ) -> dict[str, int]:
         """把收件箱里的图片逐张收进库（描述取自文件名，走 add 的全部规则：
-        魔数、查重、原子写盘）。
+        魔数、查重、原子写盘）。`.zip` 按套图包整批收（v0.2.0）。
 
         处置纪律：成功与重复的源文件删掉（重复件留着只会在下次体检里再报一遍）；
         超限/坏图/读不动的**保留原地**，让用户能改好后重试。
+        zip 包的纪律是同一条尺的整包版：包内**有任何**未收下的（rejected/failed）
+        就留包原地——已收下的图有指纹，重试整包时它们只会计"重复"，不重复入库。
         返回四类计数：imported / duplicates / rejected / failed（隐藏文件不计）。
         """
         summary = {"imported": 0, "duplicates": 0, "rejected": 0, "failed": 0}
         for path in self.inbox_files():
+            if path.suffix.lower() == ".zip":
+                pack_summary = self.import_pack(path, group=group, tags=tags)
+                if not (pack_summary["rejected"] or pack_summary["failed"]):
+                    self._discard_inbox_file(path)
+                for key in summary:
+                    summary[key] += pack_summary[key]
+                continue
             try:
                 data = path.read_bytes()
             except Exception:
@@ -383,7 +555,11 @@ class Library:
                 summary["rejected"] += 1
                 continue
             sticker, error = self.add(
-                data=data, desc=desc_from_filename(path.name), tags=tags, now=time.time()
+                data=data,
+                desc=desc_from_filename(path.name),
+                tags=tags,
+                group=group,
+                now=time.time(),
             )
             if error == ERR_DUPLICATE:
                 summary["duplicates"] += 1

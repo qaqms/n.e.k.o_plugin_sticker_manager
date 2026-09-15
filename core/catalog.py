@@ -34,6 +34,9 @@ _MAGIC_FORMATS: tuple[tuple[bytes, str, str], ...] = (
 DESC_MAX_CHARS = 200
 TAG_MAX_CHARS = 24
 TAGS_MAX_COUNT = 12
+# 套图分组名（v0.2.0）：一条表情最多属于一个组；空串 = 未分组。
+# 比标签宽一点——它是"套图/来源"这种成块的名字，不是散标签。
+GROUP_MAX_CHARS = 40
 # 单张表情图的字节上限：入口层（base64 解码后）与收件箱目录扫描共用同一个数字。
 MAX_STICKER_BYTES = 8 * 1024 * 1024
 # 预览分段大小（原始字节）：必须是 3 的倍数，这样每段的 base64 无填充、
@@ -126,6 +129,19 @@ def normalize_tags(tags: Any) -> list[str]:
     return out
 
 
+def normalize_group(value: Any) -> str:
+    """把任意输入收敛成合法分组名：去空白、限长；非法/空一律回空串（=未分组）。
+
+    纪律：分组**大小写敏感**（主人写的名字就是名字），但纯空白不算分组。
+    """
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    return cleaned[:GROUP_MAX_CHARS]
+
+
 def parse_tags_field(value: Any) -> list[str]:
     """入口参数里的 tags 允许两种形状：字符串列表，或逗号/顿号分隔的单串。"""
     if isinstance(value, list):
@@ -159,6 +175,7 @@ class Sticker:
     use_count: int = 0
     last_used_at: float = 0.0
     sha256: str = ""
+    group: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -171,6 +188,7 @@ class Sticker:
             "use_count": self.use_count,
             "last_used_at": self.last_used_at,
             "sha256": self.sha256,
+            "group": self.group,
         }
 
     @classmethod
@@ -195,6 +213,7 @@ class Sticker:
             use_count=int(raw.get("use_count") or 0),
             last_used_at=float(raw.get("last_used_at") or 0.0),
             sha256=raw.get("sha256") if isinstance(raw.get("sha256"), str) else "",
+            group=normalize_group(raw.get("group")),
         )
 
     def with_touch(self, *, now: float) -> "Sticker":
@@ -208,6 +227,7 @@ class Sticker:
             use_count=self.use_count + 1,
             last_used_at=now,
             sha256=self.sha256,
+            group=self.group,
         )
 
     def with_sha256(self, digest: str) -> "Sticker":
@@ -222,13 +242,14 @@ class Sticker:
             use_count=self.use_count,
             last_used_at=self.last_used_at,
             sha256=digest,
+            group=self.group,
         )
 
 
 def search_stickers(
     stickers: list[Sticker], query: str, *, include_disabled: bool = False
 ) -> list[Sticker]:
-    """按查询串过滤并按 (精确 id > desc 命中 > tag 命中, 最近使用, 使用次数) 排序。
+    """按查询串过滤并按 (精确 id > desc 命中 > 套图/标签命中 > 文件名, 最近使用, 使用次数) 排序。
 
     空查询 = 全量（含禁用的除外，除非显式要求），按"她最近爱用"排序——
     模型拿到空查询时想要的就是"常货"。
@@ -258,11 +279,15 @@ def _match_score(sticker: Sticker, term: str) -> int:
     folded_desc = sticker.desc.casefold()
     if term in folded_desc:
         return 80
+    if sticker.group and term == sticker.group.casefold():
+        return 75
     for tag in sticker.tags:
         if term == tag.casefold():
             return 70
         if term in tag.casefold():
             return 60
+    if sticker.group and term in sticker.group.casefold():
+        return 58
     if term in sticker.file.casefold():
         return 30
     return 0
@@ -271,14 +296,19 @@ def _match_score(sticker: Sticker, term: str) -> int:
 def format_catalog_for_model(stickers: list[Sticker], limit: int) -> str:
     """给模型看的目录（`sticker_list` 工具与目录注入共用同一份文案）。
 
-    一行一条：`[id] 描述（标签：a/b）`。不含文件名、不含计数——
+    一行一条：`[id] 描述（套图：G；标签：a/b）`。不含文件名、不含计数——
     那些是给人看的账本信息，进了提示词只会挤占她的注意力。
     """
     lines: list[str] = []
     pool = [s for s in stickers if not s.disabled]
     for sticker in pool[: max(0, limit)]:
         line = f"[{sticker.id}] {sticker.desc}"
+        brackets: list[str] = []
+        if sticker.group:
+            brackets.append(f"套图：{sticker.group}")
         if sticker.tags:
-            line += f"（标签：{'/'.join(sticker.tags)}）"
+            brackets.append(f"标签：{'/'.join(sticker.tags)}")
+        if brackets:
+            line += f"（{'；'.join(brackets)}）"
         lines.append(line)
     return "\n".join(lines)

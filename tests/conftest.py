@@ -134,6 +134,7 @@ def _build_facade() -> types.ModuleType:
             self.config_dir = ROOT
             self.logger = getattr(ctx, "logger", logging.getLogger("sticker_manager.stub"))
             self.config = getattr(ctx, "config", None)
+            self.bus = getattr(ctx, "bus", None)
 
         def data_path(self, *parts: str) -> Path:
             base = Path(getattr(self.ctx, "data_root", ROOT / ".stub-data"))
@@ -283,6 +284,35 @@ class FakePush:
         return {"submitted": True}
 
 
+class FakeBusNamespace:
+    """`bus.conversations` 的桩：our_life 的 sampler 同款形状（get 可同步可 await）。"""
+
+    def __init__(self, records: list[dict[str, Any]] | None = None, *, error: bool = False):
+        self.records = list(records or [])
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    async def get(self, **kwargs: Any) -> list[dict[str, Any]]:
+        self.calls.append(dict(kwargs))
+        if self.error:
+            raise RuntimeError("bus unavailable")
+        return list(self.records)
+
+
+class FakeBus:
+    def __init__(self, records: list[dict[str, Any]] | None = None, *, error: bool = False):
+        self.conversations = FakeBusNamespace(records, error=error)
+
+
+def conversation_record(conversation_id: str, timestamp: float, lanlan: str, turn_type: str = "user") -> dict[str, Any]:
+    """构造一条总线轮次记录（形状与宿主 `bus.conversations` 一致）。"""
+    return {
+        "conversation_id": conversation_id,
+        "timestamp": timestamp,
+        "metadata": {"lanlan_name": lanlan, "turn_type": turn_type},
+    }
+
+
 @dataclass
 class FakeHostContext:
     plugin_id: str = PACKAGE_NAME
@@ -290,12 +320,15 @@ class FakeHostContext:
     config: Any = field(default_factory=FakeConfig)
     data_root: Any = None
     pushed: list[dict[str, Any]] = field(default_factory=list)
+    bus: Any = None
 
     def __post_init__(self):
         if self.data_root is None:
             self.data_root = ROOT / ".stub-data"
         self.push = FakePush()
         self.images = FakeImages()
+        if self.bus is None:
+            self.bus = FakeBus([])
 
     def push_message(self, **kwargs: Any) -> dict[str, Any]:
         return self.push.push_message(**kwargs)
@@ -310,6 +343,7 @@ def build_plugin(
     plugin = package.StickerManagerPlugin(host)
     plugin.logger = host.logger
     plugin.config = host.config
+    plugin.bus = host.bus
     return plugin, host
 
 

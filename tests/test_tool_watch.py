@@ -193,7 +193,10 @@ def test_fetch_exception_is_swallowed(run_async: Any) -> None:
 def test_on_watch_entry_returns_ok_offline(run_async: Any) -> None:
     # 桩基类没有 list_llm_tools 公开面 → declared 为空 → no_tools（不发网络、
     # 不推进时钟、返回 Ok）。真实宿主里工具收集齐后同一入口走完整巡检。
+    # v0.2.0：on_watch 现在回 {"tool_watch":..., "awareness":...} 双结果，两件事各兜各的。
     plugin, _host = build_plugin()
     result = run_async(plugin.on_watch())
     assert result.is_ok()
-    assert result.value["status"] == "no_tools"
+    assert result.value["tool_watch"]["status"] == "no_tools"
+    # 默认配置 [sticker_manager].enabled=false（fail-closed）→ 注入器不动作。
+    assert result.value["awareness"]["status"] == "disabled"

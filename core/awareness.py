@@ -1,0 +1,49 @@
+"""存在感注入（v0.2.0）的纯函数层：选"注什么"，拼"注成什么样"。
+
+**为什么需要它**：`sticker_list` / `sticker_send` 两个工具一直在，但它们考的是
+"她想不想得起来用"。参考项目的做法是每轮把分类目录喂进上下文——那是平台钩子，
+插件拿不到；插件侧的等价通道是 `push_message(visibility=[], ai_behavior="read")`
+的静默注入（our_life 的 injector 已验证这条在 timer 里可走）。本模块只管两件事：
+
+1. **挑内容**：库不为空才有存在感；带的是"最近常用"的前 N 张（她最常甩出去的那几张
+   最能唤起"哦我还有这个"），不是全目录——低频提示不是目录复读机。
+2. **拼文案**：给模型看的中文（our_life 同一纪律：面向模型的注入文本不走 i18n，
+   面板/入口的用户文案才走）。行形状复用 `format_catalog_for_model`，
+   她从这里看到的行与 `sticker_list` 返回的完全对偶——两处必须同一把尺。
+
+节奏（间隔多少秒、注入给谁）不在这层：那是 services/awareness.py 与时钟的事。
+"""
+
+from __future__ import annotations
+
+from .catalog import Sticker, format_catalog_for_model
+
+# 注入文本的骨架。刻意不提"系统提示"这类元话语，也不下命令——
+# 她是自愿用表情的主人，不是被执行分支的脚本；给的是"有什么 + 在哪查 + 怎么发"。
+_HEADER = "【表情包】你的收藏间里有 {count} 张表情包。"
+_RECENT = "最近常用的：\n{lines}"
+_FOOTER = "聊天里想配张图就直接用 sticker_send 发（先 sticker_list 可以看全部）。别硬找、别连发。"
+
+
+def pick_recent(stickers: list[Sticker], limit: int) -> list[Sticker]:
+    """可选面（未禁用）里按"最近爱用"挑前 N 张：使用数 > 最近时刻 > 更早入库。
+
+    排序口径与 `search_stickers` 空查询一致——同一个"常货"定义在两处出现，
+    所以直接走同一条 key（对偶纪律）。
+    """
+    pool = [s for s in stickers if not s.disabled]
+    ranked = sorted(pool, key=lambda s: (-s.use_count, -s.last_used_at, s.added_at))
+    return ranked[: max(0, limit)]
+
+
+def build_awareness_text(stickers: list[Sticker], *, max_lines: int) -> str:
+    """拼一条注入文本。空库回空串——调用方拿空串当"这拍不该注"。"""
+    total = sum(1 for s in stickers if not s.disabled)
+    if total <= 0:
+        return ""
+    parts = [_HEADER.format(count=total)]
+    lines = format_catalog_for_model(pick_recent(stickers, max_lines), max_lines)
+    if lines:
+        parts.append(_RECENT.format(lines=lines))
+    parts.append(_FOOTER)
+    return "\n".join(parts)

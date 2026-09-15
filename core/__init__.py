@@ -2,9 +2,13 @@
 
 - `catalog`：表情包条目的数据形状、图片格式嗅探、检索与目录文案（给模型看的）。
 - `configuration`：`[sticker_manager]` 配置族的 dataclass 视图与默认值。
+- `pack`：套图包的 manifest 协议与 zip 条目名安全门（v0.2.0）。
+- `awareness`：存在感注入的选内容与拼文案（v0.2.0）。
 """
 
+from .awareness import build_awareness_text, pick_recent
 from .catalog import (
+    GROUP_MAX_CHARS,
     MAX_STICKER_BYTES,
     PREVIEW_CHUNK_BYTES,
     Sticker,
@@ -13,27 +17,60 @@ from .catalog import (
     detect_image_format,
     format_catalog_for_model,
     new_sticker_id,
+    normalize_group,
     normalize_tags,
     parse_tags_field,
     search_stickers,
     validate_desc,
 )
-from .configuration import SendSettings, StickerManagerSettings, StorageSettings
+from .configuration import (
+    AwarenessSettings,
+    SendSettings,
+    StickerManagerSettings,
+    StorageSettings,
+)
+from .pack import (
+    PACK_DIR_PREFIX,
+    PACK_MANIFEST_FILENAME,
+    PACK_MANIFEST_VERSION,
+    PACK_MAX_ENTRIES,
+    PackEntry,
+    build_manifest,
+    pack_entry_from_raw,
+    parse_manifest,
+    safe_member_name,
+    sticker_to_manifest_entry,
+)
 
 __all__ = [
+    "GROUP_MAX_CHARS",
     "MAX_STICKER_BYTES",
+    "PACK_DIR_PREFIX",
+    "PACK_MANIFEST_FILENAME",
+    "PACK_MANIFEST_VERSION",
+    "PACK_MAX_ENTRIES",
     "PREVIEW_CHUNK_BYTES",
+    "AwarenessSettings",
+    "PackEntry",
     "SendSettings",
     "Sticker",
     "StorageSettings",
     "StickerManagerSettings",
+    "build_awareness_text",
+    "build_manifest",
     "content_sha256",
     "desc_from_filename",
     "detect_image_format",
     "format_catalog_for_model",
     "new_sticker_id",
+    "normalize_group",
     "normalize_tags",
+    "pack_entry_from_raw",
+    "parse_manifest",
     "parse_tags_field",
+    "pick_recent",
+    "safe_member_name",
     "search_stickers",
+    "sticker_to_manifest_entry",
     "validate_desc",
 ]

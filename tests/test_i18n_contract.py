@@ -16,10 +16,12 @@ def _messages(locale: str) -> dict[str, str]:
 
 
 def _tr_keys_in_code() -> set[str]:
-    pattern = re.compile(r'tr\(\s*"([^"]+)"')
+    # 词边界防误伤：zip 测试里的 writestr 尾巴恰好是 t-r-左括号-引号（真踩过），
+    # 前面有字母时不算 tr() 调用。
+    pattern = re.compile(r'(?<![A-Za-z0-9_])tr\(\s*"([^"]+)"')
     keys: set[str] = set()
     for path in ROOT.rglob("*.py"):
-        if ".venv" in path.parts or "__pycache__" in path.parts:
+        if ".venv" in path.parts or "__pycache__" in path.parts or ".tmpgate" in path.parts:
             continue
         keys.update(pattern.findall(path.read_text(encoding="utf-8")))
     return keys

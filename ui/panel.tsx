@@ -41,6 +41,7 @@ type StickerRow = {
   added_at?: number
   use_count?: number
   last_used_at?: number
+  group?: string
 }
 
 type UsageRow = {
@@ -52,14 +53,29 @@ type UsageRow = {
   code?: string
 }
 
+type AwarenessState = {
+  status?: string
+  target?: string
+  last_inject_at?: number | null
+  min_next_wait_sec?: number
+}
+
 type State = {
   enabled?: boolean
   lanlan?: string
-  counts?: { total?: number; enabled?: number; sent_total?: number }
+  counts?: { total?: number; enabled?: number; sent_total?: number; groups?: number }
   stickers?: StickerRow[]
+  groups?: string[]
   usage?: UsageRow[]
   inbox?: { pending?: number; path?: string }
-  config?: { cooldown_sec?: number; inline_max_bytes?: number; catalog_limit_for_model?: number }
+  awareness?: AwarenessState
+  config?: {
+    cooldown_sec?: number
+    inline_max_bytes?: number
+    catalog_limit_for_model?: number
+    awareness_enabled?: boolean
+    awareness_interval_sec?: number
+  }
   error_code?: string
 }
 
@@ -132,6 +148,7 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
   const [editing, setEditing] = useState<boolean>(false)
   const [editDesc, setEditDesc] = useState<string>(row.desc || "")
   const [editTags, setEditTags] = useState<string>((row.tags || []).join(","))
+  const [editGroup, setEditGroup] = useState<string>(row.group || "")
 
   const loadPreview = async () => {
     if (previewCache[row.id] !== undefined) {
@@ -219,6 +236,7 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
             <Inline gap={6} wrap>
               {[
                 ...(row.disabled ? [<StatusBadge tone="warning" label={t("panel.badge.disabled", { defaultValue: "已禁用" })} />] : []),
+                ...(row.group ? [<StatusBadge tone="info" label={row.group} />] : []),
                 ...(row.tags || []).map((tag) => <StatusBadge tone="info" label={tag} />),
               ]}
             </Inline>
@@ -250,12 +268,15 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
           <Field label={t("panel.edit.tags", { defaultValue: "标签（逗号分隔）" })}>
             <Input value={editTags} onChange={setEditTags} placeholder="开心, 猫" />
           </Field>
+          <Field label={t("panel.edit.group", { defaultValue: "套图分组（留空=移出分组）" })}>
+            <Input value={editGroup} onChange={setEditGroup} placeholder={t("panel.group.label", { defaultValue: "套图分组" })} />
+          </Field>
           <Inline gap={6}>
             <Button
               tone="primary"
               onClick={() => {
                 setEditing(false)
-                run("update", { id: row.id, desc: editDesc, tags: editTags })
+                run("update", { id: row.id, desc: editDesc, tags: editTags, group: editGroup })
               }}
             >
               {t("panel.edit.save", { defaultValue: "保存" })}
@@ -276,6 +297,7 @@ function AddForm(props: { surface: Surface }) {
   const [artifact, setArtifact] = useState<any>(null)
   const [desc, setDesc] = useState("")
   const [tags, setTags] = useState("")
+  const [group, setGroup] = useState("")
   const [busy, setBusy] = useState(false)
   const [batchBusy, setBatchBusy] = useState(false)
   const [batchNote, setBatchNote] = useState("")
@@ -322,6 +344,7 @@ function AddForm(props: { surface: Surface }) {
               data_base64: b64,
               desc: guessDesc(String(file.name || "")),
               tags: tags,
+              group: group,
             })
             if (result && result.note === "sticker_added") {
               ok += 1
@@ -366,12 +389,14 @@ function AddForm(props: { surface: Surface }) {
         data_base64: dataUrlToBase64(dataUrl),
         desc: desc.trim(),
         tags: tags,
+        group: group,
       })
       if (result && result.note === "sticker_added") {
         setFeedback({ kind: "ok", text: t("panel.add.ok", { defaultValue: "已收进她的表情库" }) })
         setArtifact(null)
         setDesc("")
         setTags("")
+        setGroup("")
         setDescTouched(false)
         await surface.api.refresh()
       }
@@ -401,6 +426,9 @@ function AddForm(props: { surface: Surface }) {
       <Field label={t("panel.edit.tags", { defaultValue: "标签（逗号分隔）" })}>
         <Input value={tags} onChange={setTags} placeholder="开心, 猫" />
       </Field>
+      <Field label={t("panel.group.label", { defaultValue: "套图分组" })}>
+        <Input value={group} onChange={setGroup} placeholder={t("panel.group.ph", { defaultValue: "可选，如：猫猫日常" })} />
+      </Field>
       <Button tone="primary" disabled={busy} onClick={() => { submit() }}>
         {busy
           ? t("panel.add.busy", { defaultValue: "收藏中…" })
@@ -428,8 +456,50 @@ export default function Panel(props: Surface) {
   const state = props.state || {}
   const t = props.t
   const [query, setQuery] = useState("")
+  const [group, setGroup] = useState("")
   const [libraryNote, setLibraryNote] = useState("")
+  const [awarenessNote, setAwarenessNote] = useState("")
   const stickers = state.stickers || []
+  const groups = state.groups || []
+
+  const exportPack = async () => {
+    setLibraryNote("")
+    try {
+      const result = await callAction(props, "export_pack", {})
+      if (result) {
+        setLibraryNote(
+          t("panel.export.done", {
+            exported: result.exported ?? 0,
+            skipped: result.skipped ?? 0,
+            file: result.file ?? "",
+            defaultValue: "已导出 {exported} 张（跳过 {skipped}）：{file}",
+          }),
+        )
+      }
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error ?? "failed")
+      setLibraryNote(t("panel.toast.failed", { code: extractCode(raw), defaultValue: "操作失败：{code}" }))
+    }
+  }
+
+  const ping = async () => {
+    setAwarenessNote("")
+    try {
+      const result = await callAction(props, "awareness_now", {})
+      if (result) {
+        setAwarenessNote(
+          t(`panel.awareness.status.${String(result.status || "")}`, {
+            defaultValue: String(result.status || ""),
+          }),
+        )
+      }
+      await props.api.refresh()
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error ?? "failed")
+      const code = extractCode(raw)
+      setAwarenessNote(t(`panel.error.${code}`, { defaultValue: code }))
+    }
+  }
 
   const repair = async () => {
     setLibraryNote("")
@@ -475,12 +545,19 @@ export default function Panel(props: Surface) {
   }
 
   const term = query.trim().toLowerCase()
-  const rows = term
-    ? stickers.filter((row) => {
-        const haystack = [row.id, row.desc || "", (row.tags || []).join(" ")].join(" ").toLowerCase()
-        return haystack.indexOf(term) >= 0
-      })
-    : stickers
+  const rows = stickers.filter((row) => {
+    if (group === "__none__" && row.group) {
+      return false
+    }
+    if (group && group !== "__none__" && row.group !== group) {
+      return false
+    }
+    if (!term) {
+      return true
+    }
+    const haystack = [row.id, row.desc || "", (row.tags || []).join(" "), row.group || ""].join(" ").toLowerCase()
+    return haystack.indexOf(term) >= 0
+  })
 
   return (
     <Page title={t("panel.title", { defaultValue: "表情包管理" })} subtitle={state.lanlan || ""}>
@@ -531,6 +608,38 @@ export default function Panel(props: Surface) {
             <Text>{t("panel.usage.note", { defaultValue: "台账只记时刻与表情 id，不含对话原文。" })}</Text>
           </Card>
         </Grid>
+        <Card title={t("panel.awareness.title", { defaultValue: "存在感注入" })}>
+          <Stack gap={8}>
+            <Text>{t("panel.awareness.note", { defaultValue: "低频把『你有一间表情收藏间 + 最近常用的几张』静默注进她的上下文：你看不到、她不会因此开口。" })}</Text>
+            <Inline gap={16} align="center" wrap>
+              <KeyValue
+                items={[
+                  {
+                    key: "status",
+                    label: t("panel.awareness.status", { defaultValue: "最近一次" }),
+                    value: t(`panel.awareness.status.${String((state.awareness && state.awareness.status) || "")}`, {
+                      defaultValue: (state.awareness && state.awareness.status) || "—",
+                    }),
+                  },
+                  {
+                    key: "target",
+                    label: t("panel.awareness.target", { defaultValue: "注给" }),
+                    value: (state.awareness && state.awareness.target) || "—",
+                  },
+                  {
+                    key: "next",
+                    label: t("panel.awareness.next", { defaultValue: "下次最快" }),
+                    value: String(Math.ceil((state.awareness && state.awareness.min_next_wait_sec) || 0)) + "s",
+                  },
+                ]}
+              />
+              <Button tone="default" onClick={() => { ping() }}>
+                {t("panel.awareness.button", { defaultValue: "现在注一条（调试）" })}
+              </Button>
+            </Inline>
+            {awarenessNote ? <Text>{awarenessNote}</Text> : null}
+          </Stack>
+        </Card>
         <Card title={t("panel.card.library", { defaultValue: "她的表情库" })}>
           <Stack gap={10}>
             <Inline gap={8} align="center" wrap>
@@ -545,6 +654,14 @@ export default function Panel(props: Surface) {
                   (state.inbox && state.inbox.pending ? " (" + state.inbox.pending + ")" : "")}
               </Button>
               <Button
+                tone="info"
+                onClick={() => {
+                  exportPack()
+                }}
+              >
+                {t("panel.export.button", { defaultValue: "导出套图包" })}
+              </Button>
+              <Button
                 tone="warning"
                 onClick={() => {
                   repair()
@@ -553,6 +670,31 @@ export default function Panel(props: Surface) {
                 {t("panel.repair.button", { defaultValue: "体检与修复" })}
               </Button>
             </Inline>
+            {groups.length > 0 ? (
+              <Inline gap={6} align="center" wrap>
+                <Button
+                  tone={group === "" ? "success" : "default"}
+                  onClick={() => { setGroup("") }}
+                >
+                  {t("panel.group.all", { defaultValue: "全部" })}
+                </Button>
+                {groups.map((name) => (
+                  <Button
+                    key={name}
+                    tone={group === name ? "success" : "default"}
+                    onClick={() => { setGroup(group === name ? "" : name) }}
+                  >
+                    {name}
+                  </Button>
+                ))}
+                <Button
+                  tone={group === "__none__" ? "success" : "default"}
+                  onClick={() => { setGroup(group === "__none__" ? "" : "__none__") }}
+                >
+                  {t("panel.group.none", { defaultValue: "未分组" })}
+                </Button>
+              </Inline>
+            ) : null}
             {state.inbox && state.inbox.path ? (
               <Text>{t("panel.inbox.hint", { path: state.inbox.path, defaultValue: "把图片文件放进 {path} 后点「导入收件箱」；描述取自文件名。" })}</Text>
             ) : null}

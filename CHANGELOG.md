@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.0
+v0.2.0「她得记得自己有表情」——存在感 + 套图分组 + 库可迁移（机制调研自 astrbot 表情包管理器，代码全自写）：
+
+- **存在感注入（services/awareness.py）**：复用 60s watch 拍（不新增表），从 `bus.conversations`
+  找"最近在跟她说话的角色卡"，把「收藏间里有 N 张 + 最近常用前 K 行」以
+  `push_message(visibility=[], ai_behavior="read")` 静默注进她的上下文——治"她想不起来有表情"。
+  按角色卡的内存时钟自节流（默认 3600s，配置 `[sticker_manager.awareness]`）；空库/没人说话/被拒
+  都不推进时钟；永不炸拍（与 tool_watch 同纪律）。心跳=在场性不随业务冻结，注入=行为链路**随**
+  `[].enabled` 冻结——两条相反的联动刻意在 docstring 里写死了。
+- **调试入口 `awareness_now`**：绕节奏不绕开关，面板"现在注一条"；稳定码 awareness_disabled /
+  awareness_no_target / awareness_empty_library。
+- **套图分组（Sticker.group）**：一条表情至多一个组（可空=未分组）；检索按"desc 命中 > 套图名命中 >
+  标签命中"打分；目录行形如 `[id] 描述（套图：G；标签：a/b）`；面板 chips 过滤 + 编辑框；
+  老库无该键宽松兼容（from_dict 回空串）。
+- **导出/导入套图包（core/pack.py + Library.export_pack/import_pack）**：`manifest.json + stickers/`
+  打 zip 落 `data/library/exports/`；导入走收件箱通道认 `.zip`（有 manifest 吃元数据，裸图包按
+  文件名清洗描述）；**zip-slip**：条目名只当"包内定位符"，落盘永远走 add() 服务端发号，
+  `safe_member_name` 拒目录/上跳/盘符/隐藏形状；先查 ZipInfo.file_size 再读（zip bomb）；
+  超 PACK_MAX_ENTRIES 截断计数。**刻意不兼容 astrbot 的 memes_data.json**（用户拍板）。
+- **修回归**：`Library.update()` 重建 Sticker 时曾丢 sha256（每编辑一次就得等下次查重 lazy 回填），
+  现在指纹随文件本体走。
+- 频控两层分离（参致 astrbot"软提示+硬闸"思想、实现自写）：core 只拼文案，节奏/目标/时钟在
+  services；注入文案与 `sticker_list` 目录行同一把尺（format_catalog_for_model 复用）。
+- i18n：+34 键（zh-CN/en 同步；文本级插入保 CRLF）；面板存在感卡（状态/注给/下次最快/调试按钮）
+- 测试 121 → 170：test_awareness 21 / test_pack 16 / test_v020_entries 13 + 契约门词边界修正
+  （writestr( 的尾巴会撞 tr( 前缀，加负向前查）+ config 三处同源并入 awareness 段
 ## 0.1.4
 
 - **显示名改为「表情包管理」**（只动 `[plugin].name`、面板标题四处与文档题头；

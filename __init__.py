@@ -14,6 +14,10 @@ v0.1.4「不再静默缺席」：工具注册心跳（services/tool_watch）—�
 晚于插件启动时，她的 `sticker_list` / `sticker_send` 会静默缺席，巡检器每 5 分钟
 点名补挂。
 
+v0.2.0「她得记得自己有表情」：三件事——① 存在感注入（services/awareness，挂在
+60s watch 拍上的低频静默提示，治"她想不起来有表情"）；② 套图分组（Sticker.group，
+检索/目录/面板全贯通）；③ 库的导出与套图包导入（manifest + zip，收件箱认包）。
+
 三条硬约束（源码核实，见 DESIGN.md「已知陷阱」）：
 1. `ctx.images.upload()` 会把图**归一成 JPEG**——gif 动图会被压平，所以动图只走
    内联通道，内联预算装不下就如实拒绝，不上报假成功。
@@ -50,11 +54,12 @@ from .core import (
     Sticker,
     StickerManagerSettings,
     format_catalog_for_model,
+    normalize_group,
     parse_tags_field,
     search_stickers,
     validate_desc,
 )
-from .services import Library, Sender, ToolWatch
+from .services import Awareness, Library, Sender, ToolWatch
 
 __all__ = ["StickerManagerPlugin"]
 
@@ -75,6 +80,9 @@ class StickerManagerPlugin(NekoPluginBase):
         # 或重启后她的两个工具会静默缺席（见 services/tool_watch.py 模块 docstring）。
         # 与总开关无关：注册韧性是宿主层面的在场性，不随业务冻结而应冻结。
         self._tool_watch = ToolWatch(self, logger=self.logger)
+        # 存在感注入（v0.2.0）：与 tool_watch 共用 60s 拍，内部按角色卡时钟自节流。
+        # 与总开关是「与」关系——[sticker_manager].enabled=false 时不注。
+        self._awareness = Awareness(self, self._library, logger=self.logger)
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -119,17 +127,22 @@ class StickerManagerPlugin(NekoPluginBase):
     # 工具注册心跳（v0.1.4）
     # ------------------------------------------------------------------
 
-    @timer_interval(id="watch", seconds=60, name="sticker_manager tool watch")
+    @timer_interval(id="watch", seconds=60, name="sticker_manager watch")
     async def on_watch(self, **_):
-        # 每 60s 递一下心跳器，内部按 300s 自节流（首拍即查，早发现竞态窗）。
+        # 每 60s 递一下心跳器与注入器，各自内部按更长间隔自节流。
         # timer 每拍跑在新 event loop 且无 watchdog：异常必须自己兜住（陷阱 §3）。
-        # maybe_run 内部已经吞一切，这里是双保险——心跳坏掉不许把表标黄。
+        # 两件事各兜各的：心跳坏不许拖累注入，注入坏不许拖累心跳（两表都黄才是双灾）。
         try:
-            result = await self._tool_watch.maybe_run(now=time.time())
+            watch = await self._tool_watch.maybe_run(now=time.time())
         except Exception:  # noqa: BLE001 - timer 无 watchdog，异常漏出去会停不了但也静默
             self.logger.warning("sticker_manager tool watch leaked", exc_info=True)
-            result = {"status": "leaked"}
-        return Ok(result)
+            watch = {"status": "leaked"}
+        try:
+            awareness = await self._awareness.maybe_run(settings=self._settings, now=time.time())
+        except Exception:  # noqa: BLE001 - 注入坏掉不许把表标黄、更不许拖累心跳
+            self.logger.warning("sticker_manager awareness leaked", exc_info=True)
+            awareness = {"status": "leaked"}
+        return Ok({"tool_watch": watch, "awareness": awareness})
 
     # ------------------------------------------------------------------
     # 管理入口（面板 + 命令面板共用）
@@ -163,6 +176,10 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "string",
                     "description": tr("fields.tags", default="标签，逗号分隔（可选）"),
                 },
+                "group": {
+                    "type": "string",
+                    "description": tr("fields.group", default="套图分组（可选，如：猫猫日常）"),
+                },
             },
             "required": ["data_base64", "desc"],
             "additionalProperties": False,
@@ -170,7 +187,7 @@ class StickerManagerPlugin(NekoPluginBase):
         llm_result_fields=["note", "id", "desc"],
         timeout=30.0,
     )
-    async def add_entry(self, data_base64: str = "", desc: str = "", tags: str = "", **_):
+    async def add_entry(self, data_base64: str = "", desc: str = "", tags: str = "", group: str = "", **_):
         text_desc, desc_error = validate_desc(desc)
         if desc_error == "empty":
             return Err(SdkError("desc_required"))
@@ -190,6 +207,7 @@ class StickerManagerPlugin(NekoPluginBase):
             data=payload,
             desc=text_desc,
             tags=parse_tags_field(tags),
+            group=normalize_group(group),
             now=time.time(),
         )
         if sticker is None:
@@ -219,6 +237,10 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "boolean",
                     "description": tr("fields.disabled", default="是否禁用（缺省=不改）"),
                 },
+                "group": {
+                    "type": "string",
+                    "description": tr("fields.group", default="套图分组（可选，如：猫猫日常）"),
+                },
             },
             "required": ["id"],
             "additionalProperties": False,
@@ -231,6 +253,7 @@ class StickerManagerPlugin(NekoPluginBase):
         desc: str | None = None,
         tags: Any = None,
         disabled: bool | None = None,
+        group: Any = None,
         **_,
     ):
         if not isinstance(id, str) or not id:
@@ -246,7 +269,14 @@ class StickerManagerPlugin(NekoPluginBase):
             new_tags = parse_tags_field(tags)
         if disabled is not None and not isinstance(disabled, bool):
             return Err(SdkError("invalid_value"))
-        sticker, error = self._library.update(id, desc=new_desc, tags=new_tags, disabled=disabled)
+        # group 与 tags 的语义不同：**空串是合法意图**（"移出分组"），
+        # 只有 None（参数缺席）才表示"不改"。
+        new_group: str | None = None
+        if isinstance(group, str):
+            new_group = normalize_group(group)
+        sticker, error = self._library.update(
+            id, desc=new_desc, tags=new_tags, disabled=disabled, group=new_group
+        )
         if sticker is None:
             return Err(SdkError(error or "sticker_not_found"))
         return Ok({"note": "sticker_updated", "id": sticker.id})
@@ -498,17 +528,73 @@ class StickerManagerPlugin(NekoPluginBase):
             "type": "object",
             "properties": {
                 "tags": {"type": "string", "description": tr("fields.tags", default="标签，逗号分隔（可选，整批共用）")},
+                "group": {"type": "string", "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）")},
             },
         },
         llm_result_fields=["note", "imported", "duplicates", "rejected", "failed"],
         timeout=120.0,
     )
-    async def import_inbox_entry(self, tags: str = "", **_):
+    async def import_inbox_entry(self, tags: str = "", group: str = "", **_):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
-        summary = self._library.ingest_inbox(tags=parse_tags_field(tags))
+        summary = self._library.ingest_inbox(
+            tags=parse_tags_field(tags), group=normalize_group(group)
+        )
         return Ok({"note": "inbox_imported", **summary})
+
+    @ui.action(
+        id="export_pack",
+        label=tr("actions.export_pack.label", default="Export"),
+        tone="info",
+        refresh_context=False,
+    )
+    @plugin_entry(
+        id="export_pack",
+        name=tr("entries.export_pack.name", default="导出套图包"),
+        description=tr(
+            "entries.export_pack.description",
+            default="把整本表情库打成一个套图 zip（图 + manifest）写到 exports 目录，返回文件路径；导入方放回收件箱即可整套收进",
+        ),
+        input_schema={"type": "object", "properties": {}},
+        llm_result_fields=["note", "exported", "skipped", "file"],
+        timeout=120.0,
+    )
+    async def export_pack_entry(self, **_):
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        result, error = self._library.export_pack(now=time.time())
+        if error:
+            return Err(SdkError(error))
+        return Ok({"note": "pack_exported", **result})
+
+    @ui.action(
+        id="awareness_now",
+        label=tr("actions.awareness_now.label", default="Ping"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="awareness_now",
+        name=tr("entries.awareness_now.name", default="立刻注一条存在感"),
+        description=tr(
+            "entries.awareness_now.description",
+            default="调试用：绕过间隔闸，立刻给当前角色卡注一条'你有表情包'的静默提示（用户看不见）",
+        ),
+        input_schema={"type": "object", "properties": {}},
+        llm_result_fields=["note", "status"],
+        timeout=15.0,
+    )
+    async def awareness_now_entry(self, **kwargs):
+        lanlan = _lanlan_from_kwargs(kwargs)
+        result = await self._awareness.inject_now(
+            settings=self._settings, lanlan=lanlan, now=time.time()
+        )
+        status = str(result.get("status", ""))
+        if status in {"disabled", "no_target", "empty_library"}:
+            return Err(SdkError(f"awareness_{status}"))
+        return Ok({"note": "awareness", "status": status})
 
     # ------------------------------------------------------------------
     # 面板上下文
@@ -520,6 +606,7 @@ class StickerManagerPlugin(NekoPluginBase):
         settings = self._settings
         lanlan = _lanlan_from_kwargs(kwargs)
         stickers = self._library.all()
+        groups = sorted({s.group for s in stickers if s.group})
         payload: dict[str, Any] = {
             "enabled": settings.enabled,
             "lanlan": lanlan,
@@ -527,17 +614,24 @@ class StickerManagerPlugin(NekoPluginBase):
                 "total": len(stickers),
                 "enabled": sum(1 for s in stickers if not s.disabled),
                 "sent_total": sum(s.use_count for s in stickers),
+                "groups": len(groups),
             },
             "stickers": [s.as_dict() for s in stickers],
+            "groups": groups,
             "usage": self._library.read_usage(limit=12),
             "inbox": {
                 "pending": len(self._library.inbox_files()),
                 "path": str(self._library.inbox_dir),
             },
+            "awareness": self._awareness.snapshot(
+                interval_sec=settings.awareness.interval_sec, now=time.time()
+            ),
             "config": {
                 "cooldown_sec": settings.send.cooldown_sec,
                 "inline_max_bytes": settings.send.inline_max_bytes,
                 "catalog_limit_for_model": settings.storage.catalog_limit_for_model,
+                "awareness_enabled": settings.awareness.enabled,
+                "awareness_interval_sec": settings.awareness.interval_sec,
             },
         }
         if not loaded.ok:
@@ -552,7 +646,7 @@ class StickerManagerPlugin(NekoPluginBase):
         name="sticker_list",
         description=(
             "看看你收藏的表情包里有什么。不填 query 就是全部（按你最近爱用的排），"
-            "填了就按关键词搜。拿到列表后用 sticker_send 发。"
+            "填了就按描述/标签/套图名搜。拿到列表后用 sticker_send 发。"
         ),
         parameters={
             "type": "object",

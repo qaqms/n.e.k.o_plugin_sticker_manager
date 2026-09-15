@@ -29,6 +29,15 @@
 - 工具注册心跳（v0.1.4，移植 our_life v0.5.0）：`@timer_interval("watch", 60s)` 拍上挂
   `services/tool_watch.ToolWatch`（300s 自节流，首拍即查）：回环 `GET /api/tools` 点名缺席、
   只对真缺席补挂（IPC 重发 replace 幂等）；不可达零动作；永不炸拍
+- 存在感注入（v0.2.0）：同一个 60s 拍再挂 `services/awareness.Awareness`——从 `bus.conversations`
+  找最近在跟她说话的角色卡，低频（默认 3600s/卡，`[sticker_manager.awareness]`）静默注入
+  「收藏间里有 N 张 + 最近常用前 K 行」（`visibility=[]` + `ai_behavior="read"`）；
+  空库/无目标/被拒不推进时钟；永不炸拍；调试入口 `awareness_now`（绕节奏不绕开关）
+- 套图分组（v0.2.0）：`Sticker.group`（至多一个、可空=未分组；老库宽松兼容）；检索打分、
+  目录行 `[id] 描述（套图：G；标签：a/b）`、面板 chips 过滤与编辑框全贯通
+- 套图包导出/导入（v0.2.0）：`data/library/exports/*.zip`（manifest.json + stickers/）；
+  导入走收件箱通道认 `.zip`（manifest 优先、裸图包按文件名清洗）；zip 条目名只当包内定位符，
+  落盘永远走 add() 服务端发号（zip-slip 免疫）；刻意不兼容 astrbot memes_data.json
 - 发送链路：≤256KiB 内联 image data part（gif 恒走内联保动画）；更大走 `ctx.images.upload()` 换 URL part
 - 频控：按角色卡内存冷却（默认 20s）；`push_message(visibility=["chat"], ai_behavior="read")`
 - i18n：zh-CN + en（Python `tr()` 与 TSX `t()` 键全部入文件，有门钉着）
@@ -36,8 +45,9 @@
 ## Out of Scope（v0.1.0 刻意不做）
 - 宿主 proactive_chat 的**在线 meme 图源链路**（meme_fetcher 抓图）——平台层，插件无 hook，管不到也不该管
 - qq_auto_reply 的 QQ 表情目录联动（`call_entry` 通道存在，要做需单独立项）
-- 表情包分组/套图（tags 已留扩展位）
-- 定期目录注入（现在靠她主动调 `sticker_list`；若实测"她想不起来有表情"再加注入通道）
+- ~~表情包分组/套图~~ —— **v0.2.0 已做**（`Sticker.group` + 面板 chips + 套图包导入导出；跨会话选包规则不做，我们只有一张收藏间）
+- ~~定期目录注入~~ —— **v0.2.0 已做**（存在感注入 awareness，见上面能力面与陷阱 16）；
+  astrbot 那种"改 prompt + 回复流标记解析器"做不了（平台钩子），插件侧等价物就是静默注入 + llm_tool
 - ~~工具重注册心跳~~ —— **v0.1.4 已做**（our_life v0.5.0 方案移植，见上面的工具面与陷阱 15）
 
 ## Inferred Technical Needs
@@ -78,6 +88,18 @@
     另外两条纪律：不可达≠缺席（main_server 没起时盲重注册是每拍追打）；
     `no_tools`（工具还没收集齐）**不推进时钟**，收集齐后下一拍就查。心跳与 `[].enabled`
     无关：注册韧性是在场性，不随业务冻结而冻结。
+16. **心跳与存在感注入的联动方向是相反的，别"顺手"统一**（v0.2.0）：
+    tool_watch 不随 `[].enabled=false` 冻结（注册韧性=在场性），
+    awareness **必须**随总开关冻结（注入=行为链路，关了就该彻底安静）。
+    两者共用同一个 60s `on_watch` 拍，但异常各兜各的——一个漏出去会把另一个的表也标黄。
+17. **zip 条目名只当"包内定位符"**（v0.2.0）：`safe_member_name` 把名字压平成 basename，
+    防逃逸靠的是"落盘永远走 `add()` 服务端发号、从不拿外来名拼路径"——
+    若哪天有人"顺手"改成按包内原名写目录，zip-slip 防线当场失效（test_pack 有专门门钉着）。
+    另：先查 `ZipInfo.file_size` 再 `read`（zip bomb 纪律）；导入的 id/时间戳/使用数**不继承**
+    来源包（否则假时间污染"最近爱用"排序）。
+18. **契约测试的 `tr(` 正则会撞 `writestr(` 的尾巴**（v0.2.0）：i18n 键扫描用
+    `(?<![A-Za-z0-9_])tr\(` 带词边界；测试与注释里出现 `writestr("...")` 或字面 `` `tr(" `` 都能
+    造出假键把门搞红。新增跨行 tr( 调用是合法的（`\s*` 吃换行），别收紧成单行匹配。
 
 ## Read Context Plan
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）
@@ -91,3 +113,6 @@
 - ~~llm_tool 注册表在宿主重启后即丢且无自动重注册~~ —— **v0.1.4 已解**
   （`services/tool_watch.py`，our_life v0.5.0 同方案；间隔 300s，与 fc/our_life 同量级）。
 - 上传图无内容审核：库是主人手动收藏的，风险面与在线图源不同；若未来开"她自己去网上抓图入库"，必须接宿主 `utils/meme_moderation` 等价物。
+- 存在感注入的节奏（3600s/卡、前 5 行）**没有真机基线**（用户 2026-09-15 确认"还没认真测过"）：
+  首轮真机验收要看的是"她是否开始自发用 sticker_send"与"上下文有没有被喂腻"，
+  再决定往哪个方向调 interval/lines，必要时加"本会话她已用过表情就不注"的去抖。
