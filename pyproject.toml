@@ -25,6 +25,8 @@ exclude_dirs = [
     ".ruff_cache",
     "__pycache__",
     "tests",
+    # 研究/方案文档（astrbot-study 等）：开发期资产，不进发行包
+    "docs",
     # 开发期工具（五门 release_gate）：依赖仓外宿主，运行时零引用，不进发行包
     "tools",
     # 本机 TEMP 对策的落盘目录（pytest basetemp）：任何情况下不得进包

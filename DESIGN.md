@@ -44,7 +44,6 @@
 
 ## Out of Scope（v0.1.0 刻意不做）
 - 宿主 proactive_chat 的**在线 meme 图源链路**（meme_fetcher 抓图）——平台层，插件无 hook，管不到也不该管
-- qq_auto_reply 的 QQ 表情目录联动（`call_entry` 通道存在，要做需单独立项）
 - ~~表情包分组/套图~~ —— **v0.2.0 已做**（`Sticker.group` + 面板 chips + 套图包导入导出；跨会话选包规则不做，我们只有一张收藏间）
 - ~~定期目录注入~~ —— **v0.2.0 已做**（存在感注入 awareness，见上面能力面与陷阱 16）；
   astrbot 那种"改 prompt + 回复流标记解析器"做不了（平台钩子），插件侧等价物就是静默注入 + llm_tool
@@ -103,6 +102,7 @@
 
 ## Read Context Plan
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）
+- 本仓 `docs/astrbot-study.md`（astrbot 表情包管理器机制剖析与分轮移植方案，2026-09-15）
 - 同工作区 `n.e.k.o_plugin_our_life`（工程基线与五门）；`plugin/plugins/qq_auto_reply`（sticker 目录注入先例）
 - `问题清单/已知问题.md`（本机环境坑）
 
