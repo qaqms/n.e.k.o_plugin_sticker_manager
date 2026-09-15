@@ -21,14 +21,19 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping
 
 from .catalog import (
+    CAPTION_MAX_CHARS,
+    VISIBLE_TEXT_MAX_CHARS,
     Sticker,
     desc_from_filename,
     normalize_group,
+    normalize_optional_text,
     normalize_tags,
     validate_desc,
 )
 
-PACK_MANIFEST_VERSION = 1
+# v2（v0.3.0）：条目新增 caption/visible_text。导入侧从不按版本号硬拒
+# （旧 reader 遇新键会自然忽略，新 reader 遇旧包缺键回空），升号只为诚实。
+PACK_MANIFEST_VERSION = 2
 PACK_MANIFEST_FILENAME = "manifest.json"
 # zip 内图片条目的目录前缀。导入时剥掉；导出时必须用同一个。
 PACK_DIR_PREFIX = "stickers/"
@@ -47,6 +52,8 @@ class PackEntry:
     tags: list[str] = field(default_factory=list)
     group: str = ""
     sha256: str = ""
+    caption: str = ""
+    visible_text: str = ""
 
 
 def safe_member_name(name: Any) -> str:
@@ -89,6 +96,8 @@ def pack_entry_from_raw(raw: Any) -> PackEntry | None:
         tags=normalize_tags(raw.get("tags")),
         group=normalize_group(raw.get("group")),
         sha256=raw.get("sha256") if isinstance(raw.get("sha256"), str) else "",
+        caption=normalize_optional_text(raw.get("caption"), limit=CAPTION_MAX_CHARS),
+        visible_text=normalize_optional_text(raw.get("visible_text"), limit=VISIBLE_TEXT_MAX_CHARS),
     )
 
 
@@ -121,6 +130,8 @@ def sticker_to_manifest_entry(sticker: Sticker) -> dict[str, Any]:
         "tags": list(sticker.tags),
         "group": sticker.group,
         "sha256": sticker.sha256,
+        "caption": sticker.caption,
+        "visible_text": sticker.visible_text,
     }
 
 

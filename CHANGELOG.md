@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.0
+v0.3.0「她看得懂每张图在回复什么」——轮 A：语义元数据层（学习 astrbot 表情包管理器的数据层，
+机制调研见 docs/astrbot-study.md，代码全自写）：
+
+- **梗义 caption（≤300）+ 图内原文 visible_text（≤200）**：`Sticker` 新增两可选字段。
+  caption 是"这张图在回复什么、什么上一句会触发发它"（astrbot CAPTION_PROMPT 的核心思想），
+  区别于 desc 的"主人给的短标签"；visible_text 只进检索打分、**不上目录行**。
+- **目录行一把尺 `Sticker.catalog_body()`**：caption 优先、空则回落 desc——
+  `sticker_list` 与存在感注入共用的 `format_catalog_for_model` 单点改动，两处自动同步。
+- **打分序升级**：desc(80) > caption 精确(78)/子串(76) > 套图名精确(75) > 标签(70/60) >
+  套图名子串(58) > 图内原文(40) > 文件名(30)；文档钦定序"desc > caption > 套图 > 标签"成门。
+- **入口面贯通**：add/update 收 caption/visible_text；新稳定错误码 `caption_too_long` /
+  `visible_text_too_long`（校验发生在入库前，坏请求不留半张图）；update 的 caption 学 group 语义：
+  **空串=清除标注，缺席=不改**。
+- **灭掉整类"重建丢字段"雷**：`with_touch`/`with_sha256`/`Library.update` 改 `dataclasses.replace`——
+  sha256 回归（v0.2.0 修）的真病根是手工枚举字段，现在加字段不再需要改四处。
+- **套图包 manifest v2**：条目随包携带 caption/visible_text；导入侧从不按版本硬拒，
+  旧 v1 包（无键）宽松回空；旧 catalog 分片无键同样宽松兼容，无迁移脚本。
+- **面板**：编辑弹窗与单张收藏表单补"梗义/图内原文"输入；卡片正文下展示 caption；
+  i18n +8 键（zh-CN/en 同步，文本级插入保 CRLF），4 处旧文案"选图唯一依据"改写
+  （现在她看到的正文是 caption 优先）。
+- 测试 170 → 190：test_catalog 新 TestSemanticFields/TestSearchSemanticFields（打分序四门、
+  宽松兼容、拷贝携带新字段防回归、目录行隐 visible_text）；test_entries 新 TestCaptionFields
+  （入库/超长拒/只改 desc 不丢 caption/空串清除）；test_pack 新 TestCaptionInPack（随包迁移、v1 旧包容宽松）。
+- 本轮**不碰配置**（三处同源不动）；自动标注（VLM）是轮 B，本轮先把数据层地基打好。
+
 ## 0.2.0
 v0.2.0「她得记得自己有表情」——存在感 + 套图分组 + 库可迁移（机制调研自 astrbot 表情包管理器，代码全自写）：
 

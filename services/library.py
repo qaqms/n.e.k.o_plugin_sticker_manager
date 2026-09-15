@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -218,12 +218,14 @@ class Library:
         tags: list[str],
         now: float | None = None,
         group: str = "",
+        caption: str = "",
+        visible_text: str = "",
     ) -> tuple[Sticker | None, str]:
         """入库一张图。返回 (条目, 错误码)；成功时错误码为空。
 
         错误码：invalid_image（不是受支持的图片格式）/ duplicate_image（库里已有同图）/ io_error。
         查重只认内容指纹，不认文件名（见 core/catalog 设计决定 5）。
-        group 由入口层 normalize_group 收敛后才进来（core 层负责合法性，这里只搬运）。
+        group/caption/visible_text 由入口层收敛后才进来（core 层负责合法性，这里只搬运）。
         """
         detected = detect_image_format(data or b"")
         if detected is None:
@@ -256,6 +258,8 @@ class Library:
             added_at=moment,
             sha256=digest,
             group=group,
+            caption=caption,
+            visible_text=visible_text,
         )
         self._stickers[sticker_id] = sticker
         saved = self.save()
@@ -273,27 +277,32 @@ class Library:
         tags: list[str] | None = None,
         disabled: bool | None = None,
         group: str | None = None,
+        caption: str | None = None,
+        visible_text: str | None = None,
     ) -> tuple[Sticker | None, str]:
-        """改描述/标签/禁用态/分组；None = 不改那一项（描述合法性由入口层把关）。
+        """改描述/标签/禁用态/分组/梗义/图内文字；None = 不改那一项（合法性由入口层把关）。
 
-        v0.2.0 修回归：旧版重建 Sticker 时漏了 `sha256`——每编辑一次指纹就丢一次，
-        全靠下次查重的 lazy 回填救。指纹是**文件本体**的属性，与描述无关，必须原地保住。
+        v0.3.0 起用 dataclasses.replace 重建：sha256 回归（v0.1.x 每编辑一次丢一次指纹，
+        当时靠手工补字段治的）的真病根是"手工枚举字段的拷贝重建"——每加一个字段
+        就多一个漏写即丢数据的雷，replace 从构造上灭掉整类雷。
         """
         sticker = self._stickers.get(sticker_id)
         if sticker is None:
             return None, ERR_NOT_FOUND
-        updated = Sticker(
-            id=sticker.id,
-            file=sticker.file,
-            desc=sticker.desc if desc is None else desc,
-            tags=list(sticker.tags) if tags is None else list(tags),
-            disabled=sticker.disabled if disabled is None else bool(disabled),
-            added_at=sticker.added_at,
-            use_count=sticker.use_count,
-            last_used_at=sticker.last_used_at,
-            sha256=sticker.sha256,
-            group=sticker.group if group is None else group,
-        )
+        patch: dict[str, Any] = {}
+        if desc is not None:
+            patch["desc"] = desc
+        if tags is not None:
+            patch["tags"] = list(tags)
+        if disabled is not None:
+            patch["disabled"] = bool(disabled)
+        if group is not None:
+            patch["group"] = group
+        if caption is not None:
+            patch["caption"] = caption
+        if visible_text is not None:
+            patch["visible_text"] = visible_text
+        updated = replace(sticker, **patch) if patch else sticker
         self._stickers[sticker_id] = updated
         saved = self.save()
         if not saved.ok:
@@ -503,6 +512,8 @@ class Library:
                     desc=entry.desc if entry is not None else desc_from_filename(file_name),
                     tags=entry_tags,
                     group=entry_group or group,
+                    caption=entry.caption if entry is not None else "",
+                    visible_text=entry.visible_text if entry is not None else "",
                     now=time.time(),
                 )
                 if error == ERR_DUPLICATE:

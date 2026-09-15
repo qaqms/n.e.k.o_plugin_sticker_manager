@@ -20,6 +20,7 @@ from sticker_manager.core.catalog import Sticker
 from sticker_manager.core.pack import (
     PACK_DIR_PREFIX,
     PACK_MANIFEST_FILENAME,
+    PACK_MANIFEST_VERSION,
     PACK_MAX_ENTRIES,
     build_manifest,
     parse_manifest,
@@ -80,7 +81,7 @@ class TestManifestProtocol:
             id="abc", file="abc.png", desc="猫猫挥手", tags=["开心"], group="猫猫日常", sha256="ff"
         )
         manifest = build_manifest([sticker])
-        assert manifest["version"] == 1
+        assert manifest["version"] == PACK_MANIFEST_VERSION
         entries = parse_manifest(manifest)
         assert len(entries) == 1
         entry = entries[0]
@@ -232,3 +233,49 @@ class TestImport:
         assert list(tmp_path.rglob("evil.png")) == []
         assert not (tmp_path.parent / "evil.png").exists()
         assert lib.all()[0].file.endswith(".png") and lib.image_path(lib.all()[0]).is_file()
+
+
+class TestCaptionInPack:
+    """v0.3.0 轮 A：caption/visible_text 随套图包迁移；旧包（无键）宽松兼容。"""
+
+    def test_roundtrip_between_two_libraries_carries_caption(self, tmp_path):
+        source = _library(tmp_path / "src")
+        sticker, error = source.add(
+            data=PNG_BYTES,
+            desc="笑",
+            tags=["t"],
+            caption="被催很久终于交差",
+            visible_text="就这？",
+            now=100.0,
+        )
+        assert error == "" and sticker is not None
+        exported, error = source.export_pack(now=200.0)
+        assert error == ""
+        with zipfile.ZipFile(exported["file"]) as pack:
+            manifest = json.loads(pack.read(PACK_MANIFEST_FILENAME).decode("utf-8"))
+        assert manifest["version"] == PACK_MANIFEST_VERSION
+        assert manifest["stickers"][0]["caption"] == "被催很久终于交差"
+        target = _library(tmp_path / "dst")
+        target.inbox_dir.mkdir(parents=True, exist_ok=True)
+        (target.inbox_dir / "pack.zip").write_bytes(open(exported["file"], "rb").read())
+        summary = target.ingest_inbox(tags=[])
+        assert summary["imported"] == 1
+        imported = target.all()[0]
+        assert imported.caption == "被催很久终于交差"
+        assert imported.visible_text == "就这？"
+
+    def test_v1_manifest_without_caption_is_loose(self, tmp_path):
+        # 旧包（v1，根本没这两个键）：照常导入，caption 回空——宽松兼容不加迁移
+        manifest = {"version": 1, "stickers": [{"file": "a.png", "desc": "老包描述"}]}
+        pack_bytes = _zip_bytes(
+            {
+                PACK_MANIFEST_FILENAME: json.dumps(manifest).encode("utf-8"),
+                PACK_DIR_PREFIX + "a.png": PNG_BYTES,
+            }
+        )
+        lib = _library(tmp_path)
+        lib.inbox_dir.mkdir(parents=True, exist_ok=True)
+        (lib.inbox_dir / "old.zip").write_bytes(pack_bytes)
+        summary = lib.ingest_inbox(tags=[])
+        assert summary["imported"] == 1
+        assert lib.all()[0].caption == ""

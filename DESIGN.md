@@ -38,6 +38,13 @@
 - 套图包导出/导入（v0.2.0）：`data/library/exports/*.zip`（manifest.json + stickers/）；
   导入走收件箱通道认 `.zip`（manifest 优先、裸图包按文件名清洗）；zip 条目名只当包内定位符，
   落盘永远走 add() 服务端发号（zip-slip 免疫）；刻意不兼容 astrbot memes_data.json
+- 语义元数据层（v0.3.0 轮 A，学习 astrbot 数据层，见 docs/astrbot-study.md）：
+  `Sticker.caption`（梗义 ≤300，"这张图在回复什么/什么上一句触发"，可选）+
+  `Sticker.visible_text`（图内原文 ≤200，只检索不上目录）；目录行正文 `catalog_body()`
+  一把尺（caption 优先回落 desc，sticker_list 与 awareness 同源自动同步）；
+  打分序 desc>caption>套图精确>标签>套图子串>图内原文>文件名；update 的 caption 空串=清除；
+  新错误码 caption_too_long / visible_text_too_long；拷贝重建改 dataclasses.replace
+  （灭"手工枚举漏字段"整类雷，sha256 回归的真病根）；manifest v2 随包携带，旧库/旧包宽松兼容
 - 发送链路：≤256KiB 内联 image data part（gif 恒走内联保动画）；更大走 `ctx.images.upload()` 换 URL part
 - 频控：按角色卡内存冷却（默认 20s）；`push_message(visibility=["chat"], ai_behavior="read")`
 - i18n：zh-CN + en（Python `tr()` 与 TSX `t()` 键全部入文件，有门钉着）

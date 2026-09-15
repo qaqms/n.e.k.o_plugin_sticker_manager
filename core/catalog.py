@@ -4,9 +4,9 @@
 
 1. **格式只认文件头，不认扩展名/文件名**——上传链路的 filename 来自客户端，
    不可信；`detect_image_format` 是唯一的判据来源。
-2. **描述（desc）是模型选图的唯一依据**，所以它必填、有长度上限，
-   且在目录里排在标签前面。
-3. **检索是"够用就好"**：子串匹配 desc/tags/id，不做分词、不做语义。
+1. **描述（desc）是主人给的短标签，梗义（caption）是她选图的使用依据**：目录行正文 caption 优先、
+   空则回落 desc（`Sticker.catalog_body` 一把尺）；desc 仍必填、有长度上限。
+2. **检索是"够用就好"**：子串匹配 desc/caption/tags/visible_text/id，不做分词、不做语义。
    真语义检索是宿主记忆层的事，不在插件里造第二套。
 4. 目录文案的纪律沿用 our_life 的注入契约：不给模型看原始路径、
    不堆砌形容词，一行一条。
@@ -19,7 +19,7 @@ from __future__ import annotations
 import hashlib
 import re
 import secrets
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable
 
 # 支持的表情包格式（文件头 → 规范扩展名）。bmp 被排除：宿主 images.upload
@@ -32,6 +32,11 @@ _MAGIC_FORMATS: tuple[tuple[bytes, str, str], ...] = (
 )
 
 DESC_MAX_CHARS = 200
+# 梗义（v0.3.0，学习 astrbot CAPTION_PROMPT 的数据层落点）：一到两句"这张图在回复什么、
+# 什么上一句会触发发它"，不是画面描述。可选字段——老库无此键回空，目录行自动回落 desc。
+CAPTION_MAX_CHARS = 300
+# 图内原文（同理）：只进检索打分，**不进目录行**（避免把长图里的小字挤进她的注意力）。
+VISIBLE_TEXT_MAX_CHARS = 200
 TAG_MAX_CHARS = 24
 TAGS_MAX_COUNT = 12
 # 套图分组名（v0.2.0）：一条表情最多属于一个组；空串 = 未分组。
@@ -162,6 +167,27 @@ def validate_desc(desc: Any) -> tuple[str, str]:
     return cleaned, ""
 
 
+def validate_optional_text(value: Any, *, limit: int) -> tuple[str, str]:
+    """可选长文本的共用尺（caption / visible_text 同一条）：
+    非字符串/空白 → ("", "")（空是合法意图：未标注或清除）；超限 → too_long。"""
+    if not isinstance(value, str):
+        return "", ""
+    cleaned = value.strip()
+    if not cleaned:
+        return "", ""
+    if len(cleaned) > limit:
+        return "", "too_long"
+    return cleaned, ""
+
+
+def normalize_optional_text(value: Any, *, limit: int) -> str:
+    """宽松层的可选文本：去空白、硬截到 limit（manifest/持久化回填用——
+    导入的目标是"先进来、坏了可后改"，不是复读入口校验，与 pack 的 desc 同纪律）。"""
+    if not isinstance(value, str):
+        return ""
+    return value.strip()[:limit]
+
+
 @dataclass(frozen=True)
 class Sticker:
     """一条表情包记录（目录内存形状；文件在 stickers/<id>.<ext>）。"""
@@ -176,7 +202,12 @@ class Sticker:
     last_used_at: float = 0.0
     sha256: str = ""
     group: str = ""
+    caption: str = ""
+    visible_text: str = ""
 
+    def catalog_body(self) -> str:
+        """目录行正文：梗义优先，未标注时回落主人的短描述（一把尺，两处同源共用）。"""
+        return self.caption or self.desc
     def as_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -189,6 +220,8 @@ class Sticker:
             "last_used_at": self.last_used_at,
             "sha256": self.sha256,
             "group": self.group,
+            "caption": self.caption,
+            "visible_text": self.visible_text,
         }
 
     @classmethod
@@ -214,42 +247,24 @@ class Sticker:
             last_used_at=float(raw.get("last_used_at") or 0.0),
             sha256=raw.get("sha256") if isinstance(raw.get("sha256"), str) else "",
             group=normalize_group(raw.get("group")),
+            caption=normalize_optional_text(raw.get("caption"), limit=CAPTION_MAX_CHARS),
+            visible_text=normalize_optional_text(raw.get("visible_text"), limit=VISIBLE_TEXT_MAX_CHARS),
         )
 
     def with_touch(self, *, now: float) -> "Sticker":
-        return Sticker(
-            id=self.id,
-            file=self.file,
-            desc=self.desc,
-            tags=list(self.tags),
-            disabled=self.disabled,
-            added_at=self.added_at,
-            use_count=self.use_count + 1,
-            last_used_at=now,
-            sha256=self.sha256,
-            group=self.group,
-        )
+        """记一次使用的副本。v0.3.0 起用 replace：手工枚举字段的拷贝方法每加一个
+        字段就多一个"漏了就丢数据"的雷（sha256 回归的真病根），replace 从构造上灭掉。"""
+        return replace(self, use_count=self.use_count + 1, last_used_at=now)
 
     def with_sha256(self, digest: str) -> "Sticker":
         """补指纹的副本（v0.1.1 前的旧条目回填用；frozen dataclass 不改原地对象）。"""
-        return Sticker(
-            id=self.id,
-            file=self.file,
-            desc=self.desc,
-            tags=list(self.tags),
-            disabled=self.disabled,
-            added_at=self.added_at,
-            use_count=self.use_count,
-            last_used_at=self.last_used_at,
-            sha256=digest,
-            group=self.group,
-        )
+        return replace(self, sha256=digest)
 
 
 def search_stickers(
     stickers: list[Sticker], query: str, *, include_disabled: bool = False
 ) -> list[Sticker]:
-    """按查询串过滤并按 (精确 id > desc 命中 > 套图/标签命中 > 文件名, 最近使用, 使用次数) 排序。
+    """按查询串过滤并按 (精确 id > desc 命中 > caption 命中 > 套图名 > 标签 > 图内文字 > 文件名, 最近使用, 使用次数) 排序。
 
     空查询 = 全量（含禁用的除外，除非显式要求），按"她最近爱用"排序——
     模型拿到空查询时想要的就是"常货"。
@@ -279,6 +294,11 @@ def _match_score(sticker: Sticker, term: str) -> int:
     folded_desc = sticker.desc.casefold()
     if term in folded_desc:
         return 80
+    folded_caption = sticker.caption.casefold()
+    if term == folded_caption:
+        return 78
+    if term in folded_caption:
+        return 76
     if sticker.group and term == sticker.group.casefold():
         return 75
     for tag in sticker.tags:
@@ -288,21 +308,24 @@ def _match_score(sticker: Sticker, term: str) -> int:
             return 60
     if sticker.group and term in sticker.group.casefold():
         return 58
+    if sticker.visible_text and term in sticker.visible_text.casefold():
+        return 40
     if term in sticker.file.casefold():
         return 30
     return 0
 
 
 def format_catalog_for_model(stickers: list[Sticker], limit: int) -> str:
-    """给模型看的目录（`sticker_list` 工具与目录注入共用同一份文案）。
+    """给模型看的目录（`sticker_list` 工具、存在感注入与面板刷新共用同一份文案）。
 
-    一行一条：`[id] 描述（套图：G；标签：a/b）`。不含文件名、不含计数——
+    一行一条：`[id] 梗义或描述（套图：G；标签：a/b）`——正文走 `catalog_body` 一把尺
+    （caption 优先，v0.3.0）。不含文件名、不含图内原文、不含计数——
     那些是给人看的账本信息，进了提示词只会挤占她的注意力。
     """
     lines: list[str] = []
     pool = [s for s in stickers if not s.disabled]
     for sticker in pool[: max(0, limit)]:
-        line = f"[{sticker.id}] {sticker.desc}"
+        line = f"[{sticker.id}] {sticker.catalog_body()}"
         brackets: list[str] = []
         if sticker.group:
             brackets.append(f"套图：{sticker.group}")

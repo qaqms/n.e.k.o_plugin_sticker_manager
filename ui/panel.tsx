@@ -42,6 +42,8 @@ type StickerRow = {
   use_count?: number
   last_used_at?: number
   group?: string
+  caption?: string
+  visible_text?: string
 }
 
 type UsageRow = {
@@ -149,6 +151,8 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
   const [editDesc, setEditDesc] = useState<string>(row.desc || "")
   const [editTags, setEditTags] = useState<string>((row.tags || []).join(","))
   const [editGroup, setEditGroup] = useState<string>(row.group || "")
+  const [editCaption, setEditCaption] = useState<string>(row.caption || "")
+  const [editVisible, setEditVisible] = useState<string>(row.visible_text || "")
 
   const loadPreview = async () => {
     if (previewCache[row.id] !== undefined) {
@@ -240,6 +244,7 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
                 ...(row.tags || []).map((tag) => <StatusBadge tone="info" label={tag} />),
               ]}
             </Inline>
+            {row.caption ? <Text>{row.caption}</Text> : null}
           </Stack>
         </Inline>
         <Inline gap={6} wrap>
@@ -262,8 +267,14 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
       </Stack>
       <Modal open={editing} title={t("panel.edit.title", { defaultValue: "编辑这条表情包" })} onClose={() => { setEditing(false) }}>
         <Stack gap={8}>
-          <Field label={t("panel.edit.desc", { defaultValue: "描述（她选图的唯一依据）" })}>
+          <Field label={t("panel.edit.desc", { defaultValue: "描述（面板里的短标签）" })}>
             <Input value={editDesc} onChange={setEditDesc} placeholder={t("panel.edit.desc.ph", { defaultValue: "一句话说明图里在干什么" })} />
+          </Field>
+          <Field label={t("panel.edit.caption", { defaultValue: "梗义（她选图时看到的正文；留空=清掉标注）" })}>
+            <Input value={editCaption} onChange={setEditCaption} placeholder={t("panel.edit.caption.ph", { defaultValue: "例：被催了很久之后终于交差，得意中带点解脱" })} />
+          </Field>
+          <Field label={t("panel.edit.visible", { defaultValue: "图内原文（只帮她搜到，不上目录）" })}>
+            <Input value={editVisible} onChange={setEditVisible} placeholder={t("panel.edit.visible.ph", { defaultValue: "例：就这？" })} />
           </Field>
           <Field label={t("panel.edit.tags", { defaultValue: "标签（逗号分隔）" })}>
             <Input value={editTags} onChange={setEditTags} placeholder="开心, 猫" />
@@ -276,7 +287,7 @@ function StickerCard(props: { key?: string; row: StickerRow; surface: Surface })
               tone="primary"
               onClick={() => {
                 setEditing(false)
-                run("update", { id: row.id, desc: editDesc, tags: editTags, group: editGroup })
+                run("update", { id: row.id, desc: editDesc, tags: editTags, group: editGroup, caption: editCaption, visible_text: editVisible })
               }}
             >
               {t("panel.edit.save", { defaultValue: "保存" })}
@@ -296,6 +307,7 @@ function AddForm(props: { surface: Surface }) {
   const t = surface.t
   const [artifact, setArtifact] = useState<any>(null)
   const [desc, setDesc] = useState("")
+  const [caption, setCaption] = useState("")
   const [tags, setTags] = useState("")
   const [group, setGroup] = useState("")
   const [busy, setBusy] = useState(false)
@@ -379,7 +391,7 @@ function AddForm(props: { surface: Surface }) {
       return
     }
     if (!desc.trim()) {
-      setFeedback({ kind: "err", text: t("panel.add.need_desc", { defaultValue: "描述必填：那是她选图的唯一依据" }) })
+      setFeedback({ kind: "err", text: t("panel.add.need_desc", { defaultValue: "描述必填：没有梗义时，它就是她看到的正文" }) })
       return
     }
     setBusy(true)
@@ -388,6 +400,7 @@ function AddForm(props: { surface: Surface }) {
       const result = await callAction(surface, "add", {
         data_base64: dataUrlToBase64(dataUrl),
         desc: desc.trim(),
+        caption: caption.trim(),
         tags: tags,
         group: group,
       })
@@ -395,6 +408,7 @@ function AddForm(props: { surface: Surface }) {
         setFeedback({ kind: "ok", text: t("panel.add.ok", { defaultValue: "已收进她的表情库" }) })
         setArtifact(null)
         setDesc("")
+        setCaption("")
         setTags("")
         setGroup("")
         setDescTouched(false)
@@ -420,8 +434,11 @@ function AddForm(props: { surface: Surface }) {
           onChange={pick}
         />
       </Field>
-      <Field label={t("panel.edit.desc", { defaultValue: "描述（她选图的唯一依据）" })} required>
+      <Field label={t("panel.edit.desc", { defaultValue: "描述（面板里的短标签）" })} required>
         <Input value={desc} onChange={(next: string) => { setDescTouched(true); setDesc(next) }} placeholder={t("panel.add.desc.ph", { defaultValue: "例如：猫咪开心挥手" })} />
+      </Field>
+      <Field label={t("panel.edit.caption", { defaultValue: "梗义（她选图时看到的正文；留空=清掉标注）" })}>
+        <Input value={caption} onChange={setCaption} placeholder={t("panel.edit.caption.ph", { defaultValue: "例：被催了很久之后终于交差，得意中带点解脱" })} />
       </Field>
       <Field label={t("panel.edit.tags", { defaultValue: "标签（逗号分隔）" })}>
         <Input value={tags} onChange={setTags} placeholder="开心, 猫" />

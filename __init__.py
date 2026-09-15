@@ -49,8 +49,10 @@ from plugin.sdk.plugin import (
 )
 
 from .core import (
+    CAPTION_MAX_CHARS,
     MAX_STICKER_BYTES,
     PREVIEW_CHUNK_BYTES,
+    VISIBLE_TEXT_MAX_CHARS,
     Sticker,
     StickerManagerSettings,
     format_catalog_for_model,
@@ -58,6 +60,7 @@ from .core import (
     parse_tags_field,
     search_stickers,
     validate_desc,
+    validate_optional_text,
 )
 from .services import Awareness, Library, Sender, ToolWatch
 
@@ -159,7 +162,7 @@ class StickerManagerPlugin(NekoPluginBase):
         name=tr("entries.add.name", default="收藏一张表情包"),
         description=tr(
             "entries.add.description",
-            default="把一张图片存进表情库：data_base64 是图片本体（不含 data: 前缀），desc 是她选图的唯一依据",
+            default="把一张图片存进表情库：data_base64 是图片本体（不含 data: 前缀），desc 必填；caption（梗义）可选但强烈建议——那是她选图时看到的正文",
         ),
         input_schema={
             "type": "object",
@@ -180,6 +183,17 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "string",
                     "description": tr("fields.group", default="套图分组（可选，如：猫猫日常）"),
                 },
+                "caption": {
+                    "type": "string",
+                    "description": tr(
+                        "fields.caption",
+                        default="梗义：这张图在回复什么、什么上一句会触发发它（可选，≤300字）",
+                    ),
+                },
+                "visible_text": {
+                    "type": "string",
+                    "description": tr("fields.visible_text", default="图里清晰可见的原文字（可选，≤200字）"),
+                },
             },
             "required": ["data_base64", "desc"],
             "additionalProperties": False,
@@ -187,12 +201,29 @@ class StickerManagerPlugin(NekoPluginBase):
         llm_result_fields=["note", "id", "desc"],
         timeout=30.0,
     )
-    async def add_entry(self, data_base64: str = "", desc: str = "", tags: str = "", group: str = "", **_):
+    async def add_entry(
+        self,
+        data_base64: str = "",
+        desc: str = "",
+        tags: str = "",
+        group: str = "",
+        caption: str = "",
+        visible_text: str = "",
+        **_,
+    ):
         text_desc, desc_error = validate_desc(desc)
         if desc_error == "empty":
             return Err(SdkError("desc_required"))
         if desc_error == "too_long":
             return Err(SdkError("desc_too_long"))
+        text_caption, caption_error = validate_optional_text(caption, limit=CAPTION_MAX_CHARS)
+        if caption_error:
+            return Err(SdkError("caption_too_long"))
+        text_visible, visible_error = validate_optional_text(
+            visible_text, limit=VISIBLE_TEXT_MAX_CHARS
+        )
+        if visible_error:
+            return Err(SdkError("visible_text_too_long"))
         if not isinstance(data_base64, str) or not data_base64:
             return Err(SdkError("image_required"))
         if len(data_base64) > _MAX_BASE64_CHARS:
@@ -208,6 +239,8 @@ class StickerManagerPlugin(NekoPluginBase):
             desc=text_desc,
             tags=parse_tags_field(tags),
             group=normalize_group(group),
+            caption=text_caption,
+            visible_text=text_visible,
             now=time.time(),
         )
         if sticker is None:
@@ -225,7 +258,7 @@ class StickerManagerPlugin(NekoPluginBase):
         name=tr("entries.update.name", default="修改表情包"),
         description=tr(
             "entries.update.description",
-            default="改描述/标签/禁用状态。描述决定她会不会选中这张图，禁用=从她的可选面里摘掉",
+            default="改描述/梗义/图内文字/标签/禁用状态。梗义决定她会不会选中这张图（空串=清除标注），禁用=从她的可选面里摘掉",
         ),
         input_schema={
             "type": "object",
@@ -241,6 +274,17 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "string",
                     "description": tr("fields.group", default="套图分组（可选，如：猫猫日常）"),
                 },
+                "caption": {
+                    "type": "string",
+                    "description": tr(
+                        "fields.caption",
+                        default="梗义：这张图在回复什么、什么上一句会触发发它（可选，≤300字）",
+                    ),
+                },
+                "visible_text": {
+                    "type": "string",
+                    "description": tr("fields.visible_text", default="图里清晰可见的原文字（可选，≤200字）"),
+                },
             },
             "required": ["id"],
             "additionalProperties": False,
@@ -254,6 +298,8 @@ class StickerManagerPlugin(NekoPluginBase):
         tags: Any = None,
         disabled: bool | None = None,
         group: Any = None,
+        caption: Any = None,
+        visible_text: Any = None,
         **_,
     ):
         if not isinstance(id, str) or not id:
@@ -269,13 +315,31 @@ class StickerManagerPlugin(NekoPluginBase):
             new_tags = parse_tags_field(tags)
         if disabled is not None and not isinstance(disabled, bool):
             return Err(SdkError("invalid_value"))
-        # group 与 tags 的语义不同：**空串是合法意图**（"移出分组"），
+        # group/caption/visible_text 与 tags 的语义不同：**空串是合法意图**（"移出分组"/"清掉标注"），
         # 只有 None（参数缺席）才表示"不改"。
         new_group: str | None = None
         if isinstance(group, str):
             new_group = normalize_group(group)
+        new_caption: str | None = None
+        if isinstance(caption, str):
+            new_caption, caption_error = validate_optional_text(caption, limit=CAPTION_MAX_CHARS)
+            if caption_error:
+                return Err(SdkError("caption_too_long"))
+        new_visible: str | None = None
+        if isinstance(visible_text, str):
+            new_visible, visible_error = validate_optional_text(
+                visible_text, limit=VISIBLE_TEXT_MAX_CHARS
+            )
+            if visible_error:
+                return Err(SdkError("visible_text_too_long"))
         sticker, error = self._library.update(
-            id, desc=new_desc, tags=new_tags, disabled=disabled, group=new_group
+            id,
+            desc=new_desc,
+            tags=new_tags,
+            disabled=disabled,
+            group=new_group,
+            caption=new_caption,
+            visible_text=new_visible,
         )
         if sticker is None:
             return Err(SdkError(error or "sticker_not_found"))
@@ -646,7 +710,7 @@ class StickerManagerPlugin(NekoPluginBase):
         name="sticker_list",
         description=(
             "看看你收藏的表情包里有什么。不填 query 就是全部（按你最近爱用的排），"
-            "填了就按描述/标签/套图名搜。拿到列表后用 sticker_send 发。"
+            "填了就按描述/梗义/标签/套图名搜。拿到列表后用 sticker_send 发。"
         ),
         parameters={
             "type": "object",

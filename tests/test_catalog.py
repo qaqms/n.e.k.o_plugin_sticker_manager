@@ -6,17 +6,21 @@ import time
 
 from conftest import GIF_BYTES, JPEG_BYTES, NOT_AN_IMAGE, PNG_BYTES, WEBP_BYTES
 from sticker_manager.core.catalog import (
+    CAPTION_MAX_CHARS,
     DESC_MAX_CHARS,
+    VISIBLE_TEXT_MAX_CHARS,
     Sticker,
     desc_from_filename,
     detect_image_format,
     format_catalog_for_model,
     is_animated_gif,
     new_sticker_id,
+    normalize_optional_text,
     normalize_tags,
     parse_tags_field,
     search_stickers,
     validate_desc,
+    validate_optional_text,
 )
 
 
@@ -151,6 +155,49 @@ class TestSearch:
         assert search_stickers(self.pool, "不存在的词") == []
 
 
+def _sc(sid: str, desc: str, *, caption="", group="", tags=(), visible="") -> Sticker:
+    return Sticker(
+        id=sid, file=f"{sid}.png", desc=desc,
+        caption=caption, group=group, tags=list(tags), visible_text=visible,
+    )
+
+
+class TestSearchSemanticFields:
+    """打分序：desc 命中 > caption 命中 > 套图名 > 标签 > 图内原文 > 文件名。"""
+
+    def setup_method(self):
+        self.pool = [
+            _sc("d1", "开心挥手"),
+            _sc("c1", "猫图", caption="开心到飞起后的自得"),
+            _sc("g1", "某图", group="开心"),  # 套图名**精确**命中（58=子串命中会排标签后，不同层）
+            _sc("t1", "另一图", tags=["开心"]),
+            _sc("v1", "静图", visible="看了就开心") ,
+        ]
+
+    def test_desc_beats_caption(self):
+        result = search_stickers(self.pool, "开心")
+        assert result[0].id == "d1"
+        assert result[1].id == "c1"
+
+    def test_caption_beats_group(self):
+        ids = [s.id for s in search_stickers(self.pool, "开心")]
+        assert ids.index("c1") < ids.index("g1")
+
+    def test_group_beats_tag(self):
+        ids = [s.id for s in search_stickers(self.pool, "开心")]
+        assert ids.index("g1") < ids.index("t1")
+
+    def test_visible_text_is_a_search_hit(self):
+        result = search_stickers(self.pool, "看了就开心")
+        assert result and result[0].id == "v1"
+
+    def test_catalog_row_uses_caption_and_hides_visible_text(self):
+        text = format_catalog_for_model(self.pool, 10)
+        assert "[c1] 开心到飞起后的自得" in text
+        assert "[d1] 开心挥手" in text  # 无 caption 回落 desc
+        assert "看了就开心" not in text  # 图内原文不上目录
+
+
 class TestCatalogForModel:
     def test_line_shape(self):
         pool = [_s("id001", "猫咪开心挥手", ["开心", "猫"])]
@@ -184,3 +231,59 @@ class TestDescFromFilename:
 
     def test_capped_at_desc_max(self):
         assert len(desc_from_filename("x" * 500)) == DESC_MAX_CHARS
+
+
+class TestSemanticFields:
+    """v0.3.0 轮 A：caption（梗义）/ visible_text（图内原文）的数据层契约。"""
+
+    def test_roundtrip_with_caption(self):
+        sticker = Sticker(
+            id="abc", file="abc.png", desc="笑", caption="被催很久终于交差", visible_text="就这？"
+        )
+        assert Sticker.from_dict(sticker.as_dict()) == sticker
+
+    def test_legacy_dict_without_new_keys(self):
+        # 老库宽松兼容：无 caption/visible_text 键 → 空串，不炸不需迁移
+        legacy = {"id": "a", "file": "a.png", "desc": "笑"}
+        restored = Sticker.from_dict(legacy)
+        assert restored is not None
+        assert restored.caption == "" and restored.visible_text == ""
+
+    def test_from_dict_caps_oversized_values(self):
+        raw = {
+            "id": "a",
+            "file": "a.png",
+            "desc": "笑",
+            "caption": "x" * (CAPTION_MAX_CHARS + 99),
+            "visible_text": "y" * (VISIBLE_TEXT_MAX_CHARS + 99),
+        }
+        restored = Sticker.from_dict(raw)
+        assert restored is not None
+        assert len(restored.caption) == CAPTION_MAX_CHARS
+        assert len(restored.visible_text) == VISIBLE_TEXT_MAX_CHARS
+
+    def test_catalog_body_prefers_caption(self):
+        with_caption = Sticker(id="a", file="a.png", desc="短名", caption="梗义正文")
+        without = Sticker(id="b", file="b.png", desc="短名")
+        assert with_caption.catalog_body() == "梗义正文"
+        assert without.catalog_body() == "短名"
+
+    def test_validate_optional_text(self):
+        assert validate_optional_text("  ", limit=10) == ("", "")  # 空是合法意图
+        assert validate_optional_text(None, limit=10) == ("", "")
+        assert validate_optional_text(" 好 ", limit=10) == ("好", "")
+        assert validate_optional_text("x" * 11, limit=10) == ("", "too_long")
+
+    def test_normalize_optional_text_truncates(self):
+        assert normalize_optional_text("  abc  ", limit=10) == "abc"
+        assert normalize_optional_text("x" * 50, limit=10) == "x" * 10
+        assert normalize_optional_text(123, limit=10) == ""
+
+    def test_with_touch_and_sha_carry_new_fields(self):
+        # 防回归：拷贝重建若漏字段，caption 会在一次使用后静默丢（sha256 回归同款病）
+        sticker = Sticker(id="a", file="a.png", desc="笑", caption="梗义", visible_text="原文", sha256="d")
+        touched = sticker.with_touch(now=1.0)
+        assert touched.caption == "梗义" and touched.visible_text == "原文"
+        assert touched.sha256 == "d"
+        rehashed = sticker.with_sha256("new")
+        assert rehashed.caption == "梗义" and rehashed.visible_text == "原文"

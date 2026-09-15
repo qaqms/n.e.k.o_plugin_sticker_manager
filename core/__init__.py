@@ -8,9 +8,11 @@
 
 from .awareness import build_awareness_text, pick_recent
 from .catalog import (
+    CAPTION_MAX_CHARS,
     GROUP_MAX_CHARS,
     MAX_STICKER_BYTES,
     PREVIEW_CHUNK_BYTES,
+    VISIBLE_TEXT_MAX_CHARS,
     Sticker,
     content_sha256,
     desc_from_filename,
@@ -18,10 +20,12 @@ from .catalog import (
     format_catalog_for_model,
     new_sticker_id,
     normalize_group,
+    normalize_optional_text,
     normalize_tags,
     parse_tags_field,
     search_stickers,
     validate_desc,
+    validate_optional_text,
 )
 from .configuration import (
     AwarenessSettings,
@@ -43,6 +47,7 @@ from .pack import (
 )
 
 __all__ = [
+    "CAPTION_MAX_CHARS",
     "GROUP_MAX_CHARS",
     "MAX_STICKER_BYTES",
     "PACK_DIR_PREFIX",
@@ -50,6 +55,7 @@ __all__ = [
     "PACK_MANIFEST_VERSION",
     "PACK_MAX_ENTRIES",
     "PREVIEW_CHUNK_BYTES",
+    "VISIBLE_TEXT_MAX_CHARS",
     "AwarenessSettings",
     "PackEntry",
     "SendSettings",
@@ -64,6 +70,7 @@ __all__ = [
     "format_catalog_for_model",
     "new_sticker_id",
     "normalize_group",
+    "normalize_optional_text",
     "normalize_tags",
     "pack_entry_from_raw",
     "parse_manifest",
@@ -73,4 +80,5 @@ __all__ = [
     "search_stickers",
     "sticker_to_manifest_entry",
     "validate_desc",
+    "validate_optional_text",
 ]

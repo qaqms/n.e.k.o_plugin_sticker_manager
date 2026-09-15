@@ -337,3 +337,80 @@ class TestPreviewChunks:
             result = run_async(plugin.preview_entry(id=sid, offset=junk))
             assert result.is_ok() and result.value["offset"] == 0
 
+
+
+class TestCaptionFields:
+    """v0.3.0 轮 A：caption（梗义）/ visible_text（图内原文）的入口面契约。"""
+
+    def test_add_carries_caption_and_visible_text(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        result = run_async(
+            plugin.add_entry(
+                data_base64=base64.b64encode(PNG_BYTES).decode("ascii"),
+                desc="笑",
+                caption="被催很久终于交差的得意",
+                visible_text="就这？",
+            )
+        )
+        assert result.is_ok()
+        rows = run_async(plugin.list_entry()).value["stickers"]
+        assert rows[0]["caption"] == "被催很久终于交差的得意"
+        assert rows[0]["visible_text"] == "就这？"
+
+    def test_add_rejects_oversized_caption(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        result = run_async(
+            plugin.add_entry(
+                data_base64=base64.b64encode(PNG_BYTES).decode("ascii"),
+                desc="笑",
+                caption="x" * 301,
+            )
+        )
+        assert not result.is_ok() and str(result.error) == "caption_too_long"
+        # 校验发生在入库前：坏请求不许留下半张图
+        assert run_async(plugin.list_entry()).value["count"] == 0
+
+    def test_add_rejects_oversized_visible_text(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        result = run_async(
+            plugin.add_entry(
+                data_base64=base64.b64encode(PNG_BYTES).decode("ascii"),
+                desc="笑",
+                visible_text="y" * 201,
+            )
+        )
+        assert not result.is_ok() and str(result.error) == "visible_text_too_long"
+
+    def test_update_desc_preserves_caption(self, tmp_path, run_async):
+        # 防"手工枚举字段重建"整类回归：只改 desc，caption/sha256 必须原地保住
+        plugin, _host = _make(tmp_path)
+        sid = run_async(
+            plugin.add_entry(
+                data_base64=base64.b64encode(PNG_BYTES).decode("ascii"),
+                desc="笑",
+                caption="梗义",
+            )
+        ).value["id"]
+        assert run_async(plugin.update_entry(id=sid, desc="大哭")).is_ok()
+        rows = run_async(plugin.list_entry()).value["stickers"]
+        assert rows[0]["desc"] == "大哭" and rows[0]["caption"] == "梗义"
+        assert rows[0]["sha256"]
+
+    def test_update_caption_empty_string_clears(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        sid = run_async(
+            plugin.add_entry(
+                data_base64=base64.b64encode(PNG_BYTES).decode("ascii"),
+                desc="笑",
+                caption="标错了的梗义",
+            )
+        ).value["id"]
+        assert run_async(plugin.update_entry(id=sid, caption="")).is_ok()
+        rows = run_async(plugin.list_entry()).value["stickers"]
+        assert rows[0]["caption"] == ""
+
+    def test_update_rejects_oversized_caption(self, tmp_path, run_async):
+        plugin, _host = _make(tmp_path)
+        sid = run_async(_add(plugin)).value["id"]
+        result = run_async(plugin.update_entry(id=sid, caption="x" * 301))
+        assert not result.is_ok() and str(result.error) == "caption_too_long"
