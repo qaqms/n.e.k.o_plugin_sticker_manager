@@ -58,6 +58,7 @@ from .core import (
     format_catalog_for_model,
     normalize_group,
     parse_tags_field,
+    resolve_send_target,
     search_stickers,
     validate_desc,
     validate_optional_text,
@@ -736,14 +737,15 @@ class StickerManagerPlugin(NekoPluginBase):
     @llm_tool(
         name="sticker_send",
         description=(
-            "发一张表情包到聊天里。可以先用 sticker_list 看看有什么；直接给 id 最准，"
-            "给关键词就发匹配到的第一张。发不出去会告诉你原因，别连试。"
+            "发一张表情包到聊天里。给 id 最准；给关键词：筛得只剩一张就直接发，"
+            "候选不止一张会把清单回给你——看一眼再用 id 发第二刀。id 和关键词都没给会拒。"
+            "发不出去会告诉你原因，别连试。"
         ),
         parameters={
             "type": "object",
             "properties": {
                 "sticker_id": {"type": "string", "description": "表情包的 id（首选）"},
-                "query": {"type": "string", "description": "没有 id 时给关键词"},
+                "query": {"type": "string", "description": "没有 id 时给关键词（想表达的态度/场景，会按梗义筛）"},
             },
             "required": [],
         },
@@ -755,17 +757,31 @@ class StickerManagerPlugin(NekoPluginBase):
         lanlan = _lanlan_from_kwargs(kwargs)
         self._library.load()
         sticker = None
-        if isinstance(sticker_id, str) and sticker_id.strip():
+        has_id = isinstance(sticker_id, str) and bool(sticker_id.strip())
+        has_query = isinstance(query, str) and bool(query.strip())
+        if has_id:
             sticker = self._library.get(sticker_id.strip())
             if sticker is not None and sticker.disabled:
                 sticker = None
+        candidates: list[Sticker] = []
+        if sticker is None and has_query:
+            sticker, candidates = resolve_send_target(self._library.all(), query)
+        if candidates:
+            # 头部并列：不替她拍板。回候选清单（行形状与 sticker_list 同一把尺），
+            # 不算失败——"看到了、还没选"是选图流程的中间态。
+            catalog = format_catalog_for_model(candidates, len(candidates))
+            return {
+                "ok": True,
+                "sent": "",
+                "note": "multi_candidates",
+                "count": len(candidates),
+                "candidates": catalog,
+                "hint": "分不清哪张最贴——用上面的 id 再发一次 sticker_send",
+            }
         if sticker is None:
-            pool = search_stickers(
-                self._library.all(), query if isinstance(query, str) else "", include_disabled=False
-            )
-            sticker = pool[0] if pool else None
-        if sticker is None:
-            return {"ok": False, "reason": "no_match"}
+            # id 没点到东西→如实说没有；两者都没给→拒空枪（旧行为会"顺手"发常货，
+            # 轮 C 起选图必须有依据——那是它"发得准"的另一半）。
+            return {"ok": False, "reason": "no_match" if (has_id or has_query) else "id_or_query_required"}
         result = await self._sender.send(
             sticker, lanlan=lanlan, settings=self._settings, source="tool", now=time.time()
         )

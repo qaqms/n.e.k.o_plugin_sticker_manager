@@ -44,16 +44,15 @@ TAGS_MAX_COUNT = 12
 GROUP_MAX_CHARS = 40
 # 单张表情图的字节上限：入口层（base64 解码后）与收件箱目录扫描共用同一个数字。
 MAX_STICKER_BYTES = 8 * 1024 * 1024
-# 预览分段大小（原始字节）：必须是 3 的倍数，这样每段的 base64 无填充、
-# 可直接串接。3MiB 原图→4MiB base64，加信封仍低于宿主控制通道
-# 单帧上限 PLUGIN_ZMQ_CONTROL_UPLINK_MAX_BYTES（≈4.56MiB）：
-# entry 返回值超这个数会被传输层拒发，宿主只能等到超时（实机日志钉的坑）。
-PREVIEW_CHUNK_BYTES = 3 * 1024 * 1024
-# 预览分段宽度：必须是 3 的倍数（base64 分段才能无填充拼接）。宿主入口回包走
+# 预览分段大小（原始字节）：必须是 3 的倍数（base64 分段才能无填充拼接）。宿主入口回包走
 # ZeroMQ 控制通道，单帧硬上限 4,784,128 字节（plugin/settings.py
 # PLUGIN_ZMQ_CONTROL_UPLINK_MAX_BYTES，宿主源码实测：3.95MB 图整张 dataUrl=5.27MB
 # 直接超出→响应被拒→宿主 15s 超时）。3MiB 原始→4MiB base64，给 JSON 封套留余量。
 PREVIEW_CHUNK_BYTES = 3 * 1024 * 1024
+
+# query 选图的候选上限（轮 C，与 astrbot top_k=5 同量级）：头部并列时不替她拍板，
+# 回一屏能读完的候选清单让她用 id 定夺。
+SEND_CANDIDATES_MAX = 5
 
 # 收件箱导入时文件名清洗成描述的规则：删扩展名、分隔符换空格、连续空白压扁。
 # 面板浏览器侧有一份等价的几行小函数；那是跨运行时的重复（iframe 里碰不到
@@ -261,18 +260,21 @@ class Sticker:
         return replace(self, sha256=digest)
 
 
-def search_stickers(
+def search_with_scores(
     stickers: list[Sticker], query: str, *, include_disabled: bool = False
-) -> list[Sticker]:
-    """按查询串过滤并按 (精确 id > desc 命中 > caption 命中 > 套图名 > 标签 > 图内文字 > 文件名, 最近使用, 使用次数) 排序。
+) -> list[tuple[int, Sticker]]:
+    """带分数的检索（唯一实现）：打分+排序都在这；`search_stickers` 与
+    `resolve_send_target` 是它的薄封装——一把尺，三处同源。
 
-    空查询 = 全量（含禁用的除外，除非显式要求），按"她最近爱用"排序——
-    模型拿到空查询时想要的就是"常货"。
+    排序：命中分（精确 id > desc > caption > 套图精确 > 标签 > 套图子串 >
+    图内原文 > 文件名）> 使用数 > 最近时刻。空查询 = 全量按"她最近爱用"，
+    分数全记 0（没命中可言）。
     """
     pool = [s for s in stickers if include_disabled or not s.disabled]
     term = (query or "").strip().casefold()
     if not term:
-        return sorted(pool, key=lambda s: (-s.use_count, -s.last_used_at))
+        ranked = sorted(pool, key=lambda s: (-s.use_count, -s.last_used_at))
+        return [(0, s) for s in ranked]
     scored: list[tuple[int, Sticker]] = []
     for sticker in pool:
         score = _match_score(sticker, term)
@@ -285,7 +287,38 @@ def search_stickers(
             -pair[1].last_used_at,
         )
     )
-    return [sticker for _, sticker in scored]
+    return scored
+
+
+def search_stickers(
+    stickers: list[Sticker], query: str, *, include_disabled: bool = False
+) -> list[Sticker]:
+    """按查询串过滤并排序；规则见 `search_with_scores`。"""
+    return [
+        sticker for _, sticker in search_with_scores(stickers, query, include_disabled=include_disabled)
+    ]
+
+
+def resolve_send_target(
+    stickers: list[Sticker], query: str, *, limit: int = SEND_CANDIDATES_MAX
+) -> tuple[Sticker | None, list[Sticker]]:
+    """query 选图的判定器：返回 (唯一最优, 并列候选)，两者至多一个非空。
+
+    轮 C 的体验核心：**不替她拍板并列**。最优分严格唯一→直发；
+    头部并列→回 top-K 候选让她拿 id 再发。同分同台账的两张确实分不出高下——
+    猜一张也是发得，但把选择权还给她更符合"表情是她挑的"这件事。
+    空查询/全没命中都回 (None, [])。
+    """
+    term = (query or "").strip()
+    if not term:
+        return None, []
+    scored = search_with_scores(stickers, term)
+    if not scored:
+        return None, []
+    top_score = scored[0][0]
+    if len(scored) == 1 or scored[1][0] < top_score:
+        return scored[0][1], []
+    return None, [sticker for _, sticker in scored[: max(1, limit)]]
 
 
 def _match_score(sticker: Sticker, term: str) -> int:

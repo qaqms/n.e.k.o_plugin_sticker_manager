@@ -191,6 +191,35 @@ class TestTools:
         assert out["ok"] is False
         assert out["reason"] == "no_match"
 
+    def test_sticker_send_requires_id_or_query(self, tmp_path, run_async):
+        # 轮 C 收紧：空手调用不再"顺手"发常货（旧行为：query 缺席=全量排序发第一）
+        plugin, _host = _make(tmp_path)
+        run_async(_add(plugin, desc="常货"))
+        out = run_async(plugin.tool_sticker_send(**_ctx("K")))
+        assert out["ok"] is False
+        assert out["reason"] == "id_or_query_required"
+
+    def test_sticker_send_tied_query_returns_candidates_not_a_send(self, tmp_path, run_async):
+        # 头部并列（两张 desc 同词命中=同分同台账）：不拍板，回清单让她二次用 id 发。
+        plugin, host = _make(tmp_path)
+        first = run_async(_add(plugin, desc="开心挥手")).value["id"]
+        second = run_async(_add(plugin, desc="开心鼓掌", data=JPEG_BYTES)).value["id"]
+        out = run_async(plugin.tool_sticker_send(query="开心", **_ctx("K")))
+        assert out["ok"] is True and out["sent"] == ""
+        assert out["note"] == "multi_candidates" and out["count"] == 2
+        assert f"[{first}]" in out["candidates"] and f"[{second}]" in out["candidates"]
+        assert not host.push.calls  # 一发都没出
+        follow = run_async(plugin.tool_sticker_send(sticker_id=second, **_ctx("K")))
+        assert follow["ok"] is True and follow["sent"] == second
+
+    def test_sticker_send_strict_best_beats_tie_rule(self, tmp_path, run_async):
+        # 最优分严格唯一（desc 80 vs 标签子串 60）：直发，不回候选。
+        plugin, _host = _make(tmp_path)
+        best = run_async(_add(plugin, desc="开心挥手")).value["id"]
+        run_async(_add(plugin, desc="别的图", tags="比较开心", data=JPEG_BYTES))
+        out = run_async(plugin.tool_sticker_send(query="开心", **_ctx("K")))
+        assert out["ok"] is True and out["sent"] == best
+
     def test_sticker_send_skips_disabled_pick(self, tmp_path, run_async):
         # 模型点名要一张被禁用的图：不直发，回退到搜索；搜索也不含禁用 → no_match
         plugin, _host = _make(tmp_path)

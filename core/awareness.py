@@ -20,9 +20,18 @@ from .catalog import Sticker, format_catalog_for_model
 
 # 注入文本的骨架。刻意不提"系统提示"这类元话语，也不下命令——
 # 她是自愿用表情的主人，不是被执行分支的脚本；给的是"有什么 + 在哪查 + 怎么发"。
+# 轮 C 起中段多一条**使用规则**（学习 astrbot 提示词里"区分安慰与自述、不贴切就不发"
+# 与数量软提示）：硬闸在发送层的冷却，软提示进这段文案——两层分离，各管各的。
 _HEADER = "【表情包】你的收藏间里有 {count} 张表情包。"
+_GUIDANCE = (
+    "发之前先想清楚这张图在回复什么：分清你是在安慰对方还是在说自己，"
+    "拿不准、不贴切就不发；一条回复配一张就够，宁缺毋滥。"
+)
 _RECENT = "最近常用的：\n{lines}"
-_FOOTER = "聊天里想配张图就直接用 sticker_send 发（先 sticker_list 可以看全部）。别硬找、别连发。"
+_FOOTER = (
+    "聊天里想配张图就用 sticker_send 发（给关键词会帮你筛，候选不止一个会回列表让你挑 id；"
+    "先 sticker_list 可以看全部）。别硬找、别连发。"
+)
 
 
 def pick_recent(stickers: list[Sticker], limit: int) -> list[Sticker]:
@@ -41,7 +50,7 @@ def build_awareness_text(stickers: list[Sticker], *, max_lines: int) -> str:
     total = sum(1 for s in stickers if not s.disabled)
     if total <= 0:
         return ""
-    parts = [_HEADER.format(count=total)]
+    parts = [_HEADER.format(count=total), _GUIDANCE]
     lines = format_catalog_for_model(pick_recent(stickers, max_lines), max_lines)
     if lines:
         parts.append(_RECENT.format(lines=lines))

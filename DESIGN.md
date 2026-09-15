@@ -25,7 +25,10 @@
 - 入口面：add / update / remove / send / list / preview / history / switch / repair / import_inbox（全 `@ui.action`）+ `@ui.context("dashboard")`
 - 批量导入（v0.1.2，思路参致 astrbot）：面板原生 multiple 文件框逐张走 add 通道；`data/library/inbox/` 目录由 `import_inbox` 服务端整批收（描述取自文件名，成功/重复源删、超限/坏图留）
 - 内容指纹查重（v0.1.1）：入库记 sha256，同图回 `duplicate_image`；旧条目在查重/体检时 lazy 回填（catalog schema 不变，宽松兼容）
-- 工具面：`sticker_list`（目录）、`sticker_send`（按 id 或关键词发）
+- 工具面：`sticker_list`（目录）、`sticker_send`（id 或关键词）；轮 C（v0.4.0）升级：
+  query 经 `resolve_send_target` 判定——最优严格唯一直发，头部并列回 top-5 候选清单
+  （`multi_candidates`）让她拿 id 二次定夺；空枪（id/query 都不给）拒 `id_or_query_required`；
+  检索唯一实现 `search_with_scores`，三处同源
 - 工具注册心跳（v0.1.4，移植 our_life v0.5.0）：`@timer_interval("watch", 60s)` 拍上挂
   `services/tool_watch.ToolWatch`（300s 自节流，首拍即查）：回环 `GET /api/tools` 点名缺席、
   只对真缺席补挂（IPC 重发 replace 幂等）；不可达零动作；永不炸拍

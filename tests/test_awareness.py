@@ -74,6 +74,13 @@ class TestCoreSelection:
         assert "[a]" in text  # 行形状与 sticker_list 对偶：id 可拿去 sticker_send
         assert "sticker_send" in text
 
+    def test_text_carries_usage_guidance_and_candidate_hint(self):
+        # 轮 C：注入文案带"使用规则+数量软提示"（区分安慰/自述、宁缺毋滥）
+        # 与候选机制告知（多候选回清单），软提示在文案、硬闸在冷却——两层分离。
+        text = build_awareness_text([_st("a", desc="笑", use=1)], max_lines=5)
+        assert "安慰对方" in text and "宁缺毋滥" in text
+        assert "候选" in text and "id" in text
+
     def test_max_lines_caps_the_block(self):
         stickers = [_st(f"s{i}", use=i) for i in range(10)]
         text = build_awareness_text(stickers, max_lines=3)
