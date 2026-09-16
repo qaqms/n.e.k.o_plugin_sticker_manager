@@ -1,5 +1,35 @@
 # Changelog
 
+## 0.6.0
+
+v0.6.0「导入不再找隐藏文件夹」——轮 E：面板选择文件直传套图包：
+
+- **背景（真实踩坑）**：收件箱是唯一包入口，但运行时数据目录藏在 AppData 深处，
+  用户把 zip 放在显眼的构建目录里点「导入收件箱」×4 全部空转——“导入”应该是
+  选文件，不是“服务端读一个主人找不到的目录”。
+- **新链路**：面板「选择套图包导入」→ 原生文件选择器（accept `.zip`）→ 分块直传。
+  三个新入口 `import_upload_start`（开会话，回 session + 每块原始字节上限）→
+  `import_upload_chunk`（按 seq 从 0 连续追加 base64 块）→ `import_upload_finish`
+  （收尾走 import_pack 同一把尺，回四类计数）。面板进度/结果文案复用 inbox 同款报告形状。
+- **为什么分块**：面板→entry 的 args 与预览回包同受 ZeroMQ 单帧上限 4,784,128 字节
+  （陷阱 14 的反方向），几 MiB 的包整块 base64 会被直接拒；块大小由服务端 start
+  回包定（3MiB 原始→≈4MiB base64，封套留余量），面板不硬编码。
+- **会话纪律**：只存本进程内存 + `data/uploads/.sid.part`；重启即作废，重选文件即可
+  （不做断点续传：不值得为短命交互引入复杂度）；seq 乱序/超限/写失败一律**作废会话**，
+  不静默拼接；finish 后暂存体无论成败都删；新开会话前顺带回收过期死体（内存会话按 at、
+  盘上残留按 mtime，24h）。名字带路径形状直接拒（`upload_not_zip`），不采纳
+  safe_member_name 的“剥目录”宽容——面板传来的就该是裸文件名，诚实 > 宽容。
+- **收件箱降为高级旁路**：入口保留（脚本化批量/无面板场景仍可用），面板提示文案
+  改为首选选择器。导入的图片多选通道不变。
+- 顺手修一个真雷（lens 在改动文件上抓到的既有缺口）：`Sticker.from_dict` 的
+  时间戳/计数字段改用 `_lenient_float/_lenient_int`——手改坏的 `catalog.json` 过去会把
+  整本库打成不可加载（load 的条目循环没有逐条 try，宽松承诺必须在 from_dict 内兑现）；
+  nan/inf/巨整数/类型错全部回 0，好值不受牵连，钉 1 个专项测试。
+- 新稳定码七个：`upload_not_zip` / `upload_session_unknown` / `upload_seq_gap` /
+  `upload_chunk_bad` / `upload_too_large` / `upload_empty` / `upload_write_failed`（双语 i18n 同步）。
+- 测试 207 → 218：会话规则十门（拒非 zip/manifest 包全链路小块多块/乱序作废/超限作废/
+  空会话/假 zip 诚实计败/过期回收/入口往返/入口参数守卫/实例隔离）+ from_dict 毒数值一门。
+
 ## 0.5.0
 
 v0.5.0「她的发送有节奏」——轮 D 前半：跨轮去重 + 概率闸门（学习 外部系统的节奏纪律，

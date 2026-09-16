@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import re
 import secrets
 from dataclasses import dataclass, field, replace
@@ -49,6 +50,12 @@ MAX_STICKER_BYTES = 8 * 1024 * 1024
 # PLUGIN_ZMQ_CONTROL_UPLINK_MAX_BYTES，宿主源码实测：3.95MB 图整张 dataUrl=5.27MB
 # 直接超出→响应被拒→宿主 15s 超时）。3MiB 原始→4MiB base64，给 JSON 封套留余量。
 PREVIEW_CHUNK_BYTES = 3 * 1024 * 1024
+
+# 直传分块上传（v0.6.0 面板选择文件导入）：与预览同一条 ZMQ 帧上限、同一块大小纪律
+# （3MiB 原始→base64 ≈4MiB，封套余量同上）；但方向相反：预览是服务端分段**回**，
+# 上传是面板分段**来**。会话总大小上限防“手滑选了整个盘”的 zip 淹库。
+UPLOAD_CHUNK_BYTES = 3 * 1024 * 1024
+UPLOAD_MAX_TOTAL_BYTES = 64 * 1024 * 1024
 
 # query 选图的候选上限（轮 C，与 外部系统 top_k=5 同量级）：头部并列时不替她拍板，
 # 回一屏能读完的候选清单让她用 id 定夺。
@@ -187,6 +194,34 @@ def normalize_optional_text(value: Any, *, limit: int) -> str:
     return value.strip()[:limit]
 
 
+def _lenient_float(value: Any) -> float:
+    """宽松时间戳还原（from_dict 专用）：坏值/非有限值一律回 0.0，绝不抬异常。
+
+    catalog.json 由本插件自写自读，但"手改一个坏时间戳"不该把整本库变成不可加载
+    ——load() 的条目循环没有逐条 try，这条承诺只能在 from_dict 内兑现。
+    nan/inf 也要拦：它们是合法的 float，但会毒化"最近爱用"排序。
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
+def _lenient_int(value: Any) -> int:
+    """宽松计数还原：同 _lenient_float 的纪律，目标是 int。
+
+    三层打击：类型错（TypeError）/字面量错（ValueError）/ float 越界（int(1e400) 抬
+    OverflowError）；另外 `10**400` 是**合法的 Python int**——异常兑不到，必须显式幅度
+    上限：超过 2**53（float 精确域，也是 JSON 消费端的安全上限）就是垃圾或敌意，回 0。
+    """
+    try:
+        number = int(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return number if abs(number) <= 2**53 else 0
+
+
 @dataclass(frozen=True)
 class Sticker:
     """一条表情包记录（目录内存形状；文件在 stickers/<id>.<ext>）。"""
@@ -225,7 +260,11 @@ class Sticker:
 
     @classmethod
     def from_dict(cls, raw: Any) -> "Sticker | None":
-        """从持久化 dict 宽松还原；形状不对就丢弃（返回 None），不炸整本目录。"""
+        """从持久化 dict 宽松还原；形状不对就丢弃（返回 None），不炸整本目录。
+
+        数值字段同样走宽松尺（v0.6.0）：一个手改坏的时间戳不该把整本库变成
+        不可加载——load() 的条目循环没有逐条 try，宽松承诺必须在 from_dict 内兑现。
+        """
         if not isinstance(raw, dict):
             return None
         sid = raw.get("id")
@@ -235,16 +274,17 @@ class Sticker:
             return None
         if not isinstance(desc, str):
             desc = ""
+        sha = raw.get("sha256")
         return cls(
             id=sid,
             file=name,
             desc=desc,
             tags=normalize_tags(raw.get("tags")),
             disabled=bool(raw.get("disabled", False)),
-            added_at=float(raw.get("added_at") or 0.0),
-            use_count=int(raw.get("use_count") or 0),
-            last_used_at=float(raw.get("last_used_at") or 0.0),
-            sha256=raw.get("sha256") if isinstance(raw.get("sha256"), str) else "",
+            added_at=_lenient_float(raw.get("added_at")),
+            use_count=_lenient_int(raw.get("use_count")),
+            last_used_at=_lenient_float(raw.get("last_used_at")),
+            sha256=sha if isinstance(sha, str) else "",
             group=normalize_group(raw.get("group")),
             caption=normalize_optional_text(raw.get("caption"), limit=CAPTION_MAX_CHARS),
             visible_text=normalize_optional_text(raw.get("visible_text"), limit=VISIBLE_TEXT_MAX_CHARS),

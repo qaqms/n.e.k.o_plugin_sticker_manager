@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 
 from conftest import GIF_BYTES, JPEG_BYTES, NOT_AN_IMAGE, PNG_BYTES, WEBP_BYTES
-from sticker_manager.core.catalog import (
+from sticker_manager.core.catalog import (  # pyright: ignore[reportMissingImports] — 独立仓无 sticker_manager 目录名；测试态由 conftest 的 importlib 别名接管（pytest 实测可解），静态侧不可见，同 __init__.py 的 SDK 导入先例
     CAPTION_MAX_CHARS,
     DESC_MAX_CHARS,
     VISIBLE_TEXT_MAX_CHARS,
@@ -99,6 +99,26 @@ class TestStickerRecord:
         # desc 缺失不炸：宽松还原成空串
         loose = Sticker.from_dict({"id": "a", "file": "a.png"})
         assert loose is not None and loose.desc == ""
+
+    def test_from_dict_survives_poisoned_numbers(self):
+        # v0.6.0 承诺：手改坏的时间戳/计数只能丢自己的值（回 0），不能把整本库打成不可加载
+        # （load() 的条目循环没有逐条 try——宽松尺必须在 from_dict 内兑现）。
+        poisoned = Sticker.from_dict({
+            "id": "a", "file": "a.png", "desc": "笑",
+            "added_at": "abc", "use_count": [3], "last_used_at": "nan",
+            "sha256": None,
+        })
+        assert poisoned is not None
+        assert poisoned.added_at == 0.0 and poisoned.use_count == 0
+        assert poisoned.last_used_at == 0.0 and poisoned.sha256 == ""
+        # inf 字符串 / 越界 float / 巨整数字面量（合法 Python int，异常捕不到）全部回 0
+        floats = Sticker.from_dict({"id": "a", "file": "a.png", "added_at": "inf", "last_used_at": 1e400})
+        assert floats is not None and floats.added_at == 0.0 and floats.last_used_at == 0.0
+        big = Sticker.from_dict({"id": "a", "file": "a.png", "use_count": 10**400})
+        assert big is not None and big.use_count == 0
+        # 正常值不受牵连：好数字照常还原
+        good = Sticker.from_dict({"id": "a", "file": "a.png", "added_at": 1.5, "use_count": 7})
+        assert good is not None and good.added_at == 1.5 and good.use_count == 7
 
     def test_with_touch_increments(self):
         sticker = Sticker(id="abc", file="abc.png", desc="笑", use_count=3, last_used_at=1.0)

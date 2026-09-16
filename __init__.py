@@ -52,6 +52,7 @@ from .core import (
     CAPTION_MAX_CHARS,
     MAX_STICKER_BYTES,
     PREVIEW_CHUNK_BYTES,
+    UPLOAD_CHUNK_BYTES,
     VISIBLE_TEXT_MAX_CHARS,
     Sticker,
     StickerManagerSettings,
@@ -69,6 +70,9 @@ __all__ = ["StickerManagerPlugin"]
 
 # 上传解码前的字节上限提示（真正的 8 MiB 判定在 add 入口）。
 _MAX_BASE64_CHARS = 12 * 1024 * 1024
+# 直传单块的 base64 尺寸上限：3 MiB 原始恰好多不出 4 MiB 字符；给 JSON 封套留余量，
+# 超过就是故意的帧溢出尝试，在解码前拦下（同预览方向的 4,784,128 字节尺）。
+_UPLOAD_B64_MAX_CHARS = 4 * 1024 * 1024
 
 
 # 工具层拒发的二段指引（面向模型，同 multi_candidates 的 hint 一样走硬编码中文：
@@ -616,6 +620,126 @@ class StickerManagerPlugin(NekoPluginBase):
             return Err(SdkError(loaded.code))
         summary = self._library.ingest_inbox(tags=parse_tags_field(tags), group=normalize_group(group))
         return Ok({"note": "inbox_imported", **summary})
+
+    # ------------------------------------------------------------------
+    # 面板选择文件直传（v0.6.0）：zip 分块上传会话三步曲。
+    # 为什么不走单 entry 整块 base64：控制面板的 ZeroMQ 帧上限呰不下套图包
+    #（见 core.catalog UPLOAD_CHUNK_BYTES 注释）；为什么不只修面板：服务层
+    # 需要逐块把关总量/乱序/会话寿命，这些纪律只能长在服务端。
+    # 模型不需要这三个入口（它发图走 sticker_send，不搬运文件），但 entry 面
+    # 就是面板/命令面板的 RPC 面，照旧双装饰。
+    # ------------------------------------------------------------------
+
+    @ui.action(
+        id="import_upload_start",
+        label=tr("actions.import_upload_start.label", default="Upload start"),
+        tone="default",
+        refresh_context=False,
+    )
+    @plugin_entry(
+        id="import_upload_start",
+        name=tr("entries.import_upload_start.name", default="开始上传套图包"),
+        description=tr(
+            "entries.import_upload_start.description",
+            default="面板选择文件直传第一步：开一个 .zip 上传会话，返回 session 与每块原始字节上限；面板专用通道，模型不需要调",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": tr("fields.upload_name", default="文件名（须以 .zip 结尾）")},
+                "size": {"type": "integer", "description": tr("fields.upload_size", default="总字节数（仅用于提前拒绝明显超限）")},
+            },
+            "required": ["name"],
+        },
+        llm_result_fields=["note", "session", "chunk_bytes"],
+        timeout=30.0,
+    )
+    async def import_upload_start_entry(self, name: str = "", size: Any = None, **_):
+        sid, error = self._library.upload_start(name, size=size)
+        if error:
+            return Err(SdkError(error))
+        return Ok({"note": "upload_opened", "session": sid, "chunk_bytes": UPLOAD_CHUNK_BYTES})
+
+    @ui.action(
+        id="import_upload_chunk",
+        label=tr("actions.import_upload_chunk.label", default="Upload chunk"),
+        tone="default",
+        refresh_context=False,
+    )
+    @plugin_entry(
+        id="import_upload_chunk",
+        name=tr("entries.import_upload_chunk.name", default="上传一个分块"),
+        description=tr(
+            "entries.import_upload_chunk.description",
+            default="把文件切块 base64 后按 seq 从 0 连续追加到上传会话；乱序/超限/会话已死会如实报错并作废会话",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "session": {"type": "string", "description": tr("fields.upload_session", default="上传会话 id")},
+                "seq": {"type": "integer", "description": tr("fields.upload_seq", default="分块序号（从 0 连续）")},
+                "data_base64": {"type": "string", "description": tr("fields.upload_chunk_base64", default="本块 base64（原始体≤chunk_bytes）")},
+            },
+            "required": ["session", "seq", "data_base64"],
+        },
+        llm_result_fields=["note", "received"],
+        timeout=30.0,
+    )
+    async def import_upload_chunk_entry(self, session: str = "", seq: int = -1, data_base64: str = "", **_):
+        if not isinstance(session, str) or not session:
+            return Err(SdkError("upload_session_unknown"))
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            return Err(SdkError("upload_seq_gap"))
+        if not isinstance(data_base64, str) or not data_base64:
+            return Err(SdkError("upload_chunk_bad"))
+        if len(data_base64) > _UPLOAD_B64_MAX_CHARS:
+            return Err(SdkError("upload_too_large"))
+        try:
+            payload = base64.b64decode(data_base64, validate=False)
+        except (binascii.Error, ValueError):
+            return Err(SdkError("upload_chunk_bad"))
+        if not payload:
+            return Err(SdkError("upload_chunk_bad"))
+        error = self._library.upload_append(session, seq, payload)
+        if error:
+            return Err(SdkError(error))
+        return Ok({"note": "upload_chunked", "received": seq + 1})
+
+    @ui.action(
+        id="import_upload_finish",
+        label=tr("actions.import_upload_finish.label", default="Upload finish"),
+        tone="primary",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="import_upload_finish",
+        name=tr("entries.import_upload_finish.name", default="完成上传并导入套图包"),
+        description=tr(
+            "entries.import_upload_finish.description",
+            default="关闭上传会话，把暂存的 zip 按收件箱认包同一把尺整批收进库（manifest v2 协议同款），返回四类计数；会话随即作废、暂存体删除",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "session": {"type": "string", "description": tr("fields.upload_session", default="上传会话 id")},
+                "tags": {"type": "string", "description": tr("fields.tags", default="标签，逗号分隔（可选，整批共用）")},
+                "group": {"type": "string", "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）")},
+            },
+            "required": ["session"],
+        },
+        llm_result_fields=["note", "imported", "duplicates", "rejected", "failed"],
+        timeout=120.0,
+    )
+    async def import_upload_finish_entry(self, session: str = "", tags: str = "", group: str = "", **_):
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        summary, error = self._library.upload_finish(
+            session, tags=parse_tags_field(tags), group=normalize_group(group)
+        )
+        if error:
+            return Err(SdkError(error))
+        return Ok({"note": "pack_uploaded", **summary})
 
     @ui.action(
         id="export_pack",

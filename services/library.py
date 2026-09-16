@@ -20,6 +20,8 @@ from typing import Any
 
 from ..core.catalog import (
     MAX_STICKER_BYTES,
+    UPLOAD_CHUNK_BYTES,
+    UPLOAD_MAX_TOTAL_BYTES,
     Sticker,
     content_sha256,
     desc_from_filename,
@@ -43,6 +45,10 @@ STICKER_DIRNAME = "stickers"
 # 选目录而不是浏览器多选当唯一批量通道：免 base64 膨胀、免逐次往返、
 # 成百张也不怕；点不到的文件（隐藏/子目录）一律不碰不删。
 INBOX_DIRNAME = "inbox"
+# 直传暂存（v0.6.0 面板选择文件导入）：分块落盘在这里，完成即导入、随即删。
+# 与 inbox 的分工：inbox 是"主人自己找到了目录"的旁路，uploads 是面板会话的
+# 临时尸体——两者的文件都不该长期住下，但只有 inbox 参与"点导入"扫描。
+UPLOADS_DIRNAME = "uploads"
 # 导出物（v0.2.0）：套图 zip 落这里。面板拿不到文件句柄（iframe），
 # 只能显示路径让主人自己取——与 inbox 是一对镜像（进/出都走文件系统）。
 EXPORTS_DIRNAME = "exports"
@@ -75,6 +81,10 @@ class Library:
         self._stickers: dict[str, Sticker] = {}
         self._loaded = False
         self._io_dirty = False
+        # zip 直传会话（仅本进程，sid -> {h, path, seq, size, name, at}）：
+        # 入口调用都跑在同一事件循环上，字典变更天然串行；进程重启 = 会话作废，
+        # 重选文件即可——断点续传不值得为这种短生命周期交互复杂度。
+        self._uploads: dict[str, dict] = {}
 
     # ------------------------------------------------------------------
     # 路径与加载
@@ -591,6 +601,131 @@ class Library:
             path.unlink(missing_ok=True)
         except Exception:
             self._log(f"inbox file discard failed: {path.name}")
+
+    # ------------------------------------------------------------------
+    # zip 直传会话（v0.6.0：面板“选择文件”导入，不再依赖“放收件箱 + 点读取”）
+    # ------------------------------------------------------------------
+    # 为什么分块：面板→entry 的 args 与预览回包走同一条 ZeroMQ 控制通道，
+    # 单帧硬上限 4,784,128 字节（见 core.catalog PREVIEW_CHUNK_BYTES 注释）——
+    # 几 MiB 的套图包整块 base64 会被直接拒。方向相反：预览是服务端分段**回**，
+    # 这里是面板分段**来**。会话只存本进程内存 + data/uploads/.sid.part：
+    # 重启即作废，重选文件即可（断点续传不值得为这种短生命周期交互引入复杂度）。
+
+    @property
+    def uploads_dir(self) -> Path:
+        return self._root / UPLOADS_DIRNAME
+
+    def upload_start(self, filename: Any, size: Any = None) -> tuple[str, str]:
+        """开一个上传会话：只认 .zip 结尾（图走 add 通道，不重复造第二条入库路）。
+
+        回 (session_id, 错误码)；错误码为空串 = 成功。可选的 size 只用来
+        提前拒绝“一眼就知道装不下”的包（真正的总量上限在每块 append 时把关）。
+        """
+        name = safe_member_name(filename)
+        # safe_member_name 对"../x.zip"是**剥成 x.zip**而非拒——目录形状在这里没有合法用途
+        #（面板传来的就该是裸文件名），收到带路径的名宁可拒也不静默改写：诚实 > 宽容。
+        if not isinstance(filename, str) or "/" in filename or "\\" in filename:
+            return "", "upload_not_zip"
+        if not name or not name.lower().endswith(".zip"):
+            return "", "upload_not_zip"
+        if isinstance(size, int) and not isinstance(size, bool) and size > UPLOAD_MAX_TOTAL_BYTES:
+            return "", "upload_too_large"
+        self._gc_uploads()
+        sid = new_sticker_id(set(self._uploads))
+        path = self.uploads_dir / f".{sid}.part"
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            handle = path.open("wb")
+        except Exception:
+            self._log("upload staging open failed")
+            return "", "upload_write_failed"
+        self._uploads[sid] = {"h": handle, "path": path, "seq": 0, "size": 0, "name": name, "at": time.time()}
+        return sid, ""
+
+    def upload_append(self, sid: str, seq: Any, data: bytes) -> str:
+        """按 seq 顺序追加一块；乱序/超限/写失败都**作废会话**（不留半截尸体让人重试错对象）。
+
+        回错误码；空串 = 成功。seq 必须连续——面板循环保证；乱序只可能
+        是网络重放/并发错乱，宁可作废重选也不能静默拼出一个坏 zip。
+        """
+        session = self._uploads.get(sid) if isinstance(sid, str) else None
+        if session is None:
+            return "upload_session_unknown"
+        if seq != session["seq"]:
+            self._drop_upload(sid)
+            return "upload_seq_gap"
+        if len(data) > UPLOAD_CHUNK_BYTES or session["size"] + len(data) > UPLOAD_MAX_TOTAL_BYTES:
+            self._drop_upload(sid)
+            return "upload_too_large"
+        try:
+            session["h"].write(data)
+        except Exception:
+            self._drop_upload(sid)
+            self._log("upload chunk write failed")
+            return "upload_write_failed"
+        session["seq"] = session["seq"] + 1
+        session["size"] += len(data)
+        session["at"] = time.time()
+        return ""
+
+    def upload_finish(
+        self, sid: str, *, tags: list[str] | None = None, group: str = ""
+    ) -> tuple[dict[str, int], str]:
+        """收尾：关流→同一把尺 import_pack→删暂存体。
+
+        与 inbox “成功即删/失败留原地重试”不同：直传会话没有“原地”——面板会话
+        是一次性的，无论导入结果如何都删暂存体（成败已进 summary 四类计数，
+        重试 = 重选文件）。包内部分失败不拼掉整次上传：计数如实回。
+        """
+        session = self._uploads.pop(sid, None) if isinstance(sid, str) else None
+        if session is None:
+            return {}, "upload_session_unknown"
+        try:
+            session["h"].close()
+        except Exception:
+            pass
+        if session["size"] == 0:
+            self._drop_upload_file(session["path"])
+            return {}, "upload_empty"
+        summary = self.import_pack(session["path"], tags=tags, group=group)
+        self._drop_upload_file(session["path"])
+        return summary, ""
+
+    def _drop_upload(self, sid: str) -> None:
+        session = self._uploads.pop(sid, None)
+        if session is not None:
+            try:
+                session["h"].close()
+            except Exception:
+                pass
+            self._drop_upload_file(session["path"])
+
+    @staticmethod
+    def _drop_upload_file(path: Path) -> None:
+        try:
+            Path(path).unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def _gc_uploads(self, *, older_than_sec: float = 24 * 3600) -> None:
+        """新开会话前顺带扫死体：内存会话按 at 过期；盘上残留的 .*.part（上次崩溃/断电）
+        按 mtime 过期。隐藏名开头 + 固定后缀，不伤及任何正经文件。"""
+        now = time.time()
+        for sid in list(self._uploads):
+            if now - self._uploads[sid]["at"] > older_than_sec:
+                self._drop_upload(sid)
+        try:
+            if self.uploads_dir.is_dir():
+                for path in self.uploads_dir.iterdir():
+                    if not path.name.startswith(".") or not path.name.endswith(".part"):
+                        continue
+                    try:
+                        if path.is_file() and now - path.stat().st_mtime > older_than_sec:
+                            path.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception:
+            self._log("uploads gc scan failed")
 
     # ------------------------------------------------------------------
     # 使用台账

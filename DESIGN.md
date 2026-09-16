@@ -45,6 +45,13 @@
 - 套图包导出/导入（v0.2.0）：`data/library/exports/*.zip`（manifest.json + stickers/）；
   导入走收件箱通道认 `.zip`（manifest 优先、裸图包按文件名清洗）；zip 条目名只当包内定位符，
   落盘永远走 add() 服务端发号（zip-slip 免疫）；刻意不兼容外部系统的 memes_data.json
+- 选择文件直传（v0.6.0 轮 E）：面板「选择套图包导入」→ `.zip` 分块上传会话
+  （`import_upload_start/chunk/finish` 三入口，块大小服务端定）——收件箱不再是唯一包入口，
+  只当高级旁路留着。纪律：会话只存本进程内存 + `data/uploads/.sid.part`（重启即作废，
+  不做断点续传这种短命交互的复杂度）；seq 乱序/超限/写失败一律**作废会话**不静默拼接；
+  finish 走 import_pack 同一把尺，暂存体无论成败都删（会话一次性，重试=重选文件）；
+  新错误码 upload_not_zip / upload_session_unknown / upload_seq_gap / upload_chunk_bad /
+  upload_too_large / upload_empty / upload_write_failed；上传方向同受 ZMQ 帧上限（陷阱 14 的反方向）
 - 语义元数据层（v0.3.0 轮 A，学习外部系统 数据层，见 docs/sticker-system-study.md）：
   `Sticker.caption`（梗义 ≤300，"这张图在回复什么/什么上一句触发"，可选）+
   `Sticker.visible_text`（图内原文 ≤200，只检索不上目录）；目录行正文 `catalog_body()`
@@ -76,7 +83,7 @@
 - 不声明 `[plugin.store]`：持久化走 `data_path` 文件通道（失败是响亮的，规避 store 静默失效坑）
 - SDK surfaces：`plugin.sdk.plugin` 唯一门面；`ctx.push_message` / `ctx.images.upload`（仅 entry/tool 里用，lifecycle 不可）
 - UI：hosted-tsx；`ImageUpload`/`ImagePreview` 是 kit 现成件；缩略图懒加载走 `preview` action（context 不带图字节）
-- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / duplicate_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required / desc_too_long / image_too_large / image_undecodable / recent_repeat / probability_declined）
+- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / duplicate_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required / desc_too_long / image_too_large / image_undecodable / recent_repeat / probability_declined / upload_not_zip / upload_session_unknown / upload_seq_gap / upload_chunk_bad / upload_too_large / upload_empty / upload_write_failed）
 
 ## 已知陷阱（本机/宿主源码核实，改动前先读）
 

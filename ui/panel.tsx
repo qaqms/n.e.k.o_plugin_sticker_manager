@@ -28,6 +28,7 @@ import {
   Switch,
   Text,
   useConfirm,
+  useRef,
   useState,
 } from "@neko/plugin-ui";
 import type { PluginSurfaceProps } from "@neko/plugin-ui";
@@ -704,6 +705,8 @@ export default function Panel(props: Surface) {
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState("");
   const [libraryNote, setLibraryNote] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const zipInputRef = useRef<any>(null);
   const [awarenessNote, setAwarenessNote] = useState("");
   const stickers = state.stickers || [];
   const groups = state.groups || [];
@@ -809,6 +812,78 @@ export default function Panel(props: Surface) {
         }),
       );
     }
+  };
+
+  // 套图包直传（v0.6.0）：选择 .zip → 分块上传 → 服务端同一把尺导入。
+  // 分块大小由服务端 start 回包定（与预览共用同一条 ZMQ 帧尺），面板不硬编码。
+  const readFileChunk = (blob: any): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const text = String(reader.result || "");
+        const comma = text.indexOf(",");
+        resolve(comma >= 0 ? text.slice(comma + 1) : "");
+      };
+      reader.onerror = () => reject(new Error("read_failed"));
+      reader.readAsDataURL(blob);
+    });
+
+  const importZip = async (file: any) => {
+    if (uploading) {
+      return;
+    }
+    setUploading(true);
+    setLibraryNote("");
+    try {
+      const start = await callAction(props, "import_upload_start", {
+        name: file.name,
+        size: file.size,
+      });
+      const sid = String((start && start.session) || "");
+      const chunkBytes = Number((start && start.chunk_bytes) || 3145728);
+      const total = Math.max(1, Math.ceil(Number(file.size) / chunkBytes));
+      let seq = 0;
+      for (let offset = 0; offset < Number(file.size); offset += chunkBytes) {
+        const chunk = await readFileChunk(file.slice(offset, offset + chunkBytes));
+        await callAction(props, "import_upload_chunk", {
+          session: sid,
+          seq,
+          data_base64: chunk,
+        });
+        seq += 1;
+        setLibraryNote(
+          t("panel.upload.progress", {
+            done: seq,
+            total,
+            defaultValue: "上传中 {done}/{total}…",
+          }),
+        );
+      }
+      const fin = await callAction(props, "import_upload_finish", { session: sid });
+      if (fin) {
+        setLibraryNote(
+          t("panel.upload.done", {
+            imported: fin.imported ?? 0,
+            duplicates: fin.duplicates ?? 0,
+            rejected: fin.rejected ?? 0,
+            failed: fin.failed ?? 0,
+            defaultValue:
+              "套图包导入完成：收进 {imported}、重复跳过 {duplicates}、坏图/超限 {rejected}、失败 {failed}",
+          }),
+        );
+      }
+      await props.api.refresh();
+    } catch (error) {
+      const raw =
+        error instanceof Error ? error.message : String(error ?? "failed");
+      setLibraryNote(
+        t("panel.toast.failed", {
+          code: extractCode(raw),
+          defaultValue: "操作失败：{code}",
+        }),
+      );
+    }
+    setUploading(false);
   };
 
   const term = query.trim().toLowerCase();
@@ -1004,6 +1079,33 @@ export default function Panel(props: Surface) {
               />
               <Button
                 tone="primary"
+                disabled={uploading}
+                onClick={() => {
+                  if (zipInputRef.current) {
+                    zipInputRef.current.click();
+                  }
+                }}
+              >
+                {uploading
+                  ? t("panel.upload.busy", { defaultValue: "上传中…" })
+                  : t("panel.upload.pick", { defaultValue: "选择套图包导入" })}
+              </Button>
+              <input
+                ref={zipInputRef}
+                type="file"
+                accept=".zip,application/zip"
+                style={{ display: "none" }}
+                onChange={(event: any) => {
+                  const file =
+                    event.target && event.target.files && event.target.files[0];
+                  if (file) {
+                    importZip(file);
+                  }
+                  event.target.value = "";
+                }}
+              />
+              <Button
+                tone="primary"
                 onClick={() => {
                   importInbox();
                 }}
@@ -1068,7 +1170,7 @@ export default function Panel(props: Surface) {
                 {t("panel.inbox.hint", {
                   path: state.inbox.path,
                   defaultValue:
-                    "把图片文件放进 {path} 后点「导入收件箱」；描述取自文件名。",
+                    "套图包也可以点「选择套图包导入」直接选文件；或把图片放进 {path} 后点「导入收件箱」，描述取自文件名。",
                 })}
               </Text>
             ) : null}

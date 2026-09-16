@@ -10,11 +10,11 @@
 
 | 面 | 内容 |
 | --- | --- |
-| 管理入口 | `add` / `update` / `remove` / `send` / `list` / `preview` / `history` / `switch` / `repair` / `import_inbox` |
+| 管理入口 | `add` / `update` / `remove` / `send` / `list` / `preview` / `history` / `switch` / `repair` / `import_inbox` / 直传三入口 `import_upload_start`→`chunk`→`finish` |
 | LLM 工具 | `sticker_list`（看目录）、`sticker_send`（按 id 或关键词发），带**注册心跳**：宿主/main_server 重启后静默缺席的工具每 5 分钟被点名补挂 |
 | 面板 | hosted-tsx：收藏表单、缩略图网格（懒加载）、编辑弹窗、使用台账、总开关 |
 | 格式 | png / jpg / gif / webp（只认文件头），单张 ≤8MiB；gif 动图保动画直发 |
-| 批量导入 | 面板多选一次收一批（文件名当描述，单轮≤64 张）；或把图丢进 `data/library/inbox/` 点「导入收件箱」服务端整批收 |
+| 批量导入 | **面板「选择套图包导入」选 `.zip` 直传**（v0.6.0，分块上传、manifest 随行带描述/标签/套图/梗义）；图片多选一次收一批（文件名当描述，单轮≤64 张）；高级旁路：把图/包放进 `data/library/inbox/` 点「导入收件箱」服务端整批收 |
 | 防重复 | 入库记内容指纹（sha256），同图再传如实拒绝；旧图 lazy 回填 |
 | 库体检 | `repair` 入口/面板按钮：清掉丢图的条目与孤儿文件，补旧条目指纹 |
 
