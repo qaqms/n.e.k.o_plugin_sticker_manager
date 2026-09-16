@@ -164,6 +164,10 @@
 
 `F:\ai\neko kaifa2\n.e.k.o_plugin_sticker_manager`（独立 Git 仓；宿主仓同级）
 
+**发行形态（2026-09-16 主人拍板）**：不上架插件市场——官方市场门链 workflow（verify/release）
+已从仓内移除，push 不再触发云端验证；质量链只有本地五门 `tools/release_gate.py`。
+分发 = 自行打包 `.neko-plugin` 后由主人从客户端插件中心导入（`neko-plugin install` 已停用）。
+
 ## Risk Follow-ups
 
 - **轮 B（VLM 自动标注）挂起（2026-09-15 拍板）**：库改由**预制表情包**供给——主人自己做包，
