@@ -218,5 +218,13 @@
   "panel.section.desc_cancel": "取消",
   "panel.section.desc_hint": "未写说明——补一句『什么时候用这一组』，她目录里看到的分类正文就是它。",
   "panel.filter.empty_title": "当前筛选没有命中",
-  "panel.filter.empty_hint": "换个词试试，或清空搜索框。"
+  "panel.filter.empty_hint": "换个词试试，或清空搜索框。",
+  "panel.tile.loading": "加载中…",
+  "panel.tile.failed": "图不可用",
+  "panel.detail.desc": "描述",
+  "panel.detail.caption": "梗义",
+  "panel.detail.visible": "图内原文",
+  "panel.detail.group": "分组",
+  "panel.detail.tags": "标签",
+  "panel.detail.added": "入库"
 }

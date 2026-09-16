@@ -10,7 +10,6 @@ import {
   Alert,
   Button,
   Card,
-  Checkbox,
   DataTable,
   Divider,
   EmptyState,
@@ -29,6 +28,7 @@ import {
   Switch,
   Text,
   useConfirm,
+  useEffect,
   useRef,
   useState,
 } from "@neko/plugin-ui";
@@ -111,6 +111,73 @@ type Surface = PluginSurfaceProps<State>;
 // 预览缓存：id -> dataUrl。失败记空串，避免每张坏图都重试一轮。
 const previewCache: Record<string, string> = {};
 
+// —— 预览懒加载调度（轮 G-2）——
+// 视口决定“看得见才拉”，全局并发尺限同时 2 张：单张预览是分段的串行调用，
+// 几百格的图墙一次性开跑会踩挤插件子进程。拿不到 IntersectionObserver 就直接排队，
+// 宁多拉不漏图。
+const PREVIEW_CONCURRENCY = 2;
+let previewActive = 0;
+const previewWaiters: Array<() => Promise<void>> = [];
+
+function pumpPreviewQueue() {
+  while (previewActive < PREVIEW_CONCURRENCY && previewWaiters.length > 0) {
+    const task = previewWaiters.shift();
+    if (!task) {
+      continue;
+    }
+    previewActive += 1;
+    const settle = () => {
+      previewActive -= 1;
+      pumpPreviewQueue();
+    };
+    task().then(settle, settle);
+  }
+}
+
+function queuePreview(task: () => Promise<void>) {
+  previewWaiters.push(task);
+  pumpPreviewQueue();
+}
+
+const tileHandlers: Map<any, () => void> = new Map();
+let sharedObserver: any = null;
+
+function observePreview(
+  el: any,
+  enter: () => void,
+): () => void {
+  const Ctor: any = (globalThis as any).IntersectionObserver;
+  if (!Ctor || !el) {
+    queuePreview(async () => {
+      enter();
+    });
+    return () => {};
+  }
+  if (!sharedObserver) {
+    sharedObserver = new Ctor((entries: any[]) => {
+      entries.forEach((entry) => {
+        if (!entry.isIntersecting) {
+          return;
+        }
+        const handler = tileHandlers.get(entry.target);
+        if (handler) {
+          tileHandlers.delete(entry.target);
+          sharedObserver.unobserve(entry.target);
+          handler();
+        }
+      });
+    }, { rootMargin: "240px 0px" });
+  }
+  tileHandlers.set(el, enter);
+  sharedObserver.observe(el);
+  return () => {
+    tileHandlers.delete(el);
+    if (sharedObserver) {
+      sharedObserver.unobserve(el);
+    }
+  };
+}
+
 // 后端 Err 抛出的 message 里抓稳定 ASCII 码（^[a-z][a-z0-9_]*$，DESIGN.md 错误码契约）；
 // 抓不到就原样直出（宿主/网络错误的原文比编一个码诚实）。
 function extractCode(raw: string): string {
@@ -183,7 +250,7 @@ async function callAction(
   return envelope ? envelope.result : null;
 }
 
-function StickerCard(props: {
+function StickerTile(props: {
   key?: string;
   row: StickerRow;
   surface: Surface;
@@ -195,7 +262,11 @@ function StickerCard(props: {
   const t = surface.t;
   const confirm = useConfirm();
   const [preview, setPreview] = useState<string>(previewCache[row.id] || "");
+  const [loading, setLoading] = useState<boolean>(
+    previewCache[row.id] === undefined,
+  );
   const [note, setNote] = useState("");
+  const [detail, setDetail] = useState<boolean>(false);
   const [editing, setEditing] = useState<boolean>(false);
   const [editDesc, setEditDesc] = useState<string>(row.desc || "");
   const [editTags, setEditTags] = useState<string>((row.tags || []).join(","));
@@ -205,9 +276,10 @@ function StickerCard(props: {
     row.visible_text || "",
   );
 
-  const loadPreview = async () => {
+  const loadPreview = async (): Promise<void> => {
     if (previewCache[row.id] !== undefined) {
       setPreview(previewCache[row.id]);
+      setLoading(false);
       return;
     }
     let dataUrl = "";
@@ -242,7 +314,23 @@ function StickerCard(props: {
     }
     previewCache[row.id] = dataUrl;
     setPreview(dataUrl);
+    setLoading(false);
   };
+
+  // 滚进视口（提前 240px）才排队拉图；排队期间被卸载/移出也无碍——load 自己幂等。
+  const boxRef = useRef<any>(null);
+  useEffect(() => {
+    if (previewCache[row.id] !== undefined) {
+      setPreview(previewCache[row.id]);
+      setLoading(false);
+      return undefined;
+    }
+    const stop = observePreview(boxRef.current, () => {
+      queuePreview(loadPreview);
+    });
+    return stop;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const run = async (actionId: string, args: Record<string, unknown>) => {
     setNote("");
@@ -273,112 +361,212 @@ function StickerCard(props: {
     }
   };
 
+  const tileBox = (extra: Record<string, unknown>) => {
+    const base: Record<string, unknown> = {
+      position: "relative",
+      width: "100%",
+      aspectRatio: "1 / 1",
+      borderRadius: 8,
+      overflow: "hidden",
+      cursor: "pointer",
+      border: "1px solid rgba(128, 128, 128, 0.35)",
+      background: "rgba(128, 128, 128, 0.10)",
+    };
+    return Object.assign(base, extra);
+  };
+  const centerBox: Record<string, unknown> = {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontSize: 12,
+    opacity: 0.75,
+  };
+
   return (
-    <Card title={row.caption || row.desc || row.id}>
-      <Stack gap={8}>
-        <Inline gap={8} align="start">
-          {props.onToggleSelect ? (
-            <Checkbox
-              checked={!!props.selected}
-              onChange={() => {
-                if (props.onToggleSelect) {
-                  props.onToggleSelect();
-                }
-              }}
-              label={t("panel.batch.pick", { defaultValue: "选" })}
+    <Stack gap={6}>
+      <div
+        ref={boxRef}
+        style={tileBox(
+          props.selected
+            ? { border: "2px solid rgba(80, 160, 255, 0.9)" }
+            : {},
+        )}
+        onClick={() => {
+          setDetail(true);
+        }}
+      >
+        {preview ? (
+          <img
+            src={preview}
+            alt={row.desc || row.id}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "contain",
+              display: "block",
+            }}
+          />
+        ) : null}
+        {!preview && loading ? (
+          <div style={centerBox}>
+            {t("panel.tile.loading", { defaultValue: "加载中…" })}
+          </div>
+        ) : null}
+        {!preview && !loading ? (
+          <div style={centerBox}>
+            {t("panel.tile.failed", { defaultValue: "图不可用" })}
+          </div>
+        ) : null}
+        {row.disabled ? (
+          <div
+            style={{
+              position: "absolute",
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              background: "rgba(20, 20, 20, 0.55)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <StatusBadge
+              tone="warning"
+              label={t("panel.badge.disabled", { defaultValue: "已禁用" })}
             />
-          ) : null}
-          <div style={{ width: 120 }}>
+          </div>
+        ) : null}
+        <div
+          style={{
+            position: "absolute",
+            top: 3,
+            left: 3,
+            background: "rgba(255, 255, 255, 0.85)",
+            borderRadius: 4,
+            padding: "1px 3px",
+            lineHeight: 1,
+          }}
+          onClick={(event: any) => {
+            event.stopPropagation();
+            if (props.onToggleSelect) {
+              props.onToggleSelect();
+            }
+          }}
+        >
+          <input type="checkbox" checked={!!props.selected} readOnly />
+        </div>
+      </div>
+      {note && !detail ? <Alert tone="danger" message={note} /> : null}
+      <Modal
+        open={detail}
+        title={row.caption || row.desc || row.id}
+        onClose={() => {
+          setDetail(false);
+        }}
+      >
+        <Stack gap={10}>
+          <div style={{ maxWidth: 360 }}>
             {preview ? (
               <ImagePreview src={preview} alt={row.desc || row.id} />
             ) : (
-              <Button
-                tone="default"
-                onClick={() => {
-                  loadPreview();
-                }}
-              >
-                {t("panel.thumb.load", { defaultValue: "加载预览" })}
-              </Button>
+              <Text>
+                {loading
+                  ? t("panel.tile.loading", { defaultValue: "加载中…" })
+                  : t("panel.tile.failed", { defaultValue: "图不可用" })}
+              </Text>
             )}
           </div>
-          <Stack gap={4}>
-            <KeyValue
-              items={[
-                { key: "id", label: "id", value: row.id },
-                {
-                  key: "uses",
-                  label: t("panel.thumb.uses", { defaultValue: "发出次数" }),
-                  value: String(row.use_count || 0),
-                },
-                {
-                  key: "last",
-                  label: t("panel.thumb.last", { defaultValue: "最近发出" }),
-                  value: formatTime(row.last_used_at),
-                },
-              ]}
-            />
-            <Inline gap={6} wrap>
-              {[
-                ...(row.disabled
-                  ? [
-                      <StatusBadge
-                        tone="warning"
-                        label={t("panel.badge.disabled", {
-                          defaultValue: "已禁用",
-                        })}
-                      />,
-                    ]
-                  : []),
-                ...(row.group
-                  ? [<StatusBadge tone="info" label={row.group} />]
-                  : []),
-                ...(row.tags || []).map((tag) => (
-                  <StatusBadge tone="info" label={tag} />
-                )),
-              ]}
-            </Inline>
-            {row.caption ? <Text>{row.caption}</Text> : null}
-          </Stack>
-        </Inline>
-        <Inline gap={6} wrap>
-          <Button
-            tone="success"
-            onClick={() => {
-              run("send", { id: row.id });
-            }}
-          >
-            {t("panel.action.send", { defaultValue: "发到聊天" })}
-          </Button>
-          <Button
-            tone="default"
-            onClick={() => {
-              setEditing(true);
-            }}
-          >
-            {t("panel.action.edit", { defaultValue: "编辑" })}
-          </Button>
-          <Button
-            tone="warning"
-            onClick={() => {
-              run("update", { id: row.id, disabled: !row.disabled });
-            }}
-          >
-            {row.disabled
-              ? t("panel.action.enable", { defaultValue: "恢复启用" })
-              : t("panel.action.disable", { defaultValue: "禁用" })}
-          </Button>
-          <Button
-            tone="danger"
-            onClick={() => {
-              remove();
-            }}
-          >
-            {t("panel.action.remove", { defaultValue: "删除" })}
-          </Button>
-        </Inline>
-        {note ? <Alert tone="danger" message={note} /> : null}
-      </Stack>
+          <KeyValue
+            items={[
+              { key: "id", label: "id", value: row.id },
+              {
+                key: "desc",
+                label: t("panel.detail.desc", { defaultValue: "描述" }),
+                value: row.desc || "—",
+              },
+              {
+                key: "caption",
+                label: t("panel.detail.caption", { defaultValue: "梗义" }),
+                value: row.caption || "—",
+              },
+              {
+                key: "visible",
+                label: t("panel.detail.visible", { defaultValue: "图内原文" }),
+                value: row.visible_text || "—",
+              },
+              {
+                key: "group",
+                label: t("panel.detail.group", { defaultValue: "分组" }),
+                value: row.group || "—",
+              },
+              {
+                key: "tags",
+                label: t("panel.detail.tags", { defaultValue: "标签" }),
+                value: (row.tags || []).join(" / ") || "—",
+              },
+              {
+                key: "uses",
+                label: t("panel.thumb.uses", { defaultValue: "发出次数" }),
+                value: String(row.use_count || 0),
+              },
+              {
+                key: "last",
+                label: t("panel.thumb.last", { defaultValue: "最近发出" }),
+                value: formatTime(row.last_used_at),
+              },
+              {
+                key: "added",
+                label: t("panel.detail.added", { defaultValue: "入库" }),
+                value: formatTime(row.added_at),
+              },
+            ]}
+          />
+          <Inline gap={6} wrap>
+            <Button
+              tone="success"
+              onClick={() => {
+                run("send", { id: row.id });
+              }}
+            >
+              {t("panel.action.send", { defaultValue: "发到聊天" })}
+            </Button>
+            <Button
+              tone="default"
+              onClick={() => {
+                setDetail(false);
+                setEditing(true);
+              }}
+            >
+              {t("panel.action.edit", { defaultValue: "编辑" })}
+            </Button>
+            <Button
+              tone="warning"
+              onClick={() => {
+                run("update", { id: row.id, disabled: !row.disabled });
+              }}
+            >
+              {row.disabled
+                ? t("panel.action.enable", { defaultValue: "恢复启用" })
+                : t("panel.action.disable", { defaultValue: "禁用" })}
+            </Button>
+            <Button
+              tone="danger"
+              onClick={() => {
+                remove();
+              }}
+            >
+              {t("panel.action.remove", { defaultValue: "删除" })}
+            </Button>
+          </Inline>
+          {note ? <Alert tone="danger" message={note} /> : null}
+        </Stack>
+      </Modal>
       <Modal
         open={editing}
         title={t("panel.edit.title", { defaultValue: "编辑这条表情包" })}
@@ -474,7 +662,7 @@ function StickerCard(props: {
           </Inline>
         </Stack>
       </Modal>
-    </Card>
+    </Stack>
   );
 }
 
@@ -1519,9 +1707,9 @@ export default function Panel(props: Surface) {
                       </Button>
                     </Inline>
                   ) : null}
-                  <Grid cols={2} gap={10}>
+                  <Grid cols={6} gap={8}>
                     {section.rows.map((row) => (
-                      <StickerCard
+                      <StickerTile
                         key={row.id}
                         row={row}
                         surface={props}

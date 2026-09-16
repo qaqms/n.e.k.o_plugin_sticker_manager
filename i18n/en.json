@@ -218,5 +218,13 @@
   "panel.section.desc_cancel": "Cancel",
   "panel.section.desc_hint": "No note yet — add one line on when to use this group; it is the catalog text she reads.",
   "panel.filter.empty_title": "No matches for this filter",
-  "panel.filter.empty_hint": "Try another word, or clear the search box."
+  "panel.filter.empty_hint": "Try another word, or clear the search box.",
+  "panel.tile.loading": "Loading…",
+  "panel.tile.failed": "Image unavailable",
+  "panel.detail.desc": "Description",
+  "panel.detail.caption": "Meme meaning",
+  "panel.detail.visible": "In-image text",
+  "panel.detail.group": "Group",
+  "panel.detail.tags": "Tags",
+  "panel.detail.added": "Added"
 }

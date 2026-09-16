@@ -1,0 +1,21 @@
+# 本仓不走官方市场验证链（主人拍板：不上架，仅本地分发；质量门 = tools/release_gate.py）。
+# 保留此文件只为满足 `neko-plugin check --release` 的存在性要求。
+# 无 push/pull_request 触发器——正常推送永远不会跑它；即便手动 dispatch 也只是一个空打印，
+# 不引用任何官方 reusable workflow。
+name: Verify N.E.K.O Plugin
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  noop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: local-distribution notice
+        run: >-
+          echo "This repo is distributed locally; official market
+          verification is intentionally not wired. Run
+          tools/release_gate.py locally instead."
