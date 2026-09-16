@@ -67,6 +67,16 @@
   `probability_reuse_sec` 窗口复用判定不重掷（p² 教训，外部系统只掷一次存 extra 的
   插件侧等价物）。软提示进 awareness 文案与工具描述，硬闸在 sender——两层分离。
   投递：`push_message(visibility=["chat"], ai_behavior="read")`
+- 轻打标（v0.7.0 轮 F，对齐外部系统“分类=描述”心智）：① 逐图 desc 可选，目录行正文回落
+  `caption>desc>分组说明>套图兜底>未标注`（一把尺，`catalog_body(groups)`）；② 分组说明挂
+  `catalog.json.groups = {组名: 一句话}`（≤300，只能给有图在用的组写），`group_set_desc` 入口 +
+  面板 chips 下编辑框；③ 两级目录：`sticker_list` 无词先回【套图分类】再回【条目】、`group=` 下钻；
+  ④ `sticker_send(group=)` 组内选图：id>group>query，组名精确>子串多命中回 `group_candidates`，
+  候选池先过近期去重尺再 `_GROUP_PICK` 随机（模块级可注入，同 _RNG 纪律）；剔到空回 `recent_repeat`；
+  ⑤ 批量整理：`batch_update`（加/删标签、移组、启停，缺席不改）+ `batch_remove`（面板侧确认摊精确数）；
+  ⑥ manifest v3 顶层 `groups` 随包迁移，导入**只补缺不覆盖**（包不能消音主人已写的组话）。
+  新码：`group_required` / `group_not_found` / `group_desc_too_long` / `batch_empty` / `batch_noop`；
+  `desc_required` 退场（不再能从 add 抬出）
 - i18n：zh-CN + en（Python `tr()` 与 TSX `t()` 键全部入文件，有门钉着）
 
 ## Out of Scope（v0.1.0 刻意不做）
@@ -83,7 +93,7 @@
 - 不声明 `[plugin.store]`：持久化走 `data_path` 文件通道（失败是响亮的，规避 store 静默失效坑）
 - SDK surfaces：`plugin.sdk.plugin` 唯一门面；`ctx.push_message` / `ctx.images.upload`（仅 entry/tool 里用，lifecycle 不可）
 - UI：hosted-tsx；`ImageUpload`/`ImagePreview` 是 kit 现成件；缩略图懒加载走 `preview` action（context 不带图字节）
-- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / duplicate_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required / desc_too_long / image_too_large / image_undecodable / recent_repeat / probability_declined / upload_not_zip / upload_session_unknown / upload_seq_gap / upload_chunk_bad / upload_too_large / upload_empty / upload_write_failed）
+- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / duplicate_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required（v0.7.0 起退场，add 不再拦空描述） / desc_too_long / image_too_large / image_undecodable / recent_repeat / probability_declined / upload_not_zip / upload_session_unknown / upload_seq_gap / upload_chunk_bad / upload_too_large / upload_empty / upload_write_failed）
 
 ## 已知陷阱（本机/宿主源码核实，改动前先读）
 

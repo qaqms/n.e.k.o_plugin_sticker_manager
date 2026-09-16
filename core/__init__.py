@@ -9,6 +9,8 @@
 from .awareness import build_awareness_text, pick_recent
 from .catalog import (
     CAPTION_MAX_CHARS,
+    DESC_MAX_CHARS,
+    GROUP_DESC_MAX_CHARS,
     GROUP_MAX_CHARS,
     MAX_STICKER_BYTES,
     PREVIEW_CHUNK_BYTES,
@@ -21,6 +23,7 @@ from .catalog import (
     desc_from_filename,
     detect_image_format,
     format_catalog_for_model,
+    format_group_overview,
     new_sticker_id,
     normalize_group,
     normalize_optional_text,
@@ -30,6 +33,7 @@ from .catalog import (
     search_stickers,
     search_with_scores,
     validate_desc,
+    validate_desc_optional,
     validate_optional_text,
 )
 from .configuration import (
@@ -47,12 +51,15 @@ from .pack import (
     build_manifest,
     pack_entry_from_raw,
     parse_manifest,
+    parse_manifest_groups,
     safe_member_name,
     sticker_to_manifest_entry,
 )
 
 __all__ = [
     "CAPTION_MAX_CHARS",
+    "DESC_MAX_CHARS",
+    "GROUP_DESC_MAX_CHARS",
     "GROUP_MAX_CHARS",
     "MAX_STICKER_BYTES",
     "PACK_DIR_PREFIX",
@@ -76,12 +83,14 @@ __all__ = [
     "desc_from_filename",
     "detect_image_format",
     "format_catalog_for_model",
+    "format_group_overview",
     "new_sticker_id",
     "normalize_group",
     "normalize_optional_text",
     "normalize_tags",
     "pack_entry_from_raw",
     "parse_manifest",
+    "parse_manifest_groups",
     "parse_tags_field",
     "pick_recent",
     "resolve_send_target",
@@ -90,5 +99,6 @@ __all__ = [
     "search_with_scores",
     "sticker_to_manifest_entry",
     "validate_desc",
+    "validate_desc_optional",
     "validate_optional_text",
 ]

@@ -22,6 +22,7 @@ from typing import Any, Iterable, Mapping
 
 from .catalog import (
     CAPTION_MAX_CHARS,
+    GROUP_DESC_MAX_CHARS,
     VISIBLE_TEXT_MAX_CHARS,
     Sticker,
     desc_from_filename,
@@ -31,9 +32,10 @@ from .catalog import (
     validate_desc,
 )
 
-# v2（v0.3.0）：条目新增 caption/visible_text。导入侧从不按版本号硬拒
+# v2（v0.3.0）：条目新增 caption/visible_text。v3（轮 F）：顶层新增 groups（组名→一句话说明，
+# “分类=描述”随包迁移）。导入侧从不按版本号硬拒
 # （旧 reader 遇新键会自然忽略，新 reader 遇旧包缺键回空），升号只为诚实。
-PACK_MANIFEST_VERSION = 2
+PACK_MANIFEST_VERSION = 3
 PACK_MANIFEST_FILENAME = "manifest.json"
 # zip 内图片条目的目录前缀。导入时剥掉；导出时必须用同一个。
 PACK_DIR_PREFIX = "stickers/"
@@ -90,12 +92,13 @@ def pack_entry_from_raw(raw: Any) -> PackEntry | None:
     desc, desc_error = validate_desc(raw.get("desc"))
     if desc_error:
         desc = desc_from_filename(member)
+    digest = raw.get("sha256")  # 局部变量收窄：三元里双调 raw.get(...) 静态侧钉不住类型（同 Sticker.from_dict 的 sha 处理）
     return PackEntry(
         file=member,
         desc=desc,
         tags=normalize_tags(raw.get("tags")),
         group=normalize_group(raw.get("group")),
-        sha256=raw.get("sha256") if isinstance(raw.get("sha256"), str) else "",
+        sha256=digest if isinstance(digest, str) else "",
         caption=normalize_optional_text(raw.get("caption"), limit=CAPTION_MAX_CHARS),
         visible_text=normalize_optional_text(raw.get("visible_text"), limit=VISIBLE_TEXT_MAX_CHARS),
     )
@@ -118,6 +121,34 @@ def parse_manifest(raw: Any) -> list[PackEntry]:
     return out
 
 
+def parse_manifest_groups(raw: Any) -> dict[str, str]:
+    """宽松读顶层 groups（轮 F，manifest v3）：支持 [{name,desc}] 或 {name: desc} 两种形状。
+
+    与条目同纪律：只救不拒——坏名字/坏说明跳过；说明硬截到 GROUP_DESC_MAX_CHARS。
+    旧包（v2/v1）无此键 → 空字典，不炸。
+    """
+    if not isinstance(raw, Mapping):
+        return {}
+    listed = raw.get("groups")
+    out: dict[str, str] = {}
+    if isinstance(listed, Mapping):
+        pairs = list(listed.items())
+    elif isinstance(listed, Iterable) and not isinstance(listed, (str, bytes)):
+        pairs = [
+            (item.get("name"), item.get("desc"))
+            for item in listed
+            if isinstance(item, Mapping)
+        ]
+    else:
+        return {}
+    for name, desc in pairs:
+        group = normalize_group(name)
+        if not group or group in out:
+            continue
+        out[group] = normalize_optional_text(desc, limit=GROUP_DESC_MAX_CHARS)
+    return out
+
+
 def sticker_to_manifest_entry(sticker: Sticker) -> dict[str, Any]:
     """导出面的一条：只带迁移有意义的字段。
 
@@ -135,10 +166,17 @@ def sticker_to_manifest_entry(sticker: Sticker) -> dict[str, Any]:
     }
 
 
-def build_manifest(stickers: Iterable[Sticker]) -> dict[str, Any]:
-    """导出包的 manifest.json 形状。"""
-    return {
+def build_manifest(
+    stickers: Iterable[Sticker], groups: Mapping[str, str] | None = None
+) -> dict[str, Any]:
+    """导出包的 manifest.json 形状（轮 F 起随包携带分组说明）。"""
+    payload: dict[str, Any] = {
         "version": PACK_MANIFEST_VERSION,
         "app": "sticker_manager",
         "stickers": [sticker_to_manifest_entry(s) for s in stickers],
     }
+    if groups:
+        payload["groups"] = [
+            {"name": name, "desc": desc} for name, desc in sorted(groups.items()) if desc
+        ]
+    return payload

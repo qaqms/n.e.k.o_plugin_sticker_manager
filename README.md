@@ -10,7 +10,8 @@
 
 | 面 | 内容 |
 | --- | --- |
-| 管理入口 | `add` / `update` / `remove` / `send` / `list` / `preview` / `history` / `switch` / `repair` / `import_inbox` / 直传三入口 `import_upload_start`→`chunk`→`finish` |
+| 管理入口 | `add` / `update` / `remove` / `send` / `list` / `preview` / `history` / `switch` / `repair` / `import_inbox` / 直传三入口 `import_upload_start`→`chunk`→`finish` / `group_set_desc` / `batch_update` / `batch_remove` |
+| 轻打标（轮 F） | 逐图文本全可选：一句**分组说明**就是她看到的分类目录正文；目录行正文回落 `梗义>描述>分组说明>未标注`，不造假描述；批量勾选即可加/删标签、移组、启停、删除（删除前摊精确张数） |
 | LLM 工具 | `sticker_list`（看目录）、`sticker_send`（按 id 或关键词发），带**注册心跳**：宿主/main_server 重启后静默缺席的工具每 5 分钟被点名补挂 |
 | 面板 | hosted-tsx：收藏表单、缩略图网格（懒加载）、编辑弹窗、使用台账、总开关 |
 | 格式 | png / jpg / gif / webp（只认文件头），单张 ≤8MiB；gif 动图保动画直发 |
@@ -26,6 +27,8 @@
 ## 频控与容量
 
 - 同一角色卡两次发送之间默认冷却 20 秒（`[sticker_manager.send].cooldown_sec`）；
+- **两级目录选图（轮 F）**：`sticker_list` 无词时先报【套图分类】再报条目，带 `group` 只看那一组；
+  `sticker_send(group=)` 只拍板“这组调性对”，组内先过近期去重尺再随机选一张（id > group > query）；
 - **跨轮去重**：她自主选图时，同一角色卡最近 5 张成功发过的不再出现
   （`recent_dedup_count`，0=关；台账源，重启不失忆）；主人点名要再看某张时
   她可用 `sticker_send(force=true)` 绕行（冷却仍生效）；

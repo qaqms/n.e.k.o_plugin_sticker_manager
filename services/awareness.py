@@ -8,7 +8,7 @@
 2. **什么时候**：按角色卡的内存时钟（`interval_sec`，默认 3600s）。重启清零
    与发送冷却同一纪律（DESIGN 陷阱 9）：提示节奏不值得持久化，"刚重启就注一条"
    反而自然（她正需要想起自己有什么）。
-3. **注什么**：core/awareness.build_awareness_text（库大小 + 最近常用前 N 行）。
+3. **注什么**：core/awareness.build_awareness_text（库大小 + 套图分类概览 + 最近常用前 N 行）。
    空库返回空串 = 这拍不该注。
 4. **怎么注**：`push_message(visibility=[], ai_behavior="read")`——用户看不见、
    不打断话轮，只进她的上下文（our_life injector 同通道，timer 里可用已被验证）。
@@ -28,6 +28,7 @@ sampler（插件碰不到别人的 services，这是刻意的跨仓重复——�
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -82,7 +83,7 @@ def latest_lanlan(records: Iterable[Mapping[str, Any]]) -> str:
     时间戳缺失/坏值当 0（垫底）——有比没有好，但不能让坏数据插队到"最新"。
     """
     best_name = ""
-    best_ts = float("-inf")
+    best_ts = -math.inf  # 常量哨兵；不用 float("-inf") 写法——字面即意，也不招扫描器误报
     for record in records:
         if not isinstance(record, Mapping):
             continue
@@ -90,7 +91,15 @@ def latest_lanlan(records: Iterable[Mapping[str, Any]]) -> str:
         if not name:
             continue
         raw_ts = record.get("timestamp")
-        ts = float(raw_ts) if isinstance(raw_ts, (int, float)) and not isinstance(raw_ts, bool) else 0.0
+        # 与 core._lenient_float 同纪律：isinstance 拦住字符串，但拦不住巨整数——
+        # float(10**400) 抬 OverflowError；坏时间戳当 0 垫底，不能炸掉整拍扫描。
+        if isinstance(raw_ts, (int, float)) and not isinstance(raw_ts, bool):
+            try:
+                ts = float(raw_ts)
+            except OverflowError:
+                ts = 0.0
+        else:
+            ts = 0.0
         if ts > best_ts:
             best_ts, best_name = ts, name
     return best_name
@@ -169,7 +178,9 @@ class Awareness:
             if waiting > 0.0:
                 return {"status": "waiting", "wait_sec": round(waiting, 1)}
         text = build_awareness_text(
-            self._library.all(), max_lines=settings.awareness.max_recent_lines
+            self._library.all(),
+            max_lines=settings.awareness.max_recent_lines,
+            groups=self._library.group_descs(),
         )
         if not text:
             return {"status": "empty_library"}
@@ -195,7 +206,7 @@ class Awareness:
         if not callable(getter):
             return ""
         try:
-            raw = getter(max_count=_SCAN_RECORDS)
+            raw: Any = getter(max_count=_SCAN_RECORDS)  # 宿主/替身可能给同步列表或 awaitable；鸭子形状 Any 化，下面的 hasattr 尺把关
             if hasattr(raw, "__await__"):
                 raw = await raw
         except Exception:  # noqa: BLE001 - 总线读失败 = 这拍没有目标，不是事故

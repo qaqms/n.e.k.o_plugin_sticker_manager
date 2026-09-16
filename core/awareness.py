@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from .catalog import Sticker, format_catalog_for_model
+from .catalog import Sticker, format_catalog_for_model, format_group_overview
 
 # 注入文本的骨架。刻意不提"系统提示"这类元话语，也不下命令——
 # 她是自愿用表情的主人，不是被执行分支的脚本；给的是"有什么 + 在哪查 + 怎么发"。
@@ -30,6 +30,7 @@ _GUIDANCE = (
     "被拒了就正常用文字回，别重试、也别换一张接着试。"
 )
 _RECENT = "最近常用的：\n{lines}"
+_GROUPS = "你的套图（挑组再挑图，也可直接用 sticker_send 带 group 让组内帮你选）：\n{overview}"
 _FOOTER = (
     "聊天里想配张图就用 sticker_send 发（给关键词会帮你筛，候选不止一个会回列表让你挑 id；"
     "先 sticker_list 可以看全部）。别硬找、别连发；主人点名要再看某张时，用 force 绕行。"
@@ -47,13 +48,22 @@ def pick_recent(stickers: list[Sticker], limit: int) -> list[Sticker]:
     return ranked[: max(0, limit)]
 
 
-def build_awareness_text(stickers: list[Sticker], *, max_lines: int) -> str:
-    """拼一条注入文本。空库回空串——调用方拿空串当"这拍不该注"。"""
+def build_awareness_text(
+    stickers: list[Sticker], *, max_lines: int, groups: dict[str, str] | None = None
+) -> str:
+    """拼一条注入文本。空库回空串——调用方拿空串当"这拍不该注"。
+
+    轮 F：分组概览插在指南之后、常货之前——她的"有什么"心智先从逐图清单升一层到
+    分类目录（对齐外部系统每轮喂分类行的体验，只是我们靠低频静默注入）。
+    """
     total = sum(1 for s in stickers if not s.disabled)
     if total <= 0:
         return ""
     parts = [_HEADER.format(count=total), _GUIDANCE]
-    lines = format_catalog_for_model(pick_recent(stickers, max_lines), max_lines)
+    overview = format_group_overview(stickers, groups or {})
+    if overview:
+        parts.append(_GROUPS.format(overview=overview))
+    lines = format_catalog_for_model(pick_recent(stickers, max_lines), max_lines, groups)
     if lines:
         parts.append(_RECENT.format(lines=lines))
     parts.append(_FOOTER)

@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+# 独立仓无 sticker_manager 目录名，测试态由 conftest 的 importlib 别名接管（pytest 实测可解），同 __init__.py 的 SDK 导入先例
 """v0.2.0 入口面增量：group 贯通、export_pack、import_inbox 认包、awareness_now、面板上下文。
 
 与 test_entries 同风格：走 handler 本体，钉"面板/模型看到的形状"。
@@ -168,7 +170,8 @@ class TestDashboardPayload:
         run_async(_add(plugin, desc="图一", group="猫猫日常"))
         payload = run_async(plugin.dashboard_context(**_ctx("K")))
         assert payload["counts"]["groups"] == 1
-        assert payload["groups"] == ["猫猫日常"]
+        # 轮 F：groups 从名字列表升成对象（带张数与分组说明）——面板 chips 直接用它
+        assert payload["groups"] == [{"name": "猫猫日常", "count": 1, "desc": ""}]
         assert payload["stickers"][0]["group"] == "猫猫日常"
         assert payload["awareness"]["status"] in {"", "injected", "waiting", "disabled", "no_target"}
         assert payload["config"]["awareness_enabled"] is True

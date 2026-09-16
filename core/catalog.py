@@ -5,7 +5,10 @@
 1. **格式只认文件头，不认扩展名/文件名**——上传链路的 filename 来自客户端，
    不可信；`detect_image_format` 是唯一的判据来源。
 1. **描述（desc）是主人给的短标签，梗义（caption）是她选图的使用依据**：目录行正文 caption 优先、
-   空则回落 desc（`Sticker.catalog_body` 一把尺）；desc 仍必填、有长度上限。
+   空则回落 desc（`Sticker.catalog_body` 一把尺）。**轮 F 起 desc 不再必填**（学外部系统：
+   逐图零文本也能用）——两者都空时回落分组描述，再没有就如实标「未标注」。
+1.5. **分组（group）是“分类=描述”的单元**（轮 F）：`groups: {组名: 一句话说明}` 挂在库上，
+   她先挑组、组内再按图选/随机——管理面只需给组写一行话，逐图文字全部可选。
 2. **检索是"够用就好"**：子串匹配 desc/caption/tags/visible_text/id，不做分词、不做语义。
    真语义检索是宿主记忆层的事，不在插件里造第二套。
 4. 目录文案的纪律沿用 our_life 的注入契约：不给模型看原始路径、
@@ -43,6 +46,9 @@ TAGS_MAX_COUNT = 12
 # 套图分组名（v0.2.0）：一条表情最多属于一个组；空串 = 未分组。
 # 比标签宽一点——它是"套图/来源"这种成块的名字，不是散标签。
 GROUP_MAX_CHARS = 40
+# 分组说明（轮 F，对齐外部系统「分类描述即 prompt」）：一句给模型看的话挂在组上。
+# 比单图 desc 宽、与 caption 同量级：它要独立说清“什么时候用这一组”。
+GROUP_DESC_MAX_CHARS = 300
 # 单张表情图的字节上限：入口层（base64 解码后）与收件箱目录扫描共用同一个数字。
 MAX_STICKER_BYTES = 8 * 1024 * 1024
 # 预览分段大小（原始字节）：必须是 3 的倍数（base64 分段才能无填充拼接）。宿主入口回包走
@@ -173,6 +179,16 @@ def validate_desc(desc: Any) -> tuple[str, str]:
     return cleaned, ""
 
 
+def validate_desc_optional(desc: Any) -> tuple[str, str]:
+    """轮 F 的宽松尺：空是合法意图（逐图不写文本，靠分组说明顶上）；只拦超限。"""
+    if not isinstance(desc, str) or not desc.strip():
+        return "", ""
+    cleaned = desc.strip()
+    if len(cleaned) > DESC_MAX_CHARS:
+        return "", "too_long"
+    return cleaned, ""
+
+
 def validate_optional_text(value: Any, *, limit: int) -> tuple[str, str]:
     """可选长文本的共用尺（caption / visible_text 同一条）：
     非字符串/空白 → ("", "")（空是合法意图：未标注或清除）；超限 → too_long。"""
@@ -239,9 +255,21 @@ class Sticker:
     caption: str = ""
     visible_text: str = ""
 
-    def catalog_body(self) -> str:
-        """目录行正文：梗义优先，未标注时回落主人的短描述（一把尺，两处同源共用）。"""
-        return self.caption or self.desc
+    def catalog_body(self, groups: dict[str, str] | None = None) -> str:
+        """目录行正文（轮 F 尺）：梗义 > 主人描述 > 分组说明 > 如实「未标注」。
+
+        外部系统逐图无文本也能转，靠的是“分类行”就是全部信息；我们的目录有逐图行
+        （id 得落在图上），所以正文允许全空——空了用组话兑，组话也没有就标「未标注」
+        让主人与她都看得见缺口，而不是造一句假描述。
+        """
+        if self.caption:
+            return self.caption
+        if self.desc:
+            return self.desc
+        if self.group:
+            desc = (groups or {}).get(self.group, "")
+            return desc or f"套图「{self.group}」里的一张"
+        return "未标注"
     def as_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -388,17 +416,44 @@ def _match_score(sticker: Sticker, term: str) -> int:
     return 0
 
 
-def format_catalog_for_model(stickers: list[Sticker], limit: int) -> str:
+def format_group_overview(stickers: list[Sticker], groups: dict[str, str]) -> str:
+    """分组概览行（轮 F，“分类即 prompt”的插件侧等价物）：`组名（N 张）— 说明`。
+
+    只算未禁用的图；未分组有图时补一行。按张数降序、同数按名字——她扫一眼就知道
+    “哪有几张、什么时候用哪一组”，再下钻到图。无组可报时回空串。
+    """
+    pool = [s for s in stickers if not s.disabled]
+    if not pool:
+        return ""
+    counts: dict[str, int] = {}
+    for sticker in pool:
+        counts[sticker.group or ""] = counts.get(sticker.group or "", 0) + 1
+    lines: list[str] = []
+    named = sorted((n for n in counts if n), key=lambda n: (-counts[n], n))
+    for name in named:
+        line = f"・{name}（{counts[name]} 张）"
+        desc = groups.get(name, "")
+        if desc:
+            line += f" — {desc}"
+        lines.append(line)
+    if counts.get("", 0):
+        lines.append(f"・未分组（{counts['']} 张）")
+    return "\n".join(lines)
+
+
+def format_catalog_for_model(
+    stickers: list[Sticker], limit: int, groups: dict[str, str] | None = None
+) -> str:
     """给模型看的目录（`sticker_list` 工具、存在感注入与面板刷新共用同一份文案）。
 
-    一行一条：`[id] 梗义或描述（套图：G；标签：a/b）`——正文走 `catalog_body` 一把尺
-    （caption 优先，v0.3.0）。不含文件名、不含图内原文、不含计数——
+    一行一条：`[id] 正文（套图：G；标签：a/b）`——正文走 `catalog_body` 一把尺
+    （caption > desc > 分组说明 > 未标注，轮 F）。不含文件名、不含图内原文、不含计数——
     那些是给人看的账本信息，进了提示词只会挤占她的注意力。
     """
     lines: list[str] = []
     pool = [s for s in stickers if not s.disabled]
     for sticker in pool[: max(0, limit)]:
-        line = f"[{sticker.id}] {sticker.catalog_body()}"
+        line = f"[{sticker.id}] {sticker.catalog_body(groups)}"
         brackets: list[str] = []
         if sticker.group:
             brackets.append(f"套图：{sticker.group}")

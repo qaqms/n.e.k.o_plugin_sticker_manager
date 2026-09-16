@@ -1,3 +1,5 @@
+# pyright: reportMissingImports=false
+# 独立仓无 sticker_manager 目录名，测试态由 conftest 的 importlib 别名接管（pytest 实测可解），同 __init__.py 的 SDK 导入先例
 """入口面测试：add/update/remove/send/list/preview/history/switch + 两个 llm_tool。
 
 用真文件（tmp_path）+ 假宿主，走 handler 本体而不是内部服务，
@@ -56,11 +58,16 @@ class TestAddEntry:
         assert not result.is_ok()
         assert str(result.error) == "invalid_image"
 
-    def test_requires_desc(self, tmp_path, run_async):
+    def test_desc_is_optional_now(self, tmp_path, run_async):
+        # 轮 F：逐图描述不再是入库门槛（对齐参考系统：不写文本也能收，她靠分组说明选图）
         plugin, _host = _make(tmp_path)
         result = run_async(_add(plugin, desc="   "))
-        assert not result.is_ok()
-        assert str(result.error) == "desc_required"
+        assert result.is_ok()
+        assert result.value["desc"] == ""
+        # 可选不等于无尺：超限仍拦
+        too_long = run_async(_add(plugin, desc="x" * 201))
+        assert not too_long.is_ok()
+        assert str(too_long.error) == "desc_too_long"
 
     def test_rejects_undecodable_base64(self, tmp_path, run_async):
         plugin, _host = _make(tmp_path)

@@ -10,6 +10,7 @@ import {
   Alert,
   Button,
   Card,
+  Checkbox,
   DataTable,
   Divider,
   EmptyState,
@@ -28,6 +29,7 @@ import {
   Switch,
   Text,
   useConfirm,
+  useEffect,
   useRef,
   useState,
 } from "@neko/plugin-ui";
@@ -63,6 +65,12 @@ type AwarenessState = {
   min_next_wait_sec?: number;
 };
 
+type GroupInfo = {
+  name: string;
+  count?: number;
+  desc?: string;
+};
+
 type State = {
   enabled?: boolean;
   lanlan?: string;
@@ -73,7 +81,7 @@ type State = {
     groups?: number;
   };
   stickers?: StickerRow[];
-  groups?: string[];
+  groups?: GroupInfo[];
   usage?: UsageRow[];
   inbox?: { pending?: number; path?: string };
   awareness?: AwarenessState;
@@ -166,6 +174,8 @@ function StickerCard(props: {
   key?: string;
   row: StickerRow;
   surface: Surface;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const row = props.row;
   const surface = props.surface;
@@ -251,9 +261,20 @@ function StickerCard(props: {
   };
 
   return (
-    <Card title={row.desc || row.id}>
+    <Card title={row.caption || row.desc || row.id}>
       <Stack gap={8}>
         <Inline gap={8} align="start">
+          {props.onToggleSelect ? (
+            <Checkbox
+              checked={!!props.selected}
+              onChange={() => {
+                if (props.onToggleSelect) {
+                  props.onToggleSelect();
+                }
+              }}
+              label={t("panel.batch.pick", { defaultValue: "选" })}
+            />
+          ) : null}
           <div style={{ width: 120 }}>
             {preview ? (
               <ImagePreview src={preview} alt={row.desc || row.id} />
@@ -557,15 +578,8 @@ function AddForm(props: { surface: Surface }) {
       });
       return;
     }
-    if (!desc.trim()) {
-      setFeedback({
-        kind: "err",
-        text: t("panel.add.need_desc", {
-          defaultValue: "描述必填：没有梗义时，它就是她看到的正文",
-        }),
-      });
-      return;
-    }
+    // 轮 F：逐图描述不再必填（参考系统逐图零文本也能用）——不写也能收，
+    // 她靠分组说明/梗义选图；这里只拦图。
     setBusy(true);
     setFeedback({ kind: "", text: "" });
     try {
@@ -627,8 +641,9 @@ function AddForm(props: { surface: Surface }) {
         />
       </Field>
       <Field
-        label={t("panel.edit.desc", { defaultValue: "描述（面板里的短标签）" })}
-        required
+        label={t("panel.add.desc_optional", {
+          defaultValue: "描述（可选：不写也行，她靠分组说明/梗义选图）",
+        })}
       >
         <Input
           value={desc}
@@ -706,6 +721,11 @@ export default function Panel(props: Surface) {
   const [group, setGroup] = useState("");
   const [libraryNote, setLibraryNote] = useState("");
   const [uploading, setUploading] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [batchTags, setBatchTags] = useState("");
+  const [batchGroup, setBatchGroup] = useState("");
+  const [groupNote, setGroupNote] = useState("");
+  const confirm = useConfirm();
   const zipInputRef = useRef<any>(null);
   const [awarenessNote, setAwarenessNote] = useState("");
   const stickers = state.stickers || [];
@@ -884,6 +904,123 @@ export default function Panel(props: Surface) {
       );
     }
     setUploading(false);
+  };
+
+  // 轮 F：分组说明编辑（“分类即 prompt”的一句维护入口）与批量整理。
+  const activeGroup = groups.find((item) => item.name === group) || null;
+  useEffect(() => {
+    const found = (state.groups || []).find((item) => item.name === group);
+    setGroupNote(found && found.desc ? found.desc : "");
+  }, [group]);
+
+  const saveGroupDesc = async () => {
+    if (!activeGroup) {
+      return;
+    }
+    setLibraryNote("");
+    try {
+      await callAction(props, "group_set_desc", {
+        group: activeGroup.name,
+        desc: groupNote.trim(),
+      });
+      setLibraryNote(
+        t("panel.group.desc_saved", { defaultValue: "分组说明已更新" }),
+      );
+      await props.api.refresh();
+    } catch (error) {
+      const raw =
+        error instanceof Error ? error.message : String(error ?? "failed");
+      setLibraryNote(
+        t("panel.toast.failed", {
+          code: extractCode(raw),
+          defaultValue: "操作失败：{code}",
+        }),
+      );
+    }
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelected((previous: string[]) =>
+      previous.indexOf(id) >= 0
+        ? previous.filter((x) => x !== id)
+        : previous.concat(id),
+    );
+  };
+
+  const runBatch = async (patch: Record<string, unknown>) => {
+    if (!selected.length) {
+      return;
+    }
+    setLibraryNote("");
+    try {
+      const result = await callAction(props, "batch_update", {
+        ids: selected,
+        ...patch,
+      });
+      if (result) {
+        setLibraryNote(
+          t("panel.batch.done_update", {
+            updated: result.updated ?? 0,
+            missing: (result.missing || []).length,
+            defaultValue: "批量完成：改了 {updated}、不存在/失败 {missing}",
+          }),
+        );
+      }
+      await props.api.refresh();
+    } catch (error) {
+      const raw =
+        error instanceof Error ? error.message : String(error ?? "failed");
+      setLibraryNote(
+        t("panel.toast.failed", {
+          code: extractCode(raw),
+          defaultValue: "操作失败：{code}",
+        }),
+      );
+    }
+  };
+
+  const batchDelete = async () => {
+    if (!selected.length) {
+      return;
+    }
+    // 对齐参考系统的破坏性确认：先把精确张数摊开，再问要不要删。
+    const answer = await confirm({
+      title: t("panel.batch.delete_title", { defaultValue: "批量删除" }),
+      message: t("panel.batch.delete_message", {
+        count: selected.length,
+        defaultValue: "将删掉 {count} 张图和它们的记录，不可恢复。",
+      }),
+      tone: "danger",
+    });
+    if (!answer) {
+      return;
+    }
+    setLibraryNote("");
+    try {
+      const result = await callAction(props, "batch_remove", {
+        ids: selected,
+      });
+      if (result) {
+        setLibraryNote(
+          t("panel.batch.delete_done", {
+            removed: result.removed ?? 0,
+            missing: (result.missing || []).length,
+            defaultValue: "已删 {removed} 张、不存在 {missing}",
+          }),
+        );
+      }
+      setSelected([]);
+      await props.api.refresh();
+    } catch (error) {
+      const raw =
+        error instanceof Error ? error.message : String(error ?? "failed");
+      setLibraryNote(
+        t("panel.toast.failed", {
+          code: extractCode(raw),
+          defaultValue: "操作失败：{code}",
+        }),
+      );
+    }
   };
 
   const term = query.trim().toLowerCase();
@@ -1144,15 +1281,15 @@ export default function Panel(props: Surface) {
                 >
                   {t("panel.group.all", { defaultValue: "全部" })}
                 </Button>
-                {groups.map((name) => (
+                {groups.map((info) => (
                   <Button
-                    key={name}
-                    tone={group === name ? "success" : "default"}
+                    key={info.name}
+                    tone={group === info.name ? "success" : "default"}
                     onClick={() => {
-                      setGroup(group === name ? "" : name);
+                      setGroup(group === info.name ? "" : info.name);
                     }}
                   >
-                    {name}
+                    {info.name}（{info.count || 0}）
                   </Button>
                 ))}
                 <Button
@@ -1162,6 +1299,111 @@ export default function Panel(props: Surface) {
                   }}
                 >
                   {t("panel.group.none", { defaultValue: "未分组" })}
+                </Button>
+              </Inline>
+            ) : null}
+            {activeGroup ? (
+              <Inline gap={6} align="center" wrap>
+                <Text>
+                  {t("panel.group.desc_label", {
+                    name: activeGroup.name,
+                    defaultValue: "「{name}」的说明",
+                  })}
+                </Text>
+                <Input
+                  value={groupNote}
+                  onChange={setGroupNote}
+                  placeholder={t("panel.group.desc_ph", {
+                    defaultValue: "什么时候用这一组——她选图时看到的分类正文",
+                  })}
+                />
+                <Button
+                  tone="primary"
+                  onClick={() => {
+                    saveGroupDesc();
+                  }}
+                >
+                  {t("panel.group.desc_save", { defaultValue: "存分组说明" })}
+                </Button>
+              </Inline>
+            ) : null}
+            {selected.length > 0 ? (
+              <Inline gap={6} align="center" wrap>
+                <Text>
+                  {t("panel.batch.selected", {
+                    count: selected.length,
+                    defaultValue: "已选 {count} 张",
+                  })}
+                </Text>
+                <Input
+                  value={batchTags}
+                  onChange={setBatchTags}
+                  placeholder={t("panel.batch.tags_ph", {
+                    defaultValue: "标签，逗号分隔",
+                  })}
+                />
+                <Button
+                  tone="default"
+                  onClick={() => {
+                    runBatch({ tags_add: batchTags });
+                  }}
+                >
+                  {t("panel.batch.add_tags", { defaultValue: "加标签" })}
+                </Button>
+                <Button
+                  tone="default"
+                  onClick={() => {
+                    runBatch({ tags_remove: batchTags });
+                  }}
+                >
+                  {t("panel.batch.remove_tags", { defaultValue: "删标签" })}
+                </Button>
+                <Input
+                  value={batchGroup}
+                  onChange={setBatchGroup}
+                  placeholder={t("panel.batch.group_ph", {
+                    defaultValue: "移入的分组名",
+                  })}
+                />
+                <Button
+                  tone="default"
+                  onClick={() => {
+                    runBatch({ group: batchGroup });
+                  }}
+                >
+                  {t("panel.batch.move", { defaultValue: "移组" })}
+                </Button>
+                <Button
+                  tone="default"
+                  onClick={() => {
+                    runBatch({ disabled: false });
+                  }}
+                >
+                  {t("panel.batch.enable", { defaultValue: "启用" })}
+                </Button>
+                <Button
+                  tone="default"
+                  onClick={() => {
+                    runBatch({ disabled: true });
+                  }}
+                >
+                  {t("panel.batch.disable", { defaultValue: "禁用" })}
+                </Button>
+                <Button
+                  tone="danger"
+                  onClick={() => {
+                    batchDelete();
+                  }}
+                >
+                  {t("panel.batch.delete", { defaultValue: "删除所选" })}
+                </Button>
+                <Button
+                  tone="default"
+                  onClick={() => {
+                    setSelected([]);
+                  }}
+                >
+                  {t("panel.batch.clear", { defaultValue: "取消选择" })}
                 </Button>
               </Inline>
             ) : null}
@@ -1186,7 +1428,15 @@ export default function Panel(props: Surface) {
             ) : (
               <Grid cols={2} gap={10}>
                 {rows.map((row) => (
-                  <StickerCard key={row.id} row={row} surface={props} />
+                  <StickerCard
+                    key={row.id}
+                    row={row}
+                    surface={props}
+                    selected={selected.indexOf(row.id) >= 0}
+                    onToggleSelect={() => {
+                      toggleSelected(row.id);
+                    }}
+                  />
                 ))}
               </Grid>
             )}

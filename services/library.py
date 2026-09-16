@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.catalog import (
+    GROUP_DESC_MAX_CHARS,
     MAX_STICKER_BYTES,
     UPLOAD_CHUNK_BYTES,
     UPLOAD_MAX_TOTAL_BYTES,
@@ -27,6 +28,7 @@ from ..core.catalog import (
     desc_from_filename,
     detect_image_format,
     new_sticker_id,
+    normalize_group,
 )
 from ..core.pack import (
     PACK_DIR_PREFIX,
@@ -34,6 +36,7 @@ from ..core.pack import (
     PACK_MAX_ENTRIES,
     build_manifest,
     parse_manifest,
+    parse_manifest_groups,
     safe_member_name,
 )
 
@@ -79,6 +82,8 @@ class Library:
         self._root = Path(root)
         self._logger = logger
         self._stickers: dict[str, Sticker] = {}
+        # 分组说明（轮 F：“分类=描述”挂在组上，不挂在图上）；catalog.json 顶层 groups。
+        self._groups: dict[str, str] = {}
         self._loaded = False
         self._io_dirty = False
         # zip 直传会话（仅本进程，sid -> {h, path, seq, size, name, at}）：
@@ -132,6 +137,7 @@ class Library:
         if self._loaded and not force:
             return LibraryResult(ok=True)
         self._stickers = {}
+        self._groups = {}
         try:
             raw = json.loads(self.catalog_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
@@ -148,6 +154,16 @@ class Library:
                 sticker = Sticker.from_dict(item)
                 if sticker is not None:
                     self._stickers[sticker.id] = sticker
+        # 分组说明宽松读（轮 F）：坏键/坏值跳过，空说明不存；旧库无此键 = 空字典。
+        groups_raw = raw.get("groups") if isinstance(raw, dict) else None
+        if isinstance(groups_raw, dict):
+            for key, value in groups_raw.items():
+                group = normalize_group(key)
+                if not group or not isinstance(value, str):
+                    continue
+                desc = value.strip()[:GROUP_DESC_MAX_CHARS]
+                if desc:
+                    self._groups[group] = desc
         self._loaded = True
         self._io_dirty = False
         return LibraryResult(ok=True)
@@ -159,6 +175,7 @@ class Library:
                 "version": CATALOG_VERSION,
                 "updated_at": time.time(),
                 "stickers": [s.as_dict() for s in self._stickers.values()],
+                "groups": dict(self._groups),
             }
             tmp = self.catalog_path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -173,6 +190,38 @@ class Library:
     def io_dirty(self) -> bool:
         """上一次读/写是否走过 IO 异常。面板横幅用它。"""
         return self._io_dirty
+
+    # ------------------------------------------------------------------
+    # 分组说明（v0.7.0 轮 F）
+    # ------------------------------------------------------------------
+
+    def group_descs(self) -> dict[str, str]:
+        """组名 -> 一句话说明（副本）。"""
+        return dict(self._groups)
+
+    def set_group_desc(self, name: Any, desc: Any) -> tuple[bool, str]:
+        """写/改/清一个分组的说明；回 (是否成功, 错误码)。
+
+        合法性在入口层把关（group_required / group_desc_too_long），这里只兕宽钳位；
+        空说明 = 清除意图。写盘失败回滚内存，不把假成功留给面板。
+        """
+        group = normalize_group(name)
+        if not group:
+            return False, "group_required"
+        cleaned = desc.strip()[:GROUP_DESC_MAX_CHARS] if isinstance(desc, str) else ""
+        previous = self._groups.get(group, "")
+        if cleaned:
+            self._groups[group] = cleaned
+        else:
+            self._groups.pop(group, None)
+        saved = self.save()
+        if not saved.ok:
+            if previous:
+                self._groups[group] = previous
+            else:
+                self._groups.pop(group, None)
+            return False, saved.code or ERR_IO
+        return True, ""
 
     # ------------------------------------------------------------------
     # 查询
@@ -444,7 +493,7 @@ class Library:
             with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as pack:
                 pack.writestr(
                     PACK_MANIFEST_FILENAME,
-                    json.dumps(build_manifest(included), ensure_ascii=False, indent=2),
+                    json.dumps(build_manifest(included, self.group_descs()), ensure_ascii=False, indent=2),
                 )
                 for sticker in included:
                     pack.write(
@@ -488,6 +537,8 @@ class Library:
                 self._log(f"pack manifest broken, falling back to bare mode: {path.name}")
                 manifest_raw = None
             parsed = parse_manifest(manifest_raw) if manifest_raw is not None else []
+            pack_groups = parse_manifest_groups(manifest_raw) if manifest_raw is not None else {}
+            imported_groups: set[str] = set()
             if parsed:
                 members = {
                     f"{PACK_DIR_PREFIX}{entry.file}": entry for entry in parsed
@@ -532,6 +583,17 @@ class Library:
                     summary["rejected"] += 1
                 else:
                     summary["imported"] += 1
+                    if sticker is not None and sticker.group:
+                        imported_groups.add(sticker.group)
+            # 分组说明随包迁移（轮 F）：只补缺不覆盖——主人已写过的组话不被包/import 消音。
+            changed = False
+            for group_name in imported_groups:
+                group_desc = pack_groups.get(group_name, "")
+                if group_desc and not self._groups.get(group_name):
+                    self._groups[group_name] = group_desc
+                    changed = True
+            if changed:
+                self.save()
         self._log(
             "pack ingested: {} imported={imported} duplicates={duplicates} "
             "rejected={rejected} failed={failed}".format(path.name, **summary)

@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import random
 import time
 from typing import Any
 
@@ -50,6 +51,7 @@ from plugin.sdk.plugin import (  # pyright: ignore[reportMissingImports] — 独
 
 from .core import (
     CAPTION_MAX_CHARS,
+    GROUP_DESC_MAX_CHARS,
     MAX_STICKER_BYTES,
     PREVIEW_CHUNK_BYTES,
     UPLOAD_CHUNK_BYTES,
@@ -57,11 +59,14 @@ from .core import (
     Sticker,
     StickerManagerSettings,
     format_catalog_for_model,
+    format_group_overview,
     normalize_group,
+    normalize_tags,
     parse_tags_field,
     resolve_send_target,
     search_stickers,
     validate_desc,
+    validate_desc_optional,
     validate_optional_text,
 )
 from .services import Awareness, Library, Sender, ToolWatch
@@ -82,6 +87,37 @@ _SEND_HINTS: dict[str, str] = {
     "probability_declined": "这一轮不配图：直接用文字回复，别重试、也别换一张再试。",
     "send_cooldown": "刚发过一张，她在冷却：这轮用文字回复。",
 }
+
+# 组内选图的随机尺（轮 F，对齐外部系统“模型只挑分类、组内随机”）：
+# 模块级可注入——测试里换掉即可钉死“选的是哪张”，生产就是 random.choice。
+_GROUP_PICK = random.choice
+
+
+def _clean_id_list(value: Any, *, cap: int = 200) -> list[str]:
+    """批量入口的 ids 参数尺：只收非空字符串、去重保序、限量。"""
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        sid = item.strip()
+        if not sid or sid in seen:
+            continue
+        seen.add(sid)
+        out.append(sid)
+        if len(out) >= cap:
+            break
+    return out
+
+
+def _match_group_names(names: list[str], term: str) -> list[str]:
+    """组名解析：精确 > 子串（casefold）；多命中全回，让工具面决定“拍板还是回列表”。"""
+    if term in names:
+        return [term]
+    folded = term.casefold()
+    return [n for n in names if folded in n.casefold()]
 
 
 @neko_plugin
@@ -176,7 +212,8 @@ class StickerManagerPlugin(NekoPluginBase):
         name=tr("entries.add.name", default="收藏一张表情包"),
         description=tr(
             "entries.add.description",
-            default="把一张图片存进表情库：data_base64 是图片本体（不含 data: 前缀），desc 必填；caption（梗义）可选但强烈建议——那是她选图时看到的正文",
+            default="把一张图片存进表情库：data_base64 是图片本体（不含 data: 前缀）。轮 F 起逐图文本全部可选——"
+            "不写也能收，她靠分组说明选图；caption（梗义）仍是选图最准的一把尺，顺手就写",
         ),
         input_schema={
             "type": "object",
@@ -187,7 +224,7 @@ class StickerManagerPlugin(NekoPluginBase):
                 },
                 "desc": {
                     "type": "string",
-                    "description": tr("fields.desc", default="一句话描述图里在干什么（≤200字）"),
+                    "description": tr("fields.desc", default="一句话描述图里在干什么（可选，≤200字）"),
                 },
                 "tags": {
                     "type": "string",
@@ -209,7 +246,7 @@ class StickerManagerPlugin(NekoPluginBase):
                     "description": tr("fields.visible_text", default="图里清晰可见的原文字（可选，≤200字）"),
                 },
             },
-            "required": ["data_base64", "desc"],
+            "required": ["data_base64"],
             "additionalProperties": False,
         },
         llm_result_fields=["note", "id", "desc"],
@@ -225,10 +262,9 @@ class StickerManagerPlugin(NekoPluginBase):
         visible_text: str = "",
         **_,
     ):
-        text_desc, desc_error = validate_desc(desc)
-        if desc_error == "empty":
-            return Err(SdkError("desc_required"))
-        if desc_error == "too_long":
+        # 轮 F：desc 不再是入库门槛（学外部系统：逐图零文本也能用）；只拦超限。
+        text_desc, desc_error = validate_desc_optional(desc)
+        if desc_error:
             return Err(SdkError("desc_too_long"))
         text_caption, caption_error = validate_optional_text(caption, limit=CAPTION_MAX_CHARS)
         if caption_error:
@@ -317,11 +353,15 @@ class StickerManagerPlugin(NekoPluginBase):
         if not isinstance(id, str) or not id:
             return Err(SdkError("sticker_not_found"))
         new_desc: str | None = None
-        if isinstance(desc, str) and desc.strip():
-            text_desc, desc_error = validate_desc(desc)
-            if desc_error:
-                return Err(SdkError(f"desc_{desc_error}"))
-            new_desc = text_desc
+        if isinstance(desc, str):
+            # 轮 F：空串是合法意图（清掉逐图描述，靠分组说明顶上）；只有 None（缺席）才是不改。
+            if not desc.strip():
+                new_desc = ""
+            else:
+                text_desc, desc_error = validate_desc(desc)
+                if desc_error:
+                    return Err(SdkError(f"desc_{desc_error}"))
+                new_desc = text_desc
         new_tags: list[str] | None = None
         if tags is not None and not (isinstance(tags, str) and not tags.strip()):
             new_tags = parse_tags_field(tags)
@@ -383,6 +423,169 @@ class StickerManagerPlugin(NekoPluginBase):
         if error:
             return Err(SdkError(error))
         return Ok({"note": "sticker_removed", "id": id})
+
+    # ------------------------------------------------------------------
+    # 轮 F：分组说明与批量整理（对齐外部系统“描述挂分类、整理靠批量”的管理面）
+    # ------------------------------------------------------------------
+
+    @ui.action(
+        id="group_set_desc",
+        label=tr("actions.group_set_desc.label", default="Group note"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="group_set_desc",
+        name=tr("entries.group_set_desc.name", default="给套图分组写一句说明"),
+        description=tr(
+            "entries.group_set_desc.description",
+            default="分组说明是她选图时看到的“分类目录”正文（一句“什么时候用这一组”，≤300字）；空串=清除",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "group": {"type": "string", "description": tr("fields.group_name", default="分组名（须已有图在用）")},
+                "desc": {"type": "string", "description": tr("fields.group_desc", default="什么时候用这一组（≤300字）")},
+            },
+            "required": ["group"],
+            "additionalProperties": False,
+        },
+        llm_result_fields=["note", "group"],
+    )
+    async def group_set_desc_entry(self, group: str = "", desc: str = "", **_):
+        name = normalize_group(group)
+        if not name:
+            return Err(SdkError("group_required"))
+        text, error = validate_optional_text(desc, limit=GROUP_DESC_MAX_CHARS)
+        if error:
+            return Err(SdkError("group_desc_too_long"))
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        known = {s.group for s in self._library.all() if s.group} | set(self._library.group_descs())
+        if name not in known:
+            # 只能给“存在”的组写说明：组由图带出来（add/批量移组），这里不造空组——
+            # 与外部系统的“先建分类再丢图”不同，我们的组没有目录实体，空组存不了图。
+            return Err(SdkError("group_not_found"))
+        ok, error = self._library.set_group_desc(name, text)
+        if not ok:
+            return Err(SdkError(error or "group_io_error"))
+        return Ok({"note": "group_desc_set", "group": name, "cleared": not text})
+
+    @ui.action(
+        id="batch_update",
+        label=tr("actions.batch_update.label", default="Batch edit"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="batch_update",
+        name=tr("entries.batch_update.name", default="批量编辑一批表情包"),
+        description=tr(
+            "entries.batch_update.description",
+            default="对一批 id 统一：加标签/删标签/移到分组/启停。只改传来的项，缺席不改；逐张走同一把 update 尺",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "ids": {"type": "array", "items": {"type": "string"}, "description": tr("fields.ids", default="表情 id 列表（≤200）")},
+                "tags_add": {"type": "string", "description": tr("fields.tags_add", default="要加的标签，逗号分隔")},
+                "tags_remove": {"type": "string", "description": tr("fields.tags_remove", default="要删的标签，逗号分隔")},
+                "group": {"type": "string", "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）")},
+                "disabled": {"type": "boolean", "description": tr("fields.disabled", default="禁用/启用")},
+            },
+            "required": ["ids"],
+            "additionalProperties": False,
+        },
+        llm_result_fields=["note", "updated"],
+    )
+    async def batch_update_entry(
+        self,
+        ids: Any = None,
+        tags_add: Any = None,
+        tags_remove: Any = None,
+        group: Any = None,
+        disabled: Any = None,
+        **_,
+    ):
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        id_list = _clean_id_list(ids)
+        if not id_list:
+            return Err(SdkError("batch_empty"))
+        add_tags = parse_tags_field(tags_add) if isinstance(tags_add, (str, list)) else None
+        remove_tags = (
+            {t.casefold() for t in parse_tags_field(tags_remove)} if isinstance(tags_remove, (str, list)) else set()
+        )
+        new_group = normalize_group(group) if isinstance(group, str) else None
+        if add_tags is None and not remove_tags and new_group is None and disabled is None:
+            return Err(SdkError("batch_noop"))
+        if disabled is not None and not isinstance(disabled, bool):
+            return Err(SdkError("invalid_value"))
+        updated = 0
+        missing: list[str] = []
+        for sid in id_list:
+            sticker = self._library.get(sid)
+            if sticker is None:
+                missing.append(sid)
+                continue
+            merged_tags: list[str] | None = None
+            if add_tags is not None or remove_tags:
+                merged = [t for t in sticker.tags if t.casefold() not in remove_tags]
+                for tag in add_tags or []:
+                    if tag.casefold() not in {m.casefold() for m in merged}:
+                        merged.append(tag)
+                merged_tags = normalize_tags(merged)
+            result, error = self._library.update(
+                sid, tags=merged_tags, group=new_group, disabled=disabled if isinstance(disabled, bool) else None
+            )
+            if result is None:
+                missing.append(sid if sid else (error or "?"))
+            else:
+                updated += 1
+        return Ok({"note": "library_batch_updated", "updated": updated, "missing": missing})
+
+    @ui.action(
+        id="batch_remove",
+        label=tr("actions.batch_remove.label", default="Batch delete"),
+        tone="danger",
+        refresh_context=True,
+        confirm=True,
+    )
+    @plugin_entry(
+        id="batch_remove",
+        name=tr("entries.batch_remove.name", default="批量删除表情包"),
+        description=tr(
+            "entries.batch_remove.description",
+            default="按 id 列表逐张删除（图与记录，不可恢复）；面板侧负责先把精确张数摊在确认里",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "ids": {"type": "array", "items": {"type": "string"}, "description": tr("fields.ids", default="表情 id 列表（≤200）")},
+            },
+            "required": ["ids"],
+            "additionalProperties": False,
+        },
+        llm_result_fields=["note", "removed"],
+    )
+    async def batch_remove_entry(self, ids: Any = None, **_):
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        id_list = _clean_id_list(ids)
+        if not id_list:
+            return Err(SdkError("batch_empty"))
+        removed = 0
+        missing: list[str] = []
+        for sid in id_list:
+            error = self._library.remove(sid)
+            if error:
+                missing.append(sid)
+            else:
+                removed += 1
+        return Ok({"note": "library_batch_removed", "removed": removed, "missing": missing})
 
     @ui.action(
         id="send",
@@ -802,7 +1005,15 @@ class StickerManagerPlugin(NekoPluginBase):
         settings = self._settings
         lanlan = _lanlan_from_kwargs(kwargs)
         stickers = self._library.all()
-        groups = sorted({s.group for s in stickers if s.group})
+        group_descs = self._library.group_descs()
+        group_counts: dict[str, int] = {}
+        for s in stickers:
+            if s.group:
+                group_counts[s.group] = group_counts.get(s.group, 0) + 1
+        groups = [
+            {"name": n, "count": group_counts.get(n, 0), "desc": group_descs.get(n, "")}
+            for n in sorted(set(group_counts) | set(group_descs))
+        ]
         payload: dict[str, Any] = {
             "enabled": settings.enabled,
             "lanlan": lanlan,
@@ -814,6 +1025,7 @@ class StickerManagerPlugin(NekoPluginBase):
             },
             "stickers": [s.as_dict() for s in stickers],
             "groups": groups,
+            "group_descs": group_descs,
             "usage": self._library.read_usage(limit=12),
             "inbox": {
                 "pending": len(self._library.inbox_files()),
@@ -842,41 +1054,78 @@ class StickerManagerPlugin(NekoPluginBase):
     @llm_tool(
         name="sticker_list",
         description=(
-            "看看你收藏的表情包里有什么。不填 query 就是全部（按你最近爱用的排），"
-            "填了就按描述/梗义/标签/套图名搜。拿到列表后用 sticker_send 发。"
+            "看看你收藏的表情包里有什么。不填参数：先看套图分类（名字+张数+什么时候用），"
+            "再看你的常货；填 group 只看那一组的完整清单；填 query 按描述/梗义/标签/组名搜。"
+            "拿到后用 sticker_send 发（也可以 sticker_send 只给 group，组内帮你选）。"
         ),
         parameters={
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "想找什么样的表情（如：开心/无语/猫猫），可不填"},
+                "group": {"type": "string", "description": "只看这个套图分组的全部图（组名从分类行里拿）"},
             },
             "required": [],
         },
         timeout=10.0,
     )
-    async def tool_sticker_list(self, query: str = "", **kwargs: Any) -> dict[str, Any]:
+    async def tool_sticker_list(self, query: str = "", group: str = "", **kwargs: Any) -> dict[str, Any]:
         if not self._settings.enabled:
             return {"ok": False, "reason": "not_enabled"}
         self._library.load()
-        pool = search_stickers(self._library.all(), query if isinstance(query, str) else "", include_disabled=False)
-        catalog = format_catalog_for_model(pool, self._settings.storage.catalog_limit_for_model)
+        limit = self._settings.storage.catalog_limit_for_model
+        all_stickers = self._library.all()
+        descs = self._library.group_descs()
+        gname = normalize_group(group)
+        if gname:
+            names = sorted({s.group for s in all_stickers if s.group})
+            matched = _match_group_names(names, gname)
+            if len(matched) > 1:
+                overview = format_group_overview(
+                    [s for s in all_stickers if s.group in matched], {n: descs.get(n, "") for n in matched}
+                )
+                return {
+                    "ok": True,
+                    "count": len(matched),
+                    "catalog": overview,
+                    "note": "group 撞了多个组名——更准的名字再来一次",
+                }
+            if not matched:
+                return {
+                    "ok": True,
+                    "count": 0,
+                    "catalog": "",
+                    "note": "没有这个分组；不填 group 可以看到分类列表",
+                }
+            pool = search_stickers([s for s in all_stickers if s.group == matched[0]], query, include_disabled=False)
+            catalog = format_catalog_for_model(pool, limit, descs)
+            header = f"「{matched[0]}」" + (f"：{descs[matched[0]]}" if descs.get(matched[0]) else "")
+            return {"ok": True, "count": pool and len(pool) or 0, "catalog": f"{header}\n{catalog}" if catalog else header}
+        pool = search_stickers(all_stickers, query if isinstance(query, str) else "", include_disabled=False)
+        catalog = format_catalog_for_model(pool, limit, descs)
         if not catalog:
             return {"ok": True, "count": 0, "catalog": "", "note": "库里还没有表情包，或没有匹配的"}
+        if not (isinstance(query, str) and query.strip()):
+            # 轮 F 两级目录：无搜索词时先给分类行再给条目——她先看“有哪些套图”，
+            # 下钻用 group 参数（对齐外部系统“分类即 prompt”的心智，只是我们在工具结果里给）。
+            overview = format_group_overview(all_stickers, descs)
+            if overview:
+                catalog = f"【套图分类】\n{overview}\n【条目】\n{catalog}"
         return {"ok": True, "count": catalog.count("\n") + 1, "catalog": catalog}
 
     @llm_tool(
         name="sticker_send",
         description=(
-            "发一张表情包到聊天里。给 id 最准；给关键词：筛得只剩一张就直接发，"
-            "候选不止一张会把清单回给你——看一眼再用 id 发第二刀。id 和关键词都没给会拒。"
-            "发不出去会告诉你原因，别连试；刚发过的会被'最近不重复'挡下，"
-            "只有主人点名要再看某张时才带 force=true 绕行。"
+            "发一张表情包到聊天里。给 id 最准；给 group：从那个套图分组里帮你选一张（组内随机，"
+            "刚发过的会自动排除）；给关键词：筛得只剩一张就直接发，候选不止一张会把清单回给你——"
+            "看一眼再用 id 发第二刀。什么都没给会拒。发不出去会告诉你原因，别连试；"
+            "刚发过的会被'最近不重复'挡下，只有主人点名要再看某张时才带 force=true 绕行。"
         ),
         parameters={
             "type": "object",
             "properties": {
                 "sticker_id": {"type": "string", "description": "表情包的 id（首选）"},
                 "query": {"type": "string", "description": "没有 id 时给关键词（想表达的态度/场景，会按梗义筛）"},
+                "group": {"type": "string", "description": "只给套图分组名：组内随机选一张（适合“这组调性对，具体哪张你定”）"},
                 "force": {
                     "type": "boolean",
                     "description": "仅当主人明确点名要再看/再发这张时置 true：跳过最近不重复与概率闸（冷却仍生效）",
@@ -887,7 +1136,7 @@ class StickerManagerPlugin(NekoPluginBase):
         timeout=20.0,
     )
     async def tool_sticker_send(
-        self, sticker_id: str = "", query: str = "", force: bool = False, **kwargs: Any
+        self, sticker_id: str = "", query: str = "", group: str = "", force: bool = False, **kwargs: Any
     ) -> dict[str, Any]:
         if not self._settings.enabled:
             return {"ok": False, "reason": "not_enabled"}
@@ -906,13 +1155,47 @@ class StickerManagerPlugin(NekoPluginBase):
         sticker = None
         has_id = isinstance(sticker_id, str) and bool(sticker_id.strip())
         has_query = isinstance(query, str) and bool(query.strip())
+        has_group = isinstance(group, str) and bool(normalize_group(group))
+        pool = self._library.all()
         if has_id:
             sticker = self._library.get(sticker_id.strip())
             if sticker is not None and sticker.disabled:
                 sticker = None
         candidates: list[Sticker] = []
+        if sticker is None and has_group and not has_query:
+            # 轮 F 组内选图（对齐外部系统“模型只挑分类，图由系统定”）：候选池先过同一把
+            # 近期去重尺，再组内随机——她不需要逐图 id，节奏层照常把关。
+            gname = normalize_group(group)
+            names = sorted({s.group for s in pool if s.group})
+            matched = _match_group_names(names, gname)
+            if len(matched) > 1:
+                return {
+                    "ok": True,
+                    "sent": "",
+                    "note": "group_candidates",
+                    "count": len(matched),
+                    "candidates": "\n".join(f"・{n}" for n in matched),
+                    "hint": "组名撞了多个——用更准的组名或组内某张的 id 再发一次。",
+                }
+            if not matched:
+                known = "\n".join(f"・{n}" for n in names)
+                return {
+                    "ok": False,
+                    "reason": "group_not_found",
+                    "hint": f"没有这个分组。现有分组：\n{known}" if known else "库里还没有任何分组。",
+                }
+            group_pool = [s for s in pool if s.group == matched[0] and not s.disabled]
+            if not group_pool:
+                return {"ok": False, "reason": "group_empty", "hint": "这一组没有可用图——换个组或文字回。"}
+            selectable = [s for s in group_pool if s.id not in recent] if recent else group_pool
+            if not selectable:
+                return {
+                    "ok": False,
+                    "reason": "recent_repeat",
+                    "hint": "这一组最近的全发过了——换组、用文字回；主人点名才 force。",
+                }
+            sticker = _GROUP_PICK(selectable)
         if sticker is None and has_query:
-            pool = self._library.all()
             filtered = [s for s in pool if s.id not in recent] if recent else pool
             sticker, candidates = resolve_send_target(filtered, query)
             if sticker is None and not candidates and recent:
@@ -929,7 +1212,7 @@ class StickerManagerPlugin(NekoPluginBase):
         if candidates:
             # 头部并列：不替她拍板。回候选清单（行形状与 sticker_list 同一把尺），
             # 不算失败——"看到了、还没选"是选图流程的中间态。
-            catalog = format_catalog_for_model(candidates, len(candidates))
+            catalog = format_catalog_for_model(candidates, len(candidates), self._library.group_descs())
             return {
                 "ok": True,
                 "sent": "",
@@ -939,9 +1222,12 @@ class StickerManagerPlugin(NekoPluginBase):
                 "hint": "分不清哪张最贴——用上面的 id 再发一次 sticker_send",
             }
         if sticker is None:
-            # id 没点到东西→如实说没有；两者都没给→拒空枪（旧行为会"顺手"发常货，
-            # 轮 C 起选图必须有依据——那是它"发得准"的另一半）。
-            return {"ok": False, "reason": "no_match" if (has_id or has_query) else "id_or_query_required"}
+            # id 没点到东西→如实说没有；三者都没给→拒空枪（旧行为会"顺手"发常货，
+            # 轮 C 起选图必须有依据；轮 F 起 group 也是依据——那是它"发得准"的另一半）。
+            return {
+                "ok": False,
+                "reason": "no_match" if (has_id or has_query or has_group) else "id_or_query_required",
+            }
         result = await self._sender.send(
             sticker,
             lanlan=lanlan,
@@ -963,7 +1249,7 @@ class StickerManagerPlugin(NekoPluginBase):
             if hint:
                 out["hint"] = hint
             return out
-        return {"ok": True, "sent": sticker.id, "desc": sticker.desc}
+        return {"ok": True, "sent": sticker.id, "desc": sticker.catalog_body(self._library.group_descs())}
 
     # ------------------------------------------------------------------
     # 内部
