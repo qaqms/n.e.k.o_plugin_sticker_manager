@@ -112,10 +112,7 @@ class Library:
         try:
             if not self.inbox_dir.is_dir():
                 return []
-            return sorted(
-                p for p in self.inbox_dir.iterdir()
-                if p.is_file() and not p.name.startswith(".")
-            )
+            return sorted(p for p in self.inbox_dir.iterdir() if p.is_file() and not p.name.startswith("."))
         except Exception:
             self._log("inbox scan failed")
             return []
@@ -230,7 +227,7 @@ class Library:
     def all(self) -> list[Sticker]:
         return sorted(
             self._stickers.values(),
-            key=lambda s: (-s.added_at),
+            key=lambda s: -s.added_at,
         )
 
     def get(self, sticker_id: str) -> Sticker | None:
@@ -496,9 +493,7 @@ class Library:
                     json.dumps(build_manifest(included, self.group_descs()), ensure_ascii=False, indent=2),
                 )
                 for sticker in included:
-                    pack.write(
-                        self.image_path(sticker), arcname=f"{PACK_DIR_PREFIX}{sticker.file}"
-                    )
+                    pack.write(self.image_path(sticker), arcname=f"{PACK_DIR_PREFIX}{sticker.file}")
         except Exception:
             try:
                 target.unlink(missing_ok=True)
@@ -508,9 +503,7 @@ class Library:
         self._log(f"pack exported: file={target.name} stickers={exported} skipped={skipped}")
         return {"file": str(target), "exported": exported, "skipped": skipped}, ""
 
-    def import_pack(
-        self, path: Path, *, group: str = "", tags: list[str] | None = None
-    ) -> dict[str, int]:
+    def import_pack(self, path: Path, *, group: str = "", tags: list[str] | None = None) -> dict[str, int]:
         """导入一个套图 zip（manifest 协议见 core/pack）。返回与收件箱同款四类计数。
 
         纪律：
@@ -540,13 +533,9 @@ class Library:
             pack_groups = parse_manifest_groups(manifest_raw) if manifest_raw is not None else {}
             imported_groups: set[str] = set()
             if parsed:
-                members = {
-                    f"{PACK_DIR_PREFIX}{entry.file}": entry for entry in parsed
-                }
+                members = {f"{PACK_DIR_PREFIX}{entry.file}": entry for entry in parsed}
             else:
-                members = {
-                    name: None for name in pack.namelist() if safe_member_name(name)
-                }
+                members = {name: None for name in pack.namelist() if safe_member_name(name)}
             if len(members) > PACK_MAX_ENTRIES:
                 # 超大包：收下前 PACK_MAX_ENTRIES 个，多出的整批计 rejected。
                 summary["rejected"] += len(members) - PACK_MAX_ENTRIES
@@ -595,8 +584,9 @@ class Library:
             if changed:
                 self.save()
         self._log(
-            "pack ingested: {} imported={imported} duplicates={duplicates} "
-            "rejected={rejected} failed={failed}".format(path.name, **summary)
+            "pack ingested: {} imported={imported} duplicates={duplicates} rejected={rejected} failed={failed}".format(
+                path.name, **summary
+            )
         )
         return summary
 
@@ -653,8 +643,9 @@ class Library:
                 summary["imported"] += 1
                 self._discard_inbox_file(path)
         self._log(
-            "inbox ingested: imported={imported} duplicates={duplicates} "
-            "rejected={rejected} failed={failed}".format(**summary)
+            "inbox ingested: imported={imported} duplicates={duplicates} rejected={rejected} failed={failed}".format(
+                **summary
+            )
         )
         return summary
 
@@ -685,7 +676,7 @@ class Library:
         """
         name = safe_member_name(filename)
         # safe_member_name 对"../x.zip"是**剥成 x.zip**而非拒——目录形状在这里没有合法用途
-        #（面板传来的就该是裸文件名），收到带路径的名宁可拒也不静默改写：诚实 > 宽容。
+        # （面板传来的就该是裸文件名），收到带路径的名宁可拒也不静默改写：诚实 > 宽容。
         if not isinstance(filename, str) or "/" in filename or "\\" in filename:
             return "", "upload_not_zip"
         if not name or not name.lower().endswith(".zip"):
@@ -730,9 +721,7 @@ class Library:
         session["at"] = time.time()
         return ""
 
-    def upload_finish(
-        self, sid: str, *, tags: list[str] | None = None, group: str = ""
-    ) -> tuple[dict[str, int], str]:
+    def upload_finish(self, sid: str, *, tags: list[str] | None = None, group: str = "") -> tuple[dict[str, int], str]:
         """收尾：关流→同一把尺 import_pack→删暂存体。
 
         与 inbox “成功即删/失败留原地重试”不同：直传会话没有“原地”——面板会话
@@ -828,7 +817,7 @@ class Library:
             except Exception:
                 entries = []
             entries.append(dict(record))
-            entries = entries[-max(20, keep):]
+            entries = entries[-max(20, keep) :]
             payload = {"version": 1, "entries": entries}
             tmp = self.usage_path().with_suffix(".json.tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -48,9 +48,7 @@ def pick_recent(stickers: list[Sticker], limit: int) -> list[Sticker]:
     return ranked[: max(0, limit)]
 
 
-def build_awareness_text(
-    stickers: list[Sticker], *, max_lines: int, groups: dict[str, str] | None = None
-) -> str:
+def build_awareness_text(stickers: list[Sticker], *, max_lines: int, groups: dict[str, str] | None = None) -> str:
     """拼一条注入文本。空库回空串——调用方拿空串当"这拍不该注"。
 
     轮 F：分组概览插在指南之后、常货之前——她的"有什么"心智先从逐图清单升一层到

@@ -162,9 +162,7 @@ class Awareness:
         """手动一拍（面板调试入口）：绕过间隔闸，其余闸一个不少。"""
         return await self._run(settings=settings, now=now, force=True, lanlan_hint=lanlan)
 
-    async def _run(
-        self, *, settings: Any, now: float, force: bool, lanlan_hint: str = ""
-    ) -> dict[str, Any]:
+    async def _run(self, *, settings: Any, now: float, force: bool, lanlan_hint: str = "") -> dict[str, Any]:
         if not settings.enabled or not settings.awareness.enabled:
             return {"status": "disabled"}
         target = (lanlan_hint or "").strip() or await self._active_lanlan()
@@ -172,9 +170,7 @@ class Awareness:
             # 没有可归属的角色卡：不推进任何时钟，也不报错——没人说话就没地方注。
             return {"status": "no_target"}
         if not force:
-            waiting = self.remaining_for(
-                target, interval_sec=settings.awareness.interval_sec, now=now
-            )
+            waiting = self.remaining_for(target, interval_sec=settings.awareness.interval_sec, now=now)
             if waiting > 0.0:
                 return {"status": "waiting", "wait_sec": round(waiting, 1)}
         text = build_awareness_text(
@@ -206,7 +202,9 @@ class Awareness:
         if not callable(getter):
             return ""
         try:
-            raw: Any = getter(max_count=_SCAN_RECORDS)  # 宿主/替身可能给同步列表或 awaitable；鸭子形状 Any 化，下面的 hasattr 尺把关
+            raw: Any = getter(
+                max_count=_SCAN_RECORDS
+            )  # 宿主/替身可能给同步列表或 awaitable；鸭子形状 Any 化，下面的 hasattr 尺把关
             if hasattr(raw, "__await__"):
                 raw = await raw
         except Exception:  # noqa: BLE001 - 总线读失败 = 这拍没有目标，不是事故

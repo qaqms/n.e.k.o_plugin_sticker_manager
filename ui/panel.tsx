@@ -869,7 +869,9 @@ export default function Panel(props: Surface) {
       const total = Math.max(1, Math.ceil(Number(file.size) / chunkBytes));
       let seq = 0;
       for (let offset = 0; offset < Number(file.size); offset += chunkBytes) {
-        const chunk = await readFileChunk(file.slice(offset, offset + chunkBytes));
+        const chunk = await readFileChunk(
+          file.slice(offset, offset + chunkBytes),
+        );
         await callAction(props, "import_upload_chunk", {
           session: sid,
           seq,

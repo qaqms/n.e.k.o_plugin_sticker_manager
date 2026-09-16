@@ -104,9 +104,7 @@ def is_animated_gif(data: bytes) -> bool:
     刻意保守：只用于决定"要不要为动图保留内联通道"的日志与提示，
     不参与发送方式判定（所有 gif 都走内联，见 §设计决定 与 settings.send）。
     """
-    return data[:6] in (b"GIF87a", b"GIF89a") and (
-        data.count(b"\x00\x21\xf9\x04") > 1 or b"NETSCAPE2.0" in data[:4096]
-    )
+    return data[:6] in (b"GIF87a", b"GIF89a") and (data.count(b"\x00\x21\xf9\x04") > 1 or b"NETSCAPE2.0" in data[:4096])
 
 
 def content_sha256(data: bytes) -> str:
@@ -270,6 +268,7 @@ class Sticker:
             desc = (groups or {}).get(self.group, "")
             return desc or f"套图「{self.group}」里的一张"
         return "未标注"
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -358,13 +357,9 @@ def search_with_scores(
     return scored
 
 
-def search_stickers(
-    stickers: list[Sticker], query: str, *, include_disabled: bool = False
-) -> list[Sticker]:
+def search_stickers(stickers: list[Sticker], query: str, *, include_disabled: bool = False) -> list[Sticker]:
     """按查询串过滤并排序；规则见 `search_with_scores`。"""
-    return [
-        sticker for _, sticker in search_with_scores(stickers, query, include_disabled=include_disabled)
-    ]
+    return [sticker for _, sticker in search_with_scores(stickers, query, include_disabled=include_disabled)]
 
 
 def resolve_send_target(
@@ -441,9 +436,7 @@ def format_group_overview(stickers: list[Sticker], groups: dict[str, str]) -> st
     return "\n".join(lines)
 
 
-def format_catalog_for_model(
-    stickers: list[Sticker], limit: int, groups: dict[str, str] | None = None
-) -> str:
+def format_catalog_for_model(stickers: list[Sticker], limit: int, groups: dict[str, str] | None = None) -> str:
     """给模型看的目录（`sticker_list` 工具、存在感注入与面板刷新共用同一份文案）。
 
     一行一条：`[id] 正文（套图：G；标签：a/b）`——正文走 `catalog_body` 一把尺

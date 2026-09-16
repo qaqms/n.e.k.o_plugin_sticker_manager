@@ -48,9 +48,7 @@ def _ctx(lanlan: str) -> dict:
 
 
 async def _add(plugin, desc="笑", group="", data=PNG_BYTES):
-    return await plugin.add_entry(
-        data_base64=base64.b64encode(data).decode("ascii"), desc=desc, tags="", group=group
-    )
+    return await plugin.add_entry(data_base64=base64.b64encode(data).decode("ascii"), desc=desc, tags="", group=group)
 
 
 class TestGroupThroughEntry:

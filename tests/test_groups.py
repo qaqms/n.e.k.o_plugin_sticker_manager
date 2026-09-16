@@ -30,9 +30,7 @@ def _plugin(tmp_path, *, send: SendSettings | None = None):
         config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
     )
     plugin, _host = build_plugin(host)
-    plugin._settings = StickerManagerSettings(
-        enabled=True, send=send or SendSettings(), storage=StorageSettings()
-    )
+    plugin._settings = StickerManagerSettings(enabled=True, send=send or SendSettings(), storage=StorageSettings())
     return plugin
 
 

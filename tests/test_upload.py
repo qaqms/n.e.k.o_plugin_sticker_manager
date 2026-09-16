@@ -56,10 +56,15 @@ class TestUploadSession:
                 "version": 2,
                 "app": "sticker_manager",
                 "stickers": [
-                    {"file": "a.png", "desc": "甲", "tags": ["测试"], "group": "上传组",
-                     "caption": "梗义甲", "visible_text": ""},
-                    {"file": "b.png", "desc": "乙", "tags": [], "group": "",
-                     "caption": "", "visible_text": ""},
+                    {
+                        "file": "a.png",
+                        "desc": "甲",
+                        "tags": ["测试"],
+                        "group": "上传组",
+                        "caption": "梗义甲",
+                        "visible_text": "",
+                    },
+                    {"file": "b.png", "desc": "乙", "tags": [], "group": "", "caption": "", "visible_text": ""},
                 ],
             },
         )
@@ -152,11 +157,25 @@ class TestUploadEntries:
         assert str(run_async(plugin.import_upload_start_entry(name="a.png")).error) == "upload_not_zip"
         assert str(run_async(plugin.import_upload_start_entry()).error) == "upload_not_zip"
         assert str(run_async(plugin.import_upload_chunk_entry(session="x", seq=0, data_base64="!!!")).error) in {
-            "upload_chunk_bad", "upload_session_unknown",
+            "upload_chunk_bad",
+            "upload_session_unknown",
         }
-        assert str(run_async(plugin.import_upload_chunk_entry(session="", seq=0, data_base64="AAA=")).error) == "upload_session_unknown"
-        assert str(run_async(plugin.import_upload_chunk_entry(session="s", seq="0", data_base64="AAA=")).error) == "upload_seq_gap"
-        assert str(run_async(plugin.import_upload_chunk_entry(session="s", seq=0, data_base64="A" * (4 * 1024 * 1024 + 4))).error) == "upload_too_large"
+        assert (
+            str(run_async(plugin.import_upload_chunk_entry(session="", seq=0, data_base64="AAA=")).error)
+            == "upload_session_unknown"
+        )
+        assert (
+            str(run_async(plugin.import_upload_chunk_entry(session="s", seq="0", data_base64="AAA=")).error)
+            == "upload_seq_gap"
+        )
+        assert (
+            str(
+                run_async(
+                    plugin.import_upload_chunk_entry(session="s", seq=0, data_base64="A" * (4 * 1024 * 1024 + 4))
+                ).error
+            )
+            == "upload_too_large"
+        )
         assert str(run_async(plugin.import_upload_finish_entry(session="ghost")).error) == "upload_session_unknown"
 
     def test_session_isolated_per_library_instance(self, tmp_path):

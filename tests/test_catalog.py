@@ -103,11 +103,17 @@ class TestStickerRecord:
     def test_from_dict_survives_poisoned_numbers(self):
         # v0.6.0 承诺：手改坏的时间戳/计数只能丢自己的值（回 0），不能把整本库打成不可加载
         # （load() 的条目循环没有逐条 try——宽松尺必须在 from_dict 内兑现）。
-        poisoned = Sticker.from_dict({
-            "id": "a", "file": "a.png", "desc": "笑",
-            "added_at": "abc", "use_count": [3], "last_used_at": "nan",
-            "sha256": None,
-        })
+        poisoned = Sticker.from_dict(
+            {
+                "id": "a",
+                "file": "a.png",
+                "desc": "笑",
+                "added_at": "abc",
+                "use_count": [3],
+                "last_used_at": "nan",
+                "sha256": None,
+            }
+        )
         assert poisoned is not None
         assert poisoned.added_at == 0.0 and poisoned.use_count == 0
         assert poisoned.last_used_at == 0.0 and poisoned.sha256 == ""
@@ -131,8 +137,14 @@ class TestStickerRecord:
 
 def _s(sid: str, desc: str, tags=(), disabled=False, uses=0, last=0.0) -> Sticker:
     return Sticker(
-        id=sid, file=f"{sid}.png", desc=desc, tags=list(tags),
-        disabled=disabled, added_at=time.time(), use_count=uses, last_used_at=last,
+        id=sid,
+        file=f"{sid}.png",
+        desc=desc,
+        tags=list(tags),
+        disabled=disabled,
+        added_at=time.time(),
+        use_count=uses,
+        last_used_at=last,
     )
 
 
@@ -177,8 +189,13 @@ class TestSearch:
 
 def _sc(sid: str, desc: str, *, caption="", group="", tags=(), visible="") -> Sticker:
     return Sticker(
-        id=sid, file=f"{sid}.png", desc=desc,
-        caption=caption, group=group, tags=list(tags), visible_text=visible,
+        id=sid,
+        file=f"{sid}.png",
+        desc=desc,
+        caption=caption,
+        group=group,
+        tags=list(tags),
+        visible_text=visible,
     )
 
 
@@ -191,7 +208,7 @@ class TestSearchSemanticFields:
             _sc("c1", "猫图", caption="开心到飞起后的自得"),
             _sc("g1", "某图", group="开心"),  # 套图名**精确**命中（58=子串命中会排标签后，不同层）
             _sc("t1", "另一图", tags=["开心"]),
-            _sc("v1", "静图", visible="看了就开心") ,
+            _sc("v1", "静图", visible="看了就开心"),
         ]
 
     def test_desc_beats_caption(self):
@@ -257,9 +274,7 @@ class TestSemanticFields:
     """v0.3.0 轮 A：caption（梗义）/ visible_text（图内原文）的数据层契约。"""
 
     def test_roundtrip_with_caption(self):
-        sticker = Sticker(
-            id="abc", file="abc.png", desc="笑", caption="被催很久终于交差", visible_text="就这？"
-        )
+        sticker = Sticker(id="abc", file="abc.png", desc="笑", caption="被催很久终于交差", visible_text="就这？")
         assert Sticker.from_dict(sticker.as_dict()) == sticker
 
     def test_legacy_dict_without_new_keys(self):

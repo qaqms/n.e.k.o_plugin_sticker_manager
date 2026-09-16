@@ -445,7 +445,10 @@ class StickerManagerPlugin(NekoPluginBase):
             "type": "object",
             "properties": {
                 "group": {"type": "string", "description": tr("fields.group_name", default="分组名（须已有图在用）")},
-                "desc": {"type": "string", "description": tr("fields.group_desc", default="什么时候用这一组（≤300字）")},
+                "desc": {
+                    "type": "string",
+                    "description": tr("fields.group_desc", default="什么时候用这一组（≤300字）"),
+                },
             },
             "required": ["group"],
             "additionalProperties": False,
@@ -488,10 +491,20 @@ class StickerManagerPlugin(NekoPluginBase):
         input_schema={
             "type": "object",
             "properties": {
-                "ids": {"type": "array", "items": {"type": "string"}, "description": tr("fields.ids", default="表情 id 列表（≤200）")},
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": tr("fields.ids", default="表情 id 列表（≤200）"),
+                },
                 "tags_add": {"type": "string", "description": tr("fields.tags_add", default="要加的标签，逗号分隔")},
-                "tags_remove": {"type": "string", "description": tr("fields.tags_remove", default="要删的标签，逗号分隔")},
-                "group": {"type": "string", "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）")},
+                "tags_remove": {
+                    "type": "string",
+                    "description": tr("fields.tags_remove", default="要删的标签，逗号分隔"),
+                },
+                "group": {
+                    "type": "string",
+                    "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）"),
+                },
                 "disabled": {"type": "boolean", "description": tr("fields.disabled", default="禁用/启用")},
             },
             "required": ["ids"],
@@ -563,7 +576,11 @@ class StickerManagerPlugin(NekoPluginBase):
         input_schema={
             "type": "object",
             "properties": {
-                "ids": {"type": "array", "items": {"type": "string"}, "description": tr("fields.ids", default="表情 id 列表（≤200）")},
+                "ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": tr("fields.ids", default="表情 id 列表（≤200）"),
+                },
             },
             "required": ["ids"],
             "additionalProperties": False,
@@ -827,7 +844,7 @@ class StickerManagerPlugin(NekoPluginBase):
     # ------------------------------------------------------------------
     # 面板选择文件直传（v0.6.0）：zip 分块上传会话三步曲。
     # 为什么不走单 entry 整块 base64：控制面板的 ZeroMQ 帧上限呰不下套图包
-    #（见 core.catalog UPLOAD_CHUNK_BYTES 注释）；为什么不只修面板：服务层
+    # （见 core.catalog UPLOAD_CHUNK_BYTES 注释）；为什么不只修面板：服务层
     # 需要逐块把关总量/乱序/会话寿命，这些纪律只能长在服务端。
     # 模型不需要这三个入口（它发图走 sticker_send，不搬运文件），但 entry 面
     # 就是面板/命令面板的 RPC 面，照旧双装饰。
@@ -850,7 +867,10 @@ class StickerManagerPlugin(NekoPluginBase):
             "type": "object",
             "properties": {
                 "name": {"type": "string", "description": tr("fields.upload_name", default="文件名（须以 .zip 结尾）")},
-                "size": {"type": "integer", "description": tr("fields.upload_size", default="总字节数（仅用于提前拒绝明显超限）")},
+                "size": {
+                    "type": "integer",
+                    "description": tr("fields.upload_size", default="总字节数（仅用于提前拒绝明显超限）"),
+                },
             },
             "required": ["name"],
         },
@@ -881,7 +901,10 @@ class StickerManagerPlugin(NekoPluginBase):
             "properties": {
                 "session": {"type": "string", "description": tr("fields.upload_session", default="上传会话 id")},
                 "seq": {"type": "integer", "description": tr("fields.upload_seq", default="分块序号（从 0 连续）")},
-                "data_base64": {"type": "string", "description": tr("fields.upload_chunk_base64", default="本块 base64（原始体≤chunk_bytes）")},
+                "data_base64": {
+                    "type": "string",
+                    "description": tr("fields.upload_chunk_base64", default="本块 base64（原始体≤chunk_bytes）"),
+                },
             },
             "required": ["session", "seq", "data_base64"],
         },
@@ -925,8 +948,14 @@ class StickerManagerPlugin(NekoPluginBase):
             "type": "object",
             "properties": {
                 "session": {"type": "string", "description": tr("fields.upload_session", default="上传会话 id")},
-                "tags": {"type": "string", "description": tr("fields.tags", default="标签，逗号分隔（可选，整批共用）")},
-                "group": {"type": "string", "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）")},
+                "tags": {
+                    "type": "string",
+                    "description": tr("fields.tags", default="标签，逗号分隔（可选，整批共用）"),
+                },
+                "group": {
+                    "type": "string",
+                    "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）"),
+                },
             },
             "required": ["session"],
         },
@@ -937,9 +966,7 @@ class StickerManagerPlugin(NekoPluginBase):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
-        summary, error = self._library.upload_finish(
-            session, tags=parse_tags_field(tags), group=normalize_group(group)
-        )
+        summary, error = self._library.upload_finish(session, tags=parse_tags_field(tags), group=normalize_group(group))
         if error:
             return Err(SdkError(error))
         return Ok({"note": "pack_uploaded", **summary})
@@ -1099,7 +1126,11 @@ class StickerManagerPlugin(NekoPluginBase):
             pool = search_stickers([s for s in all_stickers if s.group == matched[0]], query, include_disabled=False)
             catalog = format_catalog_for_model(pool, limit, descs)
             header = f"「{matched[0]}」" + (f"：{descs[matched[0]]}" if descs.get(matched[0]) else "")
-            return {"ok": True, "count": pool and len(pool) or 0, "catalog": f"{header}\n{catalog}" if catalog else header}
+            return {
+                "ok": True,
+                "count": pool and len(pool) or 0,
+                "catalog": f"{header}\n{catalog}" if catalog else header,
+            }
         pool = search_stickers(all_stickers, query if isinstance(query, str) else "", include_disabled=False)
         catalog = format_catalog_for_model(pool, limit, descs)
         if not catalog:
@@ -1125,7 +1156,10 @@ class StickerManagerPlugin(NekoPluginBase):
             "properties": {
                 "sticker_id": {"type": "string", "description": "表情包的 id（首选）"},
                 "query": {"type": "string", "description": "没有 id 时给关键词（想表达的态度/场景，会按梗义筛）"},
-                "group": {"type": "string", "description": "只给套图分组名：组内随机选一张（适合“这组调性对，具体哪张你定”）"},
+                "group": {
+                    "type": "string",
+                    "description": "只给套图分组名：组内随机选一张（适合“这组调性对，具体哪张你定”）",
+                },
                 "force": {
                     "type": "boolean",
                     "description": "仅当主人明确点名要再看/再发这张时置 true：跳过最近不重复与概率闸（冷却仍生效）",

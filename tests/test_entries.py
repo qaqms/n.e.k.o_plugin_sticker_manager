@@ -22,9 +22,7 @@ def _make(tmp_path, *, enabled=True):
         config=FakeConfig(data={"sticker_manager": {"enabled": enabled}}),
     )
     plugin, host = build_plugin(host)
-    settings = StickerManagerSettings(
-        enabled=enabled, send=SendSettings(), storage=StorageSettings()
-    )
+    settings = StickerManagerSettings(enabled=enabled, send=SendSettings(), storage=StorageSettings())
     plugin._settings = settings
     return plugin, host
 
@@ -34,9 +32,7 @@ def _ctx(lanlan: str) -> dict:
 
 
 async def _add(plugin, desc="笑", tags="开心,猫", data=PNG_BYTES):
-    return await plugin.add_entry(
-        data_base64=base64.b64encode(data).decode("ascii"), desc=desc, tags=tags
-    )
+    return await plugin.add_entry(data_base64=base64.b64encode(data).decode("ascii"), desc=desc, tags=tags)
 
 
 class TestAddEntry:
@@ -71,9 +67,7 @@ class TestAddEntry:
 
     def test_rejects_undecodable_base64(self, tmp_path, run_async):
         plugin, _host = _make(tmp_path)
-        result = run_async(
-            plugin.add_entry(data_base64="\x00not base64 at all!!", desc="坏", tags="")
-        )
+        result = run_async(plugin.add_entry(data_base64="\x00not base64 at all!!", desc="坏", tags=""))
         assert not result.is_ok()
         assert str(result.error) == "image_undecodable"
 
@@ -372,7 +366,6 @@ class TestPreviewChunks:
         for junk in (-5, "3", True, None):
             result = run_async(plugin.preview_entry(id=sid, offset=junk))
             assert result.is_ok() and result.value["offset"] == 0
-
 
 
 class TestCaptionFields:

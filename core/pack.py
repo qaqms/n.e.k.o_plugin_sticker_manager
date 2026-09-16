@@ -92,7 +92,9 @@ def pack_entry_from_raw(raw: Any) -> PackEntry | None:
     desc, desc_error = validate_desc(raw.get("desc"))
     if desc_error:
         desc = desc_from_filename(member)
-    digest = raw.get("sha256")  # 局部变量收窄：三元里双调 raw.get(...) 静态侧钉不住类型（同 Sticker.from_dict 的 sha 处理）
+    digest = raw.get(
+        "sha256"
+    )  # 局部变量收窄：三元里双调 raw.get(...) 静态侧钉不住类型（同 Sticker.from_dict 的 sha 处理）
     return PackEntry(
         file=member,
         desc=desc,
@@ -134,11 +136,7 @@ def parse_manifest_groups(raw: Any) -> dict[str, str]:
     if isinstance(listed, Mapping):
         pairs = list(listed.items())
     elif isinstance(listed, Iterable) and not isinstance(listed, (str, bytes)):
-        pairs = [
-            (item.get("name"), item.get("desc"))
-            for item in listed
-            if isinstance(item, Mapping)
-        ]
+        pairs = [(item.get("name"), item.get("desc")) for item in listed if isinstance(item, Mapping)]
     else:
         return {}
     for name, desc in pairs:
@@ -166,9 +164,7 @@ def sticker_to_manifest_entry(sticker: Sticker) -> dict[str, Any]:
     }
 
 
-def build_manifest(
-    stickers: Iterable[Sticker], groups: Mapping[str, str] | None = None
-) -> dict[str, Any]:
+def build_manifest(stickers: Iterable[Sticker], groups: Mapping[str, str] | None = None) -> dict[str, Any]:
     """导出包的 manifest.json 形状（轮 F 起随包携带分组说明）。"""
     payload: dict[str, Any] = {
         "version": PACK_MANIFEST_VERSION,
@@ -176,7 +172,5 @@ def build_manifest(
         "stickers": [sticker_to_manifest_entry(s) for s in stickers],
     }
     if groups:
-        payload["groups"] = [
-            {"name": name, "desc": desc} for name, desc in sorted(groups.items()) if desc
-        ]
+        payload["groups"] = [{"name": name, "desc": desc} for name, desc in sorted(groups.items()) if desc]
     return payload
