@@ -161,12 +161,17 @@ function dataUrlToBase64(value: string): string {
   return comma >= 0 ? value.slice(comma + 1) : value;
 }
 
+// 长任务（导入/导出/套图包收尾）服务端 timeout=120s，但宿主桥接客户端默认只等 30s
+//（runtime.js 实测）——不对齐的话大包导入服务端在继续、面板先报假失败。这些调用显式传 opts。
+const LONG_CALL = { timeoutMs: 120000 };
+
 async function callAction(
   surface: Surface,
   actionId: string,
   args: Record<string, unknown>,
+  options?: { timeoutMs?: number },
 ): Promise<any> {
-  const envelope = await surface.api.call(actionId, args);
+  const envelope = await surface.api.call(actionId, args, options);
   return envelope ? envelope.result : null;
 }
 
@@ -734,7 +739,7 @@ export default function Panel(props: Surface) {
   const exportPack = async () => {
     setLibraryNote("");
     try {
-      const result = await callAction(props, "export_pack", {});
+      const result = await callAction(props, "export_pack", {}, LONG_CALL);
       if (result) {
         setLibraryNote(
           t("panel.export.done", {
@@ -808,7 +813,7 @@ export default function Panel(props: Surface) {
   const importInbox = async () => {
     setLibraryNote("");
     try {
-      const result = await callAction(props, "import_inbox", {});
+      const result = await callAction(props, "import_inbox", {}, LONG_CALL);
       if (result) {
         setLibraryNote(
           t("panel.inbox.done", {
@@ -879,7 +884,12 @@ export default function Panel(props: Surface) {
           }),
         );
       }
-      const fin = await callAction(props, "import_upload_finish", { session: sid });
+      const fin = await callAction(
+        props,
+        "import_upload_finish",
+        { session: sid },
+        LONG_CALL,
+      );
       if (fin) {
         setLibraryNote(
           t("panel.upload.done", {
