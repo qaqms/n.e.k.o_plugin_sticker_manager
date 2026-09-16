@@ -15,12 +15,10 @@ import {
   EmptyState,
   Field,
   Grid,
-  ImagePreview,
   ImageUpload,
   Input,
   Inline,
   KeyValue,
-  Modal,
   Page,
   ScrollArea,
   Stack,
@@ -142,10 +140,7 @@ function queuePreview(task: () => Promise<void>) {
 const tileHandlers: Map<any, () => void> = new Map();
 let sharedObserver: any = null;
 
-function observePreview(
-  el: any,
-  enter: () => void,
-): () => void {
+function observePreview(el: any, enter: () => void): () => void {
   const Ctor: any = (globalThis as any).IntersectionObserver;
   if (!Ctor || !el) {
     queuePreview(async () => {
@@ -154,19 +149,22 @@ function observePreview(
     return () => {};
   }
   if (!sharedObserver) {
-    sharedObserver = new Ctor((entries: any[]) => {
-      entries.forEach((entry) => {
-        if (!entry.isIntersecting) {
-          return;
-        }
-        const handler = tileHandlers.get(entry.target);
-        if (handler) {
-          tileHandlers.delete(entry.target);
-          sharedObserver.unobserve(entry.target);
-          handler();
-        }
-      });
-    }, { rootMargin: "240px 0px" });
+    sharedObserver = new Ctor(
+      (entries: any[]) => {
+        entries.forEach((entry) => {
+          if (!entry.isIntersecting) {
+            return;
+          }
+          const handler = tileHandlers.get(entry.target);
+          if (handler) {
+            tileHandlers.delete(entry.target);
+            sharedObserver.unobserve(entry.target);
+            handler();
+          }
+        });
+      },
+      { rootMargin: "240px 0px" },
+    );
   }
   tileHandlers.set(el, enter);
   sharedObserver.observe(el);
@@ -250,116 +248,95 @@ async function callAction(
   return envelope ? envelope.result : null;
 }
 
+// 预览取图（格子与聚焦卡共用一把尺）：同一分段协议、同一缓存、同一并发限。
+// 单张预览是分段的串行调用（宿主回包单帧上限≈4.56MiB，实机超时钉的坑）；
+// 循环有护栏，坏协议不许无限转；失败记空串，避免坏图重试风暴。
+function useStickerPreview(surface: Surface, id: string, auto: boolean) {
+  const [preview, setPreview] = useState<string>(previewCache[id] || "");
+  const [loading, setLoading] = useState<boolean>(previewCache[id] === undefined);
+  const boxRef = useRef<any>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setPreview(previewCache[id] || "");
+    setLoading(previewCache[id] === undefined);
+    if (previewCache[id] !== undefined) {
+      return undefined;
+    }
+    const load = async (): Promise<void> => {
+      let dataUrl = "";
+      try {
+        let offset = 0;
+        let mime = "";
+        const parts: string[] = [];
+        for (let guard = 0; guard < 16; guard += 1) {
+          const result = await callAction(surface, "preview", {
+            id: id,
+            offset: offset,
+          });
+          if (!result) {
+            break;
+          }
+          mime = String(result.mime || mime);
+          parts.push(String(result.chunk_base64 || ""));
+          if (result.done) {
+            dataUrl = `data:${mime};base64,${parts.join("")}`;
+            break;
+          }
+          const next = Number(result.next_offset || 0);
+          if (next <= offset) {
+            break; // 协议不推进：当作坏图，不原地踏步
+          }
+          offset = next;
+        }
+      } catch {
+        dataUrl = "";
+      }
+      previewCache[id] = dataUrl;
+      if (alive) {
+        setPreview(dataUrl);
+        setLoading(false);
+      }
+    };
+    if (auto) {
+      // 聚焦卡开在眼前：直接排队拉，不必等视口观察。
+      queuePreview(load);
+      return () => {
+        alive = false;
+      };
+    }
+    // 墙上的格子：滚进视口（提前 240px）才排队；排队期间被卸载也无碍——load 幂等。
+    const stop = observePreview(boxRef.current, () => {
+      queuePreview(load);
+    });
+    return () => {
+      alive = false;
+      stop();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  return { preview, loading, boxRef };
+}
+
+// 格子：纯图方块（v0.9.1 修正：scale-down 只缩不放——160px 小图塞 360px 大格
+// 被放大糊脸，就是"拉伸感"的真凶）。左上角勾选框是唯一的体外控件；
+// 点击=在墙上方展开聚焦卡（弹窗形态见 FocusCard 注释：kit Modal 在宿主里是平台级残废）。
 function StickerTile(props: {
   key?: string;
   row: StickerRow;
   surface: Surface;
   selected?: boolean;
   onToggleSelect?: () => void;
+  onOpen?: () => void;
 }) {
   const row = props.row;
-  const surface = props.surface;
-  const t = surface.t;
-  const confirm = useConfirm();
-  const [preview, setPreview] = useState<string>(previewCache[row.id] || "");
-  const [loading, setLoading] = useState<boolean>(
-    previewCache[row.id] === undefined,
+  const t = props.surface.t;
+  const { preview, loading, boxRef } = useStickerPreview(
+    props.surface,
+    row.id,
+    false,
   );
-  const [note, setNote] = useState("");
-  const [detail, setDetail] = useState<boolean>(false);
-  const [editing, setEditing] = useState<boolean>(false);
-  const [editDesc, setEditDesc] = useState<string>(row.desc || "");
-  const [editTags, setEditTags] = useState<string>((row.tags || []).join(","));
-  const [editGroup, setEditGroup] = useState<string>(row.group || "");
-  const [editCaption, setEditCaption] = useState<string>(row.caption || "");
-  const [editVisible, setEditVisible] = useState<string>(
-    row.visible_text || "",
-  );
-
-  const loadPreview = async (): Promise<void> => {
-    if (previewCache[row.id] !== undefined) {
-      setPreview(previewCache[row.id]);
-      setLoading(false);
-      return;
-    }
-    let dataUrl = "";
-    try {
-      // 分段拉取拼回 dataUrl：宿主 entry 回包单帧上限≈4.56MiB，整张大图会被
-      // 传输层拒发（实机超时钉的坑）。循环有护栏，坏协议不许无限转。
-      let offset = 0;
-      let mime = "";
-      const parts: string[] = [];
-      for (let guard = 0; guard < 16; guard += 1) {
-        const result = await callAction(surface, "preview", {
-          id: row.id,
-          offset: offset,
-        });
-        if (!result) {
-          break;
-        }
-        mime = String(result.mime || mime);
-        parts.push(String(result.chunk_base64 || ""));
-        if (result.done) {
-          dataUrl = `data:${mime};base64,${parts.join("")}`;
-          break;
-        }
-        const next = Number(result.next_offset || 0);
-        if (next <= offset) {
-          break; // 协议不推进：当作坏图，不原地踏步
-        }
-        offset = next;
-      }
-    } catch {
-      dataUrl = "";
-    }
-    previewCache[row.id] = dataUrl;
-    setPreview(dataUrl);
-    setLoading(false);
-  };
-
-  // 滚进视口（提前 240px）才排队拉图；排队期间被卸载/移出也无碍——load 自己幂等。
-  const boxRef = useRef<any>(null);
-  useEffect(() => {
-    if (previewCache[row.id] !== undefined) {
-      setPreview(previewCache[row.id]);
-      setLoading(false);
-      return undefined;
-    }
-    const stop = observePreview(boxRef.current, () => {
-      queuePreview(loadPreview);
-    });
-    return stop;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  const run = async (actionId: string, args: Record<string, unknown>) => {
-    setNote("");
-    try {
-      await callAction(surface, actionId, args);
-      await surface.api.refresh();
-    } catch (error) {
-      // 错误码是稳定 ASCII（契约见 DESIGN.md）：能翻的翻，翻不动直出码。
-      // 只 console.warn 等于静默吞掉——send_cooldown 这类实机反馈要求看得见。
-      console.warn("sticker_manager action failed", actionId, error);
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      const code = extractCode(raw);
-      setNote(t(`panel.error.${code}`, { defaultValue: code }));
-    }
-  };
-
-  const remove = async () => {
-    const answer = await confirm({
-      title: t("panel.remove.title", { defaultValue: "删除表情包" }),
-      message: t("panel.remove.message", {
-        defaultValue: "这张图和它的记录都会被删掉，不可恢复。",
-      }),
-      tone: "danger",
-    });
-    if (answer) {
-      await run("remove", { id: row.id });
-    }
-  };
 
   const tileBox = (extra: Record<string, unknown>) => {
     const base: Record<string, unknown> = {
@@ -388,281 +365,362 @@ function StickerTile(props: {
   };
 
   return (
-    <Stack gap={6}>
-      <div
-        ref={boxRef}
-        style={tileBox(
-          props.selected
-            ? { border: "2px solid rgba(80, 160, 255, 0.9)" }
-            : {},
-        )}
-        onClick={() => {
-          setDetail(true);
-        }}
-      >
-        {preview ? (
-          <img
-            src={preview}
-            alt={row.desc || row.id}
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-              display: "block",
-            }}
-          />
-        ) : null}
-        {!preview && loading ? (
-          <div style={centerBox}>
-            {t("panel.tile.loading", { defaultValue: "加载中…" })}
-          </div>
-        ) : null}
-        {!preview && !loading ? (
-          <div style={centerBox}>
-            {t("panel.tile.failed", { defaultValue: "图不可用" })}
-          </div>
-        ) : null}
-        {row.disabled ? (
-          <div
-            style={{
-              position: "absolute",
-              top: 0,
-              left: 0,
-              right: 0,
-              bottom: 0,
-              background: "rgba(20, 20, 20, 0.55)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <StatusBadge
-              tone="warning"
-              label={t("panel.badge.disabled", { defaultValue: "已禁用" })}
-            />
-          </div>
-        ) : null}
+    <div
+      ref={boxRef}
+      style={tileBox(
+        props.selected ? { border: "2px solid rgba(80, 160, 255, 0.9)" } : {},
+      )}
+      onClick={() => {
+        if (props.onOpen) {
+          props.onOpen();
+        }
+      }}
+    >
+      {preview ? (
+        <img
+          src={preview}
+          alt={row.desc || row.id}
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "scale-down",
+            display: "block",
+          }}
+        />
+      ) : null}
+      {!preview && loading ? (
+        <div style={centerBox}>
+          {t("panel.tile.loading", { defaultValue: "加载中…" })}
+        </div>
+      ) : null}
+      {!preview && !loading ? (
+        <div style={centerBox}>
+          {t("panel.tile.failed", { defaultValue: "图不可用" })}
+        </div>
+      ) : null}
+      {row.disabled ? (
         <div
           style={{
             position: "absolute",
-            top: 3,
-            left: 3,
-            background: "rgba(255, 255, 255, 0.85)",
-            borderRadius: 4,
-            padding: "1px 3px",
-            lineHeight: 1,
-          }}
-          onClick={(event: any) => {
-            event.stopPropagation();
-            if (props.onToggleSelect) {
-              props.onToggleSelect();
-            }
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: "rgba(20, 20, 20, 0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
           }}
         >
-          <input type="checkbox" checked={!!props.selected} readOnly />
-        </div>
-      </div>
-      {note && !detail ? <Alert tone="danger" message={note} /> : null}
-      <Modal
-        open={detail}
-        title={row.caption || row.desc || row.id}
-        onClose={() => {
-          setDetail(false);
-        }}
-      >
-        <Stack gap={10}>
-          <div style={{ maxWidth: 360 }}>
-            {preview ? (
-              <ImagePreview src={preview} alt={row.desc || row.id} />
-            ) : (
-              <Text>
-                {loading
-                  ? t("panel.tile.loading", { defaultValue: "加载中…" })
-                  : t("panel.tile.failed", { defaultValue: "图不可用" })}
-              </Text>
-            )}
-          </div>
-          <KeyValue
-            items={[
-              { key: "id", label: "id", value: row.id },
-              {
-                key: "desc",
-                label: t("panel.detail.desc", { defaultValue: "描述" }),
-                value: row.desc || "—",
-              },
-              {
-                key: "caption",
-                label: t("panel.detail.caption", { defaultValue: "梗义" }),
-                value: row.caption || "—",
-              },
-              {
-                key: "visible",
-                label: t("panel.detail.visible", { defaultValue: "图内原文" }),
-                value: row.visible_text || "—",
-              },
-              {
-                key: "group",
-                label: t("panel.detail.group", { defaultValue: "分组" }),
-                value: row.group || "—",
-              },
-              {
-                key: "tags",
-                label: t("panel.detail.tags", { defaultValue: "标签" }),
-                value: (row.tags || []).join(" / ") || "—",
-              },
-              {
-                key: "uses",
-                label: t("panel.thumb.uses", { defaultValue: "发出次数" }),
-                value: String(row.use_count || 0),
-              },
-              {
-                key: "last",
-                label: t("panel.thumb.last", { defaultValue: "最近发出" }),
-                value: formatTime(row.last_used_at),
-              },
-              {
-                key: "added",
-                label: t("panel.detail.added", { defaultValue: "入库" }),
-                value: formatTime(row.added_at),
-              },
-            ]}
+          <StatusBadge
+            tone="warning"
+            label={t("panel.badge.disabled", { defaultValue: "已禁用" })}
           />
-          <Inline gap={6} wrap>
-            <Button
-              tone="success"
-              onClick={() => {
-                run("send", { id: row.id });
-              }}
-            >
-              {t("panel.action.send", { defaultValue: "发到聊天" })}
-            </Button>
-            <Button
-              tone="default"
-              onClick={() => {
-                setDetail(false);
-                setEditing(true);
-              }}
-            >
-              {t("panel.action.edit", { defaultValue: "编辑" })}
-            </Button>
-            <Button
-              tone="warning"
-              onClick={() => {
-                run("update", { id: row.id, disabled: !row.disabled });
-              }}
-            >
-              {row.disabled
-                ? t("panel.action.enable", { defaultValue: "恢复启用" })
-                : t("panel.action.disable", { defaultValue: "禁用" })}
-            </Button>
-            <Button
-              tone="danger"
-              onClick={() => {
-                remove();
-              }}
-            >
-              {t("panel.action.remove", { defaultValue: "删除" })}
-            </Button>
-          </Inline>
-          {note ? <Alert tone="danger" message={note} /> : null}
-        </Stack>
-      </Modal>
-      <Modal
-        open={editing}
-        title={t("panel.edit.title", { defaultValue: "编辑这条表情包" })}
-        onClose={() => {
-          setEditing(false);
+        </div>
+      ) : null}
+      <div
+        style={{
+          position: "absolute",
+          top: 3,
+          left: 3,
+          background: "rgba(255, 255, 255, 0.85)",
+          borderRadius: 4,
+          padding: "1px 3px",
+          lineHeight: 1,
+        }}
+        onClick={(event: any) => {
+          event.stopPropagation();
+          if (props.onToggleSelect) {
+            props.onToggleSelect();
+          }
         }}
       >
-        <Stack gap={8}>
-          <Field
-            label={t("panel.edit.desc", {
-              defaultValue: "描述（面板里的短标签）",
-            })}
-          >
-            <Input
-              value={editDesc}
-              onChange={setEditDesc}
-              placeholder={t("panel.edit.desc.ph", {
-                defaultValue: "一句话说明图里在干什么",
+        <input type="checkbox" checked={!!props.selected} readOnly />
+      </div>
+    </div>
+  );
+}
+
+// 聚焦卡（v0.9.1）：点格子后在墙上方就地展开。为什么不用弹窗——kit 的
+// .neko-page/.neko-card 都挂着 animation ... both，关键帧终帧 transform:translateY(0)
+// 被永久保留，任何 position:fixed 后代都被收进祖先包含块、再被 Card 的 overflow:hidden
+// 裁切（实机截图钉的：遮罩只压暗卡片区域、弹窗底部直接裁没）。插件侧修不动平台 CSS，
+// 所以这里零 overlay、零 fixed：大图（不放大、原尺寸封顶）+ 全属性 + 动作排，
+// 「编辑」在同一张卡里就地切表单——看做分离的语义不变，载体换硬了。
+function FocusCard(props: {
+  key?: string;
+  surface: Surface;
+  row: StickerRow;
+  onExit: () => void;
+}) {
+  const row = props.row;
+  const surface = props.surface;
+  const t = surface.t;
+  const confirm = useConfirm();
+  const { preview, loading, boxRef } = useStickerPreview(surface, row.id, true);
+  const [note, setNote] = useState("");
+  const [editing, setEditing] = useState<boolean>(false);
+  const [editDesc, setEditDesc] = useState<string>(row.desc || "");
+  const [editTags, setEditTags] = useState<string>((row.tags || []).join(","));
+  const [editGroup, setEditGroup] = useState<string>(row.group || "");
+  const [editCaption, setEditCaption] = useState<string>(row.caption || "");
+  const [editVisible, setEditVisible] = useState<string>(
+    row.visible_text || "",
+  );
+
+  const run = async (actionId: string, args: Record<string, unknown>) => {
+    setNote("");
+    try {
+      await callAction(surface, actionId, args);
+      await surface.api.refresh();
+    } catch (error) {
+      // 错误码是稳定 ASCII（契约见 DESIGN.md）：能翻的翻，翻不动直出码。
+      // 只 console.warn 等于静默吞掉——send_cooldown 这类实机反馈要求看得见。
+      console.warn("sticker_manager action failed", actionId, error);
+      const raw =
+        error instanceof Error ? error.message : String(error ?? "failed");
+      const code = extractCode(raw);
+      setNote(t(`panel.error.${code}`, { defaultValue: code }));
+    }
+  };
+
+  const remove = async () => {
+    const answer = await confirm({
+      title: t("panel.remove.title", { defaultValue: "删除表情包" }),
+      message: t("panel.remove.message", {
+        defaultValue: "这张图和它的记录都会被删掉，不可恢复。",
+      }),
+      tone: "danger",
+    });
+    if (answer) {
+      await run("remove", { id: row.id });
+      props.onExit();
+    }
+  };
+
+  return (
+    <Card
+      title={
+        (t("panel.focus.title", { defaultValue: "表情详情" }) as string) +
+        " · " +
+        (row.caption || row.desc || row.id)
+      }
+    >
+      <Stack gap={10}>
+        {editing ? (
+          <Stack gap={8}>
+            <Field
+              label={t("panel.edit.desc", {
+                defaultValue: "描述（面板里的短标签）",
               })}
-            />
-          </Field>
-          <Field
-            label={t("panel.edit.caption", {
-              defaultValue: "梗义（她选图时看到的正文；留空=清掉标注）",
-            })}
-          >
-            <Input
-              value={editCaption}
-              onChange={setEditCaption}
-              placeholder={t("panel.edit.caption.ph", {
-                defaultValue: "例：被催了很久之后终于交差，得意中带点解脱",
-              })}
-            />
-          </Field>
-          <Field
-            label={t("panel.edit.visible", {
-              defaultValue: "图内原文（只帮她搜到，不上目录）",
-            })}
-          >
-            <Input
-              value={editVisible}
-              onChange={setEditVisible}
-              placeholder={t("panel.edit.visible.ph", {
-                defaultValue: "例：就这？",
-              })}
-            />
-          </Field>
-          <Field
-            label={t("panel.edit.tags", { defaultValue: "标签（逗号分隔）" })}
-          >
-            <Input
-              value={editTags}
-              onChange={setEditTags}
-              placeholder="开心, 猫"
-            />
-          </Field>
-          <Field
-            label={t("panel.edit.group", {
-              defaultValue: "套图分组（留空=移出分组）",
-            })}
-          >
-            <Input
-              value={editGroup}
-              onChange={setEditGroup}
-              placeholder={t("panel.group.label", { defaultValue: "套图分组" })}
-            />
-          </Field>
-          <Inline gap={6}>
-            <Button
-              tone="primary"
-              onClick={() => {
-                setEditing(false);
-                run("update", {
-                  id: row.id,
-                  desc: editDesc,
-                  tags: editTags,
-                  group: editGroup,
-                  caption: editCaption,
-                  visible_text: editVisible,
-                });
-              }}
             >
-              {t("panel.edit.save", { defaultValue: "保存" })}
-            </Button>
-            <Button
-              tone="default"
-              onClick={() => {
-                setEditing(false);
-              }}
+              <Input
+                value={editDesc}
+                onChange={setEditDesc}
+                placeholder={t("panel.edit.desc.ph", {
+                  defaultValue: "一句话说明图里在干什么",
+                })}
+              />
+            </Field>
+            <Field
+              label={t("panel.edit.caption", {
+                defaultValue: "梗义（她选图时看到的正文；留空=清掉标注）",
+              })}
             >
-              {t("panel.edit.cancel", { defaultValue: "取消" })}
-            </Button>
-          </Inline>
-        </Stack>
-      </Modal>
-    </Stack>
+              <Input
+                value={editCaption}
+                onChange={setEditCaption}
+                placeholder={t("panel.edit.caption.ph", {
+                  defaultValue: "例：被催了很久之后终于交差，得意中带点解脱",
+                })}
+              />
+            </Field>
+            <Field
+              label={t("panel.edit.visible", {
+                defaultValue: "图内原文（只帮她搜到，不上目录）",
+              })}
+            >
+              <Input
+                value={editVisible}
+                onChange={setEditVisible}
+                placeholder={t("panel.edit.visible.ph", {
+                  defaultValue: "例：就这？",
+                })}
+              />
+            </Field>
+            <Field
+              label={t("panel.edit.tags", { defaultValue: "标签（逗号分隔）" })}
+            >
+              <Input value={editTags} onChange={setEditTags} placeholder="开心, 猫" />
+            </Field>
+            <Field
+              label={t("panel.edit.group", {
+                defaultValue: "套图分组（留空=移出分组）",
+              })}
+            >
+              <Input
+                value={editGroup}
+                onChange={setEditGroup}
+                placeholder={t("panel.group.label", { defaultValue: "套图分组" })}
+              />
+            </Field>
+            <Inline gap={6}>
+              <Button
+                tone="primary"
+                onClick={() => {
+                  setEditing(false);
+                  run("update", {
+                    id: row.id,
+                    desc: editDesc,
+                    tags: editTags,
+                    group: editGroup,
+                    caption: editCaption,
+                    visible_text: editVisible,
+                  });
+                }}
+              >
+                {t("panel.edit.save", { defaultValue: "保存" })}
+              </Button>
+              <Button
+                tone="default"
+                onClick={() => {
+                  setEditing(false);
+                }}
+              >
+                {t("panel.edit.cancel", { defaultValue: "取消" })}
+              </Button>
+            </Inline>
+          </Stack>
+        ) : (
+          <Stack gap={8}>
+            <Inline gap={12} align="start" wrap>
+              <div
+                ref={boxRef}
+                style={{
+                  minWidth: 140,
+                  minHeight: 140,
+                  maxWidth: 420,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  background: "rgba(128, 128, 128, 0.10)",
+                  borderRadius: 8,
+                  overflow: "hidden",
+                }}
+              >
+                {preview ? (
+                  <img
+                    src={preview}
+                    alt={row.desc || row.id}
+                    style={{ maxWidth: 420, maxHeight: 380, display: "block" }}
+                  />
+                ) : (
+                  <Text>
+                    {loading
+                      ? t("panel.tile.loading", { defaultValue: "加载中…" })
+                      : t("panel.tile.failed", { defaultValue: "图不可用" })}
+                  </Text>
+                )}
+              </div>
+              <div style={{ flex: 1, minWidth: 240 }}>
+                <KeyValue
+                  items={[
+                    { key: "id", label: "id", value: row.id },
+                    {
+                      key: "desc",
+                      label: t("panel.detail.desc", { defaultValue: "描述" }),
+                      value: row.desc || "—",
+                    },
+                    {
+                      key: "caption",
+                      label: t("panel.detail.caption", { defaultValue: "梗义" }),
+                      value: row.caption || "—",
+                    },
+                    {
+                      key: "visible",
+                      label: t("panel.detail.visible", {
+                        defaultValue: "图内原文",
+                      }),
+                      value: row.visible_text || "—",
+                    },
+                    {
+                      key: "group",
+                      label: t("panel.detail.group", { defaultValue: "分组" }),
+                      value: row.group || "—",
+                    },
+                    {
+                      key: "tags",
+                      label: t("panel.detail.tags", { defaultValue: "标签" }),
+                      value: (row.tags || []).join(" / ") || "—",
+                    },
+                    {
+                      key: "uses",
+                      label: t("panel.thumb.uses", { defaultValue: "发出次数" }),
+                      value: String(row.use_count || 0),
+                    },
+                    {
+                      key: "last",
+                      label: t("panel.thumb.last", { defaultValue: "最近发出" }),
+                      value: formatTime(row.last_used_at),
+                    },
+                    {
+                      key: "added",
+                      label: t("panel.detail.added", { defaultValue: "入库" }),
+                      value: formatTime(row.added_at),
+                    },
+                  ]}
+                />
+              </div>
+            </Inline>
+            <Inline gap={6} wrap>
+              <Button
+                tone="success"
+                onClick={() => {
+                  run("send", { id: row.id });
+                }}
+              >
+                {t("panel.action.send", { defaultValue: "发到聊天" })}
+              </Button>
+              <Button
+                tone="default"
+                onClick={() => {
+                  setEditing(true);
+                }}
+              >
+                {t("panel.action.edit", { defaultValue: "编辑" })}
+              </Button>
+              <Button
+                tone="warning"
+                onClick={() => {
+                  run("update", { id: row.id, disabled: !row.disabled });
+                }}
+              >
+                {row.disabled
+                  ? t("panel.action.enable", { defaultValue: "恢复启用" })
+                  : t("panel.action.disable", { defaultValue: "禁用" })}
+              </Button>
+              <Button
+                tone="danger"
+                onClick={() => {
+                  remove();
+                }}
+              >
+                {t("panel.action.remove", { defaultValue: "删除" })}
+              </Button>
+              <Button
+                tone="default"
+                onClick={() => {
+                  props.onExit();
+                }}
+              >
+                {t("panel.focus.back", { defaultValue: "返回墙" })}
+              </Button>
+            </Inline>
+            {note ? <Alert tone="danger" message={note} /> : null}
+          </Stack>
+        )}
+      </Stack>
+    </Card>
   );
 }
 
@@ -927,6 +985,8 @@ export default function Panel(props: Surface) {
   // 轮 G：分组说明改为就地编辑——同一时刻只开一个区块的编辑行。
   const [descEditing, setDescEditing] = useState("");
   const [descDraft, setDescDraft] = useState("");
+  // v0.9.1：详情载体是聚焦卡（库卡顶部就地展开），不是弹窗——kit Modal 在宿主里平台级残废。
+  const [focus, setFocus] = useState("");
   const confirm = useConfirm();
   const zipInputRef = useRef<any>(null);
   const [awarenessNote, setAwarenessNote] = useState("");
@@ -1282,6 +1342,10 @@ export default function Panel(props: Surface) {
       editable: false,
     });
   }
+  // 聚焦卡跟着最新库态走：被删/被筛掉就自动收起，不留幽灵卡。
+  const focusRow = focus
+    ? stickers.filter((row) => row.id === focus)[0] || null
+    : null;
 
   return (
     <Page
@@ -1610,6 +1674,16 @@ export default function Panel(props: Surface) {
               </Text>
             ) : null}
             {libraryNote ? <Text>{libraryNote}</Text> : null}
+            {focusRow ? (
+              <FocusCard
+                key={focusRow.id}
+                surface={props}
+                row={focusRow}
+                onExit={() => {
+                  setFocus("");
+                }}
+              />
+            ) : null}
             {sections.length === 0 ? (
               <EmptyState
                 title={
@@ -1707,7 +1781,14 @@ export default function Panel(props: Surface) {
                       </Button>
                     </Inline>
                   ) : null}
-                  <Grid cols={6} gap={8}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns:
+                        "repeat(auto-fill, minmax(128px, 176px))",
+                      gap: 8,
+                    }}
+                  >
                     {section.rows.map((row) => (
                       <StickerTile
                         key={row.id}
@@ -1717,9 +1798,12 @@ export default function Panel(props: Surface) {
                         onToggleSelect={() => {
                           toggleSelected(row.id);
                         }}
+                        onOpen={() => {
+                          setFocus(focus === row.id ? "" : row.id);
+                        }}
                       />
                     ))}
-                  </Grid>
+                  </div>
                 </Stack>
               ))
             )}

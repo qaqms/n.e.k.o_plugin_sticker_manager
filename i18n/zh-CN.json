@@ -221,6 +221,8 @@
   "panel.filter.empty_hint": "换个词试试，或清空搜索框。",
   "panel.tile.loading": "加载中…",
   "panel.tile.failed": "图不可用",
+  "panel.focus.title": "表情详情",
+  "panel.focus.back": "返回墙",
   "panel.detail.desc": "描述",
   "panel.detail.caption": "梗义",
   "panel.detail.visible": "图内原文",

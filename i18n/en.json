@@ -221,6 +221,8 @@
   "panel.filter.empty_hint": "Try another word, or clear the search box.",
   "panel.tile.loading": "Loading…",
   "panel.tile.failed": "Image unavailable",
+  "panel.focus.title": "Sticker detail",
+  "panel.focus.back": "Back to wall",
   "panel.detail.desc": "Description",
   "panel.detail.caption": "Meme meaning",
   "panel.detail.visible": "In-image text",
