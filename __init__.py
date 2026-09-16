@@ -436,15 +436,18 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="group_set_desc",
-        name=tr("entries.group_set_desc.name", default="给套图分组写一句说明"),
+        name=tr("entries.group_set_desc.name", default="给套图分类写一句说明"),
         description=tr(
             "entries.group_set_desc.description",
-            default="分组说明是她选图时看到的“分类目录”正文（一句“什么时候用这一组”，≤300字）；空串=清除",
+            default="分类说明是她选图时看到的“分类目录”正文（一句“什么时候用这一组”，≤300字）；空串=清掉这句话（分类本身不删，删分类用 group_remove）",
         ),
         input_schema={
             "type": "object",
             "properties": {
-                "group": {"type": "string", "description": tr("fields.group_name", default="分组名（须已有图在用）")},
+                "group": {
+                    "type": "string",
+                    "description": tr("fields.group_name", default="分类名（须已在册：建过分类或有图在用）"),
+                },
                 "desc": {
                     "type": "string",
                     "description": tr("fields.group_desc", default="什么时候用这一组（≤300字）"),
@@ -465,15 +468,102 @@ class StickerManagerPlugin(NekoPluginBase):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
-        known = {s.group for s in self._library.all() if s.group} | set(self._library.group_descs())
+        known = self._library.group_names()
         if name not in known:
-            # 只能给“存在”的组写说明：组由图带出来（add/批量移组），这里不造空组——
-            # 与外部系统的“先建分类再丢图”不同，我们的组没有目录实体，空组存不了图。
+            # 只能给“在册”的分类写说明。轮 I 之后分类可以先建后用（group_create），
+            # 但依旧不认“什么都没见过”的名字：打错一个字不许静默造出一个新分区。
             return Err(SdkError("group_not_found"))
         ok, error = self._library.set_group_desc(name, text)
         if not ok:
             return Err(SdkError(error or "group_io_error"))
         return Ok({"note": "group_desc_set", "group": name, "cleared": not text})
+
+    # ---------------------------------------------------------------
+    # 轮 I：分类优先的管理面（先立分类 → 往分类里收图 → 整间拆掉）
+    # ---------------------------------------------------------------
+
+    @ui.action(
+        id="group_create",
+        label=tr("actions.group_create.label", default="New category"),
+        tone="primary",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="group_create",
+        name=tr("entries.group_create.name", default="新建一个表情分类"),
+        description=tr(
+            "entries.group_create.description",
+            default="先立分类再收图：名字必填，说明可留空（她选图时看到的分类正文就是这句话）。空分类对她是不可见的：不进目录、不能被选去发",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "group": {"type": "string", "description": tr("fields.group_name_new", default="分类名字")},
+                "desc": {
+                    "type": "string",
+                    "description": tr("fields.group_desc", default="什么时候用这一组（≤300字）"),
+                },
+            },
+            "required": ["group"],
+            "additionalProperties": False,
+        },
+        llm_result_fields=["note", "group"],
+    )
+    async def group_create_entry(self, group: str = "", desc: str = "", **_):
+        name = normalize_group(group)
+        if not name:
+            return Err(SdkError("group_required"))
+        text, error = validate_optional_text(desc, limit=GROUP_DESC_MAX_CHARS)
+        if error:
+            return Err(SdkError("group_desc_too_long"))
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        ok, create_error = self._library.create_group(name, text)
+        if not ok:
+            return Err(SdkError(create_error or "group_io_error"))
+        return Ok({"note": "group_created", "group": name})
+
+    @ui.action(
+        id="group_remove",
+        label=tr("actions.group_remove.label", default="Delete category"),
+        tone="danger",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="group_remove",
+        name=tr("entries.group_remove.name", default="删掉一个分类（连带删它里的图）"),
+        description=tr(
+            "entries.group_remove.description",
+            default="拆掉整个分区：这个分类下的每一张图与它们的文件一起删，不可恢复（面板先把精确张数摊开再问）",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "group": {
+                    "type": "string",
+                    "description": tr("fields.group_name", default="分类名（须已在册：建过分类或有图在用）"),
+                },
+            },
+            "required": ["group"],
+            "additionalProperties": False,
+        },
+        llm_result_fields=["note", "group", "removed"],
+        # 陷阱 19 那两把尺：面板长任务走 LONG_CALL=120s，服务端同尺寸，
+        # 否则一个大分类（几百张）删到一半先被服务端抢断，面板报“操作失败”而盘上已删。
+        timeout=120.0,
+    )
+    async def group_remove_entry(self, group: str = "", **_):
+        name = normalize_group(group)
+        if not name:
+            return Err(SdkError("group_required"))
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        ok, error, removed = self._library.remove_group(name)
+        if not ok:
+            return Err(SdkError(error or "group_io_error"))
+        return Ok({"note": "group_removed", "group": name, "removed": removed})
 
     @ui.action(
         id="batch_update",

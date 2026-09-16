@@ -14,13 +14,12 @@ import {
   Divider,
   EmptyState,
   Field,
-  Grid,
-  ImageUpload,
   Input,
   Inline,
   KeyValue,
   Page,
   ScrollArea,
+  Select,
   Stack,
   StatusBadge,
   Switch,
@@ -68,12 +67,18 @@ type GroupInfo = {
   desc?: string;
 };
 
-// 轮 G：浏览主形态——一个分组一个区块（组名 + 张数 + 组说明 + 块内网格）。
+// 轮 I（分类优先）：浏览与收图都以分类为单位——一个分类一个区块，
+// 收图入口在区块头上（目标分类就是这一块）；`total` 是服务端张数（搜索会筛掉行，
+// 但删分类的确认必须摊真实的数）。
 type Section = {
   key: string;
   name: string;
   desc: string;
   rows: StickerRow[];
+  total: number;
+  // 真正的分类名（只有它能进服务端参数）：`key` 另当 React 键与“未分组”哨兵，
+  // 拿它当组名会让一叠语义建在一个字面量上（主人真给分类起名 `__none__` 就撞）。
+  group: string;
   editable: boolean;
 };
 
@@ -183,33 +188,10 @@ function extractCode(raw: string): string {
   return m ? m[0] : raw;
 }
 
-function artifactFileName(artifact: any): string {
-  const name = String((artifact && (artifact.filename || artifact.name)) || "");
-  const base = name.split(/[\\/]/).pop() || "";
-  return base
-    .replace(/\.[A-Za-z0-9]+$/, "")
-    .replace(/[_-]+/g, " ")
-    .trim();
-}
-
 // 批量通道单次上限：防一次拖几百张把插件子进程堆满 base64；超出部分如实报数。
 const MAX_BATCH_FILES = 64;
 // 与 core.catalog.MAX_STICKER_BYTES 同数（iframe 碰不到 Python，跨运行时重复）。
 const MAX_STICKER_BYTES = 8 * 1024 * 1024;
-
-// 与 core.catalog.desc_from_filename 同步修改（跨运行时的等价小函数）。
-function guessDesc(name: string): string {
-  const base =
-    String(name || "")
-      .split(/[\\/]/)
-      .pop() || "";
-  const stem = base.replace(/\.[^.]+$/, "");
-  const cleaned = stem
-    .replace(/[_\-+.]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return (cleaned || "sticker").slice(0, 200);
-}
 
 function readAsDataUrl(file: any): Promise<string> {
   return new Promise((resolve) => {
@@ -253,7 +235,9 @@ async function callAction(
 // 循环有护栏，坏协议不许无限转；失败记空串，避免坏图重试风暴。
 function useStickerPreview(surface: Surface, id: string, auto: boolean) {
   const [preview, setPreview] = useState<string>(previewCache[id] || "");
-  const [loading, setLoading] = useState<boolean>(previewCache[id] === undefined);
+  const [loading, setLoading] = useState<boolean>(
+    previewCache[id] === undefined,
+  );
   const boxRef = useRef<any>(null);
 
   useEffect(() => {
@@ -447,6 +431,26 @@ function StickerTile(props: {
 // 裁切（实机截图钉的：遮罩只压暗卡片区域、弹窗底部直接裁没）。插件侧修不动平台 CSS，
 // 所以这里零 overlay、零 fixed：大图（不放大、原尺寸封顶）+ 全属性 + 动作排，
 // 「编辑」在同一张卡里就地切表单——看做分离的语义不变，载体换硬了。
+// 轮 I：分类是**显式对象**——逐图归类只能从已有分类里挑（要新名字请先「新建分类」）。
+// 为什么不用输入框：手打一个新名字会静默立一个没说明的隐式分类，
+// 把“先分类、后收图”的模型戳穿；选项首位是空值 = 未分组（批量也能把图迁出来）。
+function categoryOptions(surface: Surface, translate: any): any[] {
+  const listed: GroupInfo[] = (surface.state && surface.state.groups) || [];
+  const options: any[] = [
+    {
+      value: "",
+      label: translate("panel.group.none", { defaultValue: "未分组" }),
+    },
+  ];
+  listed.forEach((info: GroupInfo) => {
+    const name = String((info && info.name) || "");
+    if (name) {
+      options.push({ value: name, label: name });
+    }
+  });
+  return options;
+}
+
 function FocusCard(props: {
   key?: string;
   surface: Surface;
@@ -551,17 +555,26 @@ function FocusCard(props: {
             <Field
               label={t("panel.edit.tags", { defaultValue: "标签（逗号分隔）" })}
             >
-              <Input value={editTags} onChange={setEditTags} placeholder="开心, 猫" />
+              <Input
+                value={editTags}
+                onChange={setEditTags}
+                placeholder="开心, 猫"
+              />
             </Field>
             <Field
               label={t("panel.edit.group", {
-                defaultValue: "套图分组（留空=移出分组）",
+                defaultValue:
+                  "套图分类（只能选已有的；要新名字先点「新建分类」）",
               })}
             >
-              <Input
+              <Select
                 value={editGroup}
-                onChange={setEditGroup}
-                placeholder={t("panel.group.label", { defaultValue: "套图分组" })}
+                options={categoryOptions(surface, t)}
+                onChange={(next: any) => {
+                  setEditGroup(
+                    String(next === undefined || next === null ? "" : next),
+                  );
+                }}
               />
             </Field>
             <Inline gap={6}>
@@ -633,7 +646,9 @@ function FocusCard(props: {
                     },
                     {
                       key: "caption",
-                      label: t("panel.detail.caption", { defaultValue: "梗义" }),
+                      label: t("panel.detail.caption", {
+                        defaultValue: "梗义",
+                      }),
                       value: row.caption || "—",
                     },
                     {
@@ -655,12 +670,16 @@ function FocusCard(props: {
                     },
                     {
                       key: "uses",
-                      label: t("panel.thumb.uses", { defaultValue: "发出次数" }),
+                      label: t("panel.thumb.uses", {
+                        defaultValue: "发出次数",
+                      }),
                       value: String(row.use_count || 0),
                     },
                     {
                       key: "last",
-                      label: t("panel.thumb.last", { defaultValue: "最近发出" }),
+                      label: t("panel.thumb.last", {
+                        defaultValue: "最近发出",
+                      }),
                       value: formatTime(row.last_used_at),
                     },
                     {
@@ -724,255 +743,6 @@ function FocusCard(props: {
   );
 }
 
-function AddForm(props: { surface: Surface }) {
-  const surface = props.surface;
-  const t = surface.t;
-  const [artifact, setArtifact] = useState<any>(null);
-  const [desc, setDesc] = useState("");
-  const [caption, setCaption] = useState("");
-  const [tags, setTags] = useState("");
-  const [group, setGroup] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [batchBusy, setBatchBusy] = useState(false);
-  const [batchNote, setBatchNote] = useState("");
-  // 反馈：{kind: ""|"ok"|"err", text}。重复入库（duplicate_image）等失败必须让用户看见，
-  // 只 console.warn 等于静默吞掉。
-  const [feedback, setFeedback] = useState<{ kind: string; text: string }>({
-    kind: "",
-    text: "",
-  });
-  // 用户亲手改过描述后，不再用文件名覆盖它。
-  const [descTouched, setDescTouched] = useState(false);
-
-  const pick = (next: any) => {
-    setArtifact(next);
-    if (!descTouched) {
-      const guess = artifactFileName(next);
-      if (guess) {
-        setDesc(guess);
-      }
-    }
-  };
-
-  // 批量多选：逐张走已测的 add 通道（魔数/查重/体积限制全复用），
-  // 描述取自文件名，收完在库里逐个编辑。失败按四类计数，不拼长报告。
-  const importMany = async (files: any) => {
-    const list: any[] = Array.from(files || []);
-    if (!list.length || batchBusy) {
-      return;
-    }
-    const taken = list.slice(0, MAX_BATCH_FILES);
-    setBatchBusy(true);
-    let ok = 0;
-    let dup = 0;
-    let big = 0;
-    let fail = 0;
-    for (let i = 0; i < taken.length; i += 1) {
-      const file = taken[i];
-      if (Number(file.size) > MAX_STICKER_BYTES) {
-        big += 1;
-      } else {
-        const b64 = dataUrlToBase64(await readAsDataUrl(file));
-        if (b64) {
-          try {
-            const result = await callAction(surface, "add", {
-              data_base64: b64,
-              desc: guessDesc(String(file.name || "")),
-              tags: tags,
-              group: group,
-            });
-            if (result && result.note === "sticker_added") {
-              ok += 1;
-            } else {
-              fail += 1;
-            }
-          } catch (error) {
-            const raw =
-              error instanceof Error ? error.message : String(error ?? "");
-            if (extractCode(raw) === "duplicate_image") {
-              dup += 1;
-            } else {
-              fail += 1;
-            }
-          }
-        } else {
-          fail += 1; // 空 base64：读不出内容，计失败
-        }
-      }
-      setBatchNote(
-        t("panel.batch.busy", {
-          done: i + 1,
-          total: taken.length,
-          defaultValue: "收藏中 {done}/{total}…",
-        }),
-      );
-    }
-    setBatchBusy(false);
-    await surface.api.refresh();
-    const extra = list.length - taken.length;
-    setBatchNote(
-      t("panel.batch.done", {
-        ok: ok,
-        dup: dup,
-        big: big,
-        fail: fail,
-        defaultValue:
-          "已收 {ok} · 重复跳过 {dup} · 超限略过 {big} · 失败 {fail}",
-      }) +
-        (extra > 0
-          ? t("panel.batch.more", {
-              extra: extra,
-              defaultValue: "；本次未处理 {extra} 张",
-            })
-          : ""),
-    );
-  };
-
-  const submit = async () => {
-    const dataUrl = String((artifact && artifact.dataUrl) || "");
-    if (!dataUrl) {
-      setFeedback({
-        kind: "err",
-        text: t("panel.add.need_image", { defaultValue: "先选一张图" }),
-      });
-      return;
-    }
-    // 轮 F：逐图描述不再必填（参考系统逐图零文本也能用）——不写也能收，
-    // 她靠分组说明/梗义选图；这里只拦图。
-    setBusy(true);
-    setFeedback({ kind: "", text: "" });
-    try {
-      const result = await callAction(surface, "add", {
-        data_base64: dataUrlToBase64(dataUrl),
-        desc: desc.trim(),
-        caption: caption.trim(),
-        tags: tags,
-        group: group,
-      });
-      if (result && result.note === "sticker_added") {
-        setFeedback({
-          kind: "ok",
-          text: t("panel.add.ok", { defaultValue: "已收进她的表情库" }),
-        });
-        setArtifact(null);
-        setDesc("");
-        setCaption("");
-        setTags("");
-        setGroup("");
-        setDescTouched(false);
-        await surface.api.refresh();
-      }
-    } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setFeedback({
-        kind: "err",
-        text: t("panel.add.fail", {
-          code: extractCode(raw),
-          defaultValue: "收藏失败：{code}",
-        }),
-      });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Stack gap={8}>
-      {feedback.text ? (
-        <Alert
-          tone={feedback.kind === "ok" ? "success" : "danger"}
-          message={feedback.text}
-        />
-      ) : null}
-      <Field
-        label={t("panel.add.image", {
-          defaultValue: "图片（png / jpg / gif / webp，≤8MiB）",
-        })}
-        required
-      >
-        <ImageUpload
-          value={artifact}
-          accept="image/png,image/jpeg,image/gif,image/webp"
-          maxBytes={8 * 1024 * 1024}
-          label={t("panel.add.pick", { defaultValue: "选择图片" })}
-          onChange={pick}
-        />
-      </Field>
-      <Field
-        label={t("panel.add.desc_optional", {
-          defaultValue: "描述（可选：不写也行，她靠分组说明/梗义选图）",
-        })}
-      >
-        <Input
-          value={desc}
-          onChange={(next: string) => {
-            setDescTouched(true);
-            setDesc(next);
-          }}
-          placeholder={t("panel.add.desc.ph", {
-            defaultValue: "例如：猫咪开心挥手",
-          })}
-        />
-      </Field>
-      <Field
-        label={t("panel.edit.caption", {
-          defaultValue: "梗义（她选图时看到的正文；留空=清掉标注）",
-        })}
-      >
-        <Input
-          value={caption}
-          onChange={setCaption}
-          placeholder={t("panel.edit.caption.ph", {
-            defaultValue: "例：被催了很久之后终于交差，得意中带点解脱",
-          })}
-        />
-      </Field>
-      <Field label={t("panel.edit.tags", { defaultValue: "标签（逗号分隔）" })}>
-        <Input value={tags} onChange={setTags} placeholder="开心, 猫" />
-      </Field>
-      <Field label={t("panel.group.label", { defaultValue: "套图分组" })}>
-        <Input
-          value={group}
-          onChange={setGroup}
-          placeholder={t("panel.group.ph", {
-            defaultValue: "可选，如：猫猫日常",
-          })}
-        />
-      </Field>
-      <Button
-        tone="primary"
-        disabled={busy}
-        onClick={() => {
-          submit();
-        }}
-      >
-        {busy
-          ? t("panel.add.busy", { defaultValue: "收藏中…" })
-          : t("panel.add.submit", { defaultValue: "收进表情库" })}
-      </Button>
-      <Divider />
-      <Field
-        label={t("panel.batch.label", {
-          defaultValue: "批量收藏：多选文件，文件名当描述，收完可逐个编辑",
-        })}
-      >
-        <input
-          type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp"
-          multiple
-          disabled={batchBusy}
-          onChange={(event: any) => {
-            importMany(event.target.files);
-            event.target.value = "";
-          }}
-        />
-      </Field>
-      {batchNote ? <Text>{batchNote}</Text> : null}
-    </Stack>
-  );
-}
-
 export default function Panel(props: Surface) {
   const state = props.state || {};
   const t = props.t;
@@ -982,13 +752,24 @@ export default function Panel(props: Surface) {
   const [selected, setSelected] = useState<string[]>([]);
   const [batchTags, setBatchTags] = useState("");
   const [batchGroup, setBatchGroup] = useState("");
-  // 轮 G：分组说明改为就地编辑——同一时刻只开一个区块的编辑行。
+  // 轮 G：分类说明改为就地编辑——同一时刻只开一个区块的编辑行。
   const [descEditing, setDescEditing] = useState("");
   const [descDraft, setDescDraft] = useState("");
+  // 轮 I（分类优先）：新建分类也是就地展开（同一时刻只开一个），
+  // 不用覆盖层弹窗——理由见陷阱 20（kit Modal 在宿主 iframe 里平台级残废）。
+  const [creating, setCreating] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newDesc, setNewDesc] = useState("");
+  const [collectBusy, setCollectBusy] = useState(false);
   // v0.9.1：详情载体是聚焦卡（库卡顶部就地展开），不是弹窗——kit Modal 在宿主里平台级残废。
   const [focus, setFocus] = useState("");
   const confirm = useConfirm();
   const zipInputRef = useRef<any>(null);
+  // 轮 I：全库共用**一个**隐藏图片输入框，目标分类走 ref 而不是 state——
+  // “点区块头收图→click()→onChange” 三步里 onChange 的闭包可能抓到旧 state，
+  // ref 赋值当场生效，不靠重渲染传参。
+  const imgInputRef = useRef<any>(null);
+  const collectTargetRef = useRef<string>("");
   const [awarenessNote, setAwarenessNote] = useState("");
   const stickers = state.stickers || [];
   const groups = state.groups || [];
@@ -1203,6 +984,187 @@ export default function Panel(props: Surface) {
     }
   };
 
+  // 轮 I：分类优先——先立分类（名字必填、说明可空），再往分类里收图。
+  // 逐图字段（描述/梗义/标签）不在收图时问：收完点开图在聚焦卡里补。
+  const createCategory = async () => {
+    const name = String(newName || "").trim();
+    if (!name) {
+      setLibraryNote(
+        t("panel.group.name_required", { defaultValue: "先给分类起个名字" }),
+      );
+      return;
+    }
+    setLibraryNote("");
+    try {
+      await callAction(props, "group_create", {
+        group: name,
+        desc: String(newDesc || "").trim(),
+      });
+      setLibraryNote(
+        t("panel.group.created", {
+          name: name,
+          defaultValue: "分类「{name}」已建好——点它块头的「收图」往里塞表情。",
+        }),
+      );
+      setNewName("");
+      setNewDesc("");
+      setCreating(false);
+      // 防“建完了但屏幕上看不到”：搜索词会把零张新区块筛掉（它不命中分类名），
+      // 刚建的分类应当当场就在眼前。
+      setQuery("");
+      await props.api.refresh();
+    } catch (error) {
+      const raw =
+        error instanceof Error ? error.message : String(error ?? "failed");
+      setLibraryNote(
+        t("panel.toast.failed", {
+          code: extractCode(raw),
+          defaultValue: "操作失败：{code}",
+        }),
+      );
+    }
+  };
+
+  // 删分类 = 连带删它里的图（主人拍板 1C）：确认里先把精确张数摊开。
+  const removeCategory = async (section: Section) => {
+    const answer = await confirm({
+      title: t("panel.group.delete_title", { defaultValue: "删分类" }),
+      message: section.total
+        ? t("panel.group.delete_message", {
+            name: section.name,
+            count: section.total,
+            defaultValue:
+              "将拆掉分类「{name}」，连带删它里的 {count} 张图与文件，不可恢复。",
+          })
+        : t("panel.group.delete_message_empty", {
+            name: section.name,
+            defaultValue:
+              "删掉空分类「{name}」？（它里面对她不可见，不会影哿发图）",
+          }),
+      tone: "danger",
+    });
+    if (!answer) {
+      return;
+    }
+    setLibraryNote("");
+    try {
+      const result = await callAction(
+        props,
+        "group_remove",
+        { group: section.group },
+        LONG_CALL,
+      );
+      setLibraryNote(
+        t("panel.group.delete_done", {
+          name: section.name,
+          count: (result && result.removed) ?? 0,
+          defaultValue: "已删分类「{name}」（连带 {count} 张图）",
+        }),
+      );
+      setSelected([]);
+      // 聚焦卡不需要手动收：删掉的图不在 state.stickers 里，focusRow 自然为空。
+      await props.api.refresh();
+    } catch (error) {
+      const raw =
+        error instanceof Error ? error.message : String(error ?? "failed");
+      setLibraryNote(
+        t("panel.toast.failed", {
+          code: extractCode(raw),
+          defaultValue: "操作失败：{code}",
+        }),
+      );
+    }
+  };
+
+  // 轮 I（2A）：收图分散到区块头。目标分类走 ref 传递（见 collectTargetRef 注释）；
+  // 逐张走已测的 add 通道（魔数/查重/体积尺全复用）。
+  const collectInto = (group: string) => {
+    collectTargetRef.current = group;
+    if (imgInputRef.current) {
+      imgInputRef.current.click();
+    }
+  };
+
+  const importFiles = async (files: any, group: string) => {
+    const list: any[] = Array.from(files || []);
+    if (!list.length || collectBusy) {
+      return;
+    }
+    const taken = list.slice(0, MAX_BATCH_FILES);
+    setCollectBusy(true);
+    setLibraryNote("");
+    let ok = 0;
+    let dup = 0;
+    let big = 0;
+    let fail = 0;
+    for (let i = 0; i < taken.length; i += 1) {
+      const file = taken[i];
+      if (Number(file.size) > MAX_STICKER_BYTES) {
+        big += 1;
+      } else {
+        const b64 = dataUrlToBase64(await readAsDataUrl(file));
+        if (b64) {
+          try {
+            // 收图不问逐图字段：desc 交空串，目录正文按轮 F 那把尺回落到分类说明。
+            // （不再拿文件名当描述：外部包的哈希名会把自已在目录里压到分类说明头上。）
+            const result = await callAction(props, "add", {
+              data_base64: b64,
+              desc: "",
+              group: group,
+            });
+            if (result && result.note === "sticker_added") {
+              ok += 1;
+            } else {
+              fail += 1;
+            }
+          } catch (error) {
+            const raw =
+              error instanceof Error ? error.message : String(error ?? "");
+            if (extractCode(raw) === "duplicate_image") {
+              dup += 1;
+            } else {
+              fail += 1;
+            }
+          }
+        } else {
+          fail += 1; // 空 base64：读不出内容，计失败
+        }
+      }
+      setLibraryNote(
+        t("panel.collect.busy", {
+          done: i + 1,
+          total: taken.length,
+          defaultValue: "收藏中 {done}/{total}…",
+        }),
+      );
+    }
+    setCollectBusy(false);
+    await props.api.refresh();
+    const extra = list.length - taken.length;
+    setLibraryNote(
+      t("panel.collect.done", {
+        ok: ok,
+        dup: dup,
+        big: big,
+        fail: fail,
+        defaultValue:
+          "已收 {ok} · 重复跳过 {dup} · 超限略过 {big} · 失败 {fail}",
+      }) +
+        (group
+          ? t("panel.collect.into", {
+              name: group,
+              defaultValue: "（进「{name}」）",
+            })
+          : "") +
+        (extra > 0
+          ? t("panel.batch.more", {
+              extra: extra,
+              defaultValue: "；本次未处理 {extra} 张",
+            })
+          : ""),
+    );
+  };
+
   const toggleSelected = (id: string) => {
     setSelected((previous: string[]) =>
       previous.indexOf(id) >= 0
@@ -1313,7 +1275,9 @@ export default function Panel(props: Surface) {
       .toLowerCase();
     return haystack.indexOf(term) >= 0;
   };
-  // 搜索语义对齐参考面板：组名/组说明命中→整组都在；否则只留命中的图；空区块不出现。
+  // 搜索语义：组名/组说明命中→整组都在；否则只留命中的图。
+  // **轮 I 反转 v0.8.0 的“空区块不出现”**：零张的分类必须显示（否则建完就消失，
+  // 等于没建）——但仅限“这个分类本来就没图”，搜索筛空的有图分类仍不出现。
   const sections: Section[] = [];
   groups.forEach((info) => {
     const catHit =
@@ -1322,12 +1286,15 @@ export default function Panel(props: Surface) {
     const rows = stickers.filter(
       (row) => row.group === info.name && (catHit || rowMatches(row)),
     );
-    if (rows.length) {
+    const total = info.count ?? 0;
+    if (rows.length || (catHit && !total)) {
       sections.push({
         key: info.name,
         name: info.name,
         desc: info.desc || "",
         rows,
+        total,
+        group: info.name,
         editable: true,
       });
     }
@@ -1339,6 +1306,8 @@ export default function Panel(props: Surface) {
       name: t("panel.group.none", { defaultValue: "未分组" }),
       desc: "",
       rows: ungrouped,
+      total: ungrouped.length,
+      group: "",
       editable: false,
     });
   }
@@ -1388,10 +1357,7 @@ export default function Panel(props: Surface) {
           </Inline>
         </Inline>
         <Divider />
-        <Grid cols={2} gap={12}>
-          <Card title={t("panel.card.add", { defaultValue: "收一张新表情" })}>
-            <AddForm surface={props} />
-          </Card>
+        <Stack gap={12}>
           <Card title={t("panel.card.usage", { defaultValue: "她最近用过的" })}>
             <ScrollArea height={320}>
               <DataTable
@@ -1442,7 +1408,7 @@ export default function Panel(props: Surface) {
               })}
             </Text>
           </Card>
-        </Grid>
+        </Stack>
         <Card
           title={t("panel.awareness.title", { defaultValue: "存在感注入" })}
         >
@@ -1516,6 +1482,15 @@ export default function Panel(props: Surface) {
                   defaultValue: "按描述 / 标签 / id 过滤",
                 })}
               />
+              {/* 轮 I：分类是第一等对象——先建分类，后面的区块头才有地方收图。 */}
+              <Button
+                tone="primary"
+                onClick={() => {
+                  setCreating(!creating);
+                }}
+              >
+                {t("panel.group.new_button", { defaultValue: "新建分类" })}
+              </Button>
               <Button
                 tone="primary"
                 disabled={uploading}
@@ -1573,6 +1548,76 @@ export default function Panel(props: Surface) {
                 {t("panel.repair.button", { defaultValue: "体检与修复" })}
               </Button>
             </Inline>
+            {creating ? (
+              <Stack gap={6}>
+                <Field
+                  label={t("panel.group.new_name", {
+                    defaultValue: "分类名字（必填）",
+                  })}
+                  required
+                >
+                  <Input
+                    value={newName}
+                    onChange={setNewName}
+                    placeholder={t("panel.group.new_name_ph", {
+                      defaultValue: "例如：晚安与早安",
+                    })}
+                  />
+                </Field>
+                <Field
+                  label={t("panel.group.new_desc", {
+                    defaultValue:
+                      "什么时候用这一组（可留空，之后在块头「编辑说明」补）",
+                  })}
+                >
+                  <Input
+                    value={newDesc}
+                    onChange={setNewDesc}
+                    placeholder={t("panel.group.new_desc_ph", {
+                      defaultValue: "例如：她困了、要睡了、或在装睡",
+                    })}
+                  />
+                </Field>
+                <Inline gap={6}>
+                  <Button
+                    tone="primary"
+                    onClick={() => {
+                      createCategory();
+                    }}
+                  >
+                    {t("panel.group.create_submit", {
+                      defaultValue: "创建分类",
+                    })}
+                  </Button>
+                  <Button
+                    tone="default"
+                    onClick={() => {
+                      setCreating(false);
+                      setNewName("");
+                      setNewDesc("");
+                    }}
+                  >
+                    {t("panel.group.create_cancel", { defaultValue: "取消" })}
+                  </Button>
+                </Inline>
+              </Stack>
+            ) : null}
+            {/* 全库共用一个隐藏图片输入框：区块头的「收图」只改 collectTargetRef 再 click。 */}
+            <input
+              ref={imgInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              disabled={collectBusy}
+              style={{ display: "none" }}
+              onChange={(event: any) => {
+                importFiles(
+                  event.target && event.target.files,
+                  collectTargetRef.current,
+                );
+                event.target.value = "";
+              }}
+            />
             {sections.length > 0 ? (
               // 轮 G：分类分区视图——每块「组名 · 张数 + 一句说明 + 就地操作」，
               // 一路滚下去就是她的收藏间目录。搜索时整块命中或逐图命中都支持。
@@ -1615,12 +1660,17 @@ export default function Panel(props: Surface) {
                 >
                   {t("panel.batch.remove_tags", { defaultValue: "删标签" })}
                 </Button>
-                <Input
+                <Text>
+                  {t("panel.group.pick", { defaultValue: "选已有分类" })}
+                </Text>
+                <Select
                   value={batchGroup}
-                  onChange={setBatchGroup}
-                  placeholder={t("panel.batch.group_ph", {
-                    defaultValue: "移入的分组名",
-                  })}
+                  options={categoryOptions(props, t)}
+                  onChange={(next: any) => {
+                    setBatchGroup(
+                      String(next === undefined || next === null ? "" : next),
+                    );
+                  }}
                 />
                 <Button
                   tone="default"
@@ -1628,7 +1678,7 @@ export default function Panel(props: Surface) {
                     runBatch({ group: batchGroup });
                   }}
                 >
-                  {t("panel.batch.move", { defaultValue: "移组" })}
+                  {t("panel.batch.move", { defaultValue: "移入分类" })}
                 </Button>
                 <Button
                   tone="default"
@@ -1685,27 +1735,48 @@ export default function Panel(props: Surface) {
               />
             ) : null}
             {sections.length === 0 ? (
-              <EmptyState
-                title={
-                  term
-                    ? t("panel.filter.empty_title", {
-                        defaultValue: "当前筛选没有命中",
-                      })
-                    : t("panel.empty.title", {
-                        defaultValue: "库还是空的",
-                      })
-                }
-                description={
-                  term
-                    ? t("panel.filter.empty_hint", {
-                        defaultValue: "换个词试试，或清空搜索框。",
-                      })
-                    : t("panel.empty.hint", {
-                        defaultValue:
-                          "在上方收藏第一张表情，她就能在对话里把它甩出去。",
-                      })
-                }
-              />
+              <Stack gap={8}>
+                <EmptyState
+                  title={
+                    term
+                      ? t("panel.filter.empty_title", {
+                          defaultValue: "当前筛选没有命中",
+                        })
+                      : groups.length
+                        ? t("panel.empty.title", {
+                            defaultValue: "库还是空的",
+                          })
+                        : t("panel.cat.empty_title", {
+                            defaultValue: "还没有分类",
+                          })
+                  }
+                  description={
+                    term
+                      ? t("panel.filter.empty_hint", {
+                          defaultValue: "换个词试试，或清空搜索框。",
+                        })
+                      : groups.length
+                        ? t("panel.empty.hint", {
+                            defaultValue:
+                              "点任意分类块头的「收图进这一类」，或直接用上面的套图包导入。",
+                          })
+                        : t("panel.cat.empty_hint", {
+                            defaultValue:
+                              "先建一个分类：名字必填，再补一句“什么时候用这一组”（那句话就是她选图时看到的分类正文）。有了分类，块头才有地方收图。",
+                          })
+                  }
+                />
+                {!term && !groups.length ? (
+                  <Button
+                    tone="primary"
+                    onClick={() => {
+                      setCreating(true);
+                    }}
+                  >
+                    {t("panel.group.new_button", { defaultValue: "新建分类" })}
+                  </Button>
+                ) : null}
+              </Stack>
             ) : (
               sections.map((section, index) => (
                 <Stack key={section.key} gap={8}>
@@ -1714,22 +1785,40 @@ export default function Panel(props: Surface) {
                     <Text>
                       {section.name}（{section.rows.length}）
                     </Text>
+                    {/* 轮 I（2A）：收图长在分类上——选文件即收，不再问逐图字段。 */}
                     <Button
-                      tone="default"
+                      tone="primary"
+                      disabled={collectBusy}
                       onClick={() => {
-                        selectSection(section.rows);
+                        collectInto(section.group);
                       }}
                     >
-                      {t("panel.section.select_all", {
-                        defaultValue: "全选本组",
-                      })}
+                      {collectBusy
+                        ? t("panel.collect.busy_one", {
+                            defaultValue: "收藏中…",
+                          })
+                        : t("panel.collect.button", {
+                            defaultValue: "收图进这一类",
+                          })}
                     </Button>
+                    {section.rows.length ? (
+                      <Button
+                        tone="default"
+                        onClick={() => {
+                          selectSection(section.rows);
+                        }}
+                      >
+                        {t("panel.section.select_all", {
+                          defaultValue: "全选本组",
+                        })}
+                      </Button>
+                    ) : null}
                     {section.editable ? (
                       <Button
                         tone="default"
                         onClick={() => {
                           setDescEditing(
-                            descEditing === section.key ? "" : section.key,
+                            descEditing === section.group ? "" : section.group,
                           );
                           setDescDraft(section.desc);
                         }}
@@ -1739,8 +1828,28 @@ export default function Panel(props: Surface) {
                         })}
                       </Button>
                     ) : null}
+                    {section.editable ? (
+                      <Button
+                        tone="danger"
+                        onClick={() => {
+                          removeCategory(section);
+                        }}
+                      >
+                        {t("panel.group.delete_button", {
+                          defaultValue: "删分类",
+                        })}
+                      </Button>
+                    ) : null}
                   </Inline>
-                  {section.editable && descEditing !== section.key ? (
+                  {section.total === 0 ? (
+                    <Text>
+                      {t("panel.section.empty_hint", {
+                        defaultValue:
+                          "这个分类还没有表情：点上面「收图进这一类」选文件（可多选）；想逐图写梗义，收完点开图在聚焦卡里补。",
+                      })}
+                    </Text>
+                  ) : null}
+                  {section.editable && descEditing !== section.group ? (
                     <Text>
                       {section.desc ||
                         t("panel.section.desc_hint", {
@@ -1749,7 +1858,7 @@ export default function Panel(props: Surface) {
                         })}
                     </Text>
                   ) : null}
-                  {section.editable && descEditing === section.key ? (
+                  {section.editable && descEditing === section.group ? (
                     <Inline gap={6} align="center" wrap>
                       <Input
                         value={descDraft}

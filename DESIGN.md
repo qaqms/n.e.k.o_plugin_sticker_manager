@@ -27,7 +27,7 @@
 - 表情库：`data/library/catalog.json` + `data/library/stickers/<id>.<ext>` + `data/library/usage.json`
 - 格式：png / jpg / gif / webp，**只认文件头魔数**；单张 ≤8MiB
 - 入口面：add / update / remove / send / list / preview / history / switch / repair / import_inbox（全 `@ui.action`）+ `@ui.context("dashboard")`
-- 批量导入（v0.1.2，思路参致外部系统）：面板原生 multiple 文件框逐张走 add 通道；`data/library/inbox/` 目录由 `import_inbox` 服务端整批收（描述取自文件名，成功/重复源删、超限/坏图留）
+- 批量导入（v0.1.2，思路参致外部系统）：面板原生 multiple 文件框逐张走 add 通道（**v0.10.0 轮 I 起收图不再拿文件名当描述**，描述交空串走回落尺）；`data/library/inbox/` 目录由 `import_inbox` 服务端整批收（描述取自文件名，成功/重复源删、超限/坏图留）
 - 内容指纹查重（v0.1.1）：入库记 sha256，同图回 `duplicate_image`；旧条目在查重/体检时 lazy 回填（catalog schema 不变，宽松兼容）
 - 工具面：`sticker_list`（目录）、`sticker_send`（id 或关键词）；轮 C（v0.4.0）升级：
   query 经 `resolve_send_target` 判定——最优严格唯一直发，头部并列回 top-5 候选清单
@@ -76,10 +76,11 @@
   ⑤ 批量整理：`batch_update`（加/删标签、移组、启停，缺席不改）+ `batch_remove`（面板侧确认摊精确数）；
   ⑥ manifest v3 顶层 `groups` 随包迁移，导入**只补缺不覆盖**（包不能消音主人已写的组话）。
   新码：`group_required` / `group_not_found` / `group_desc_too_long` / `batch_empty` / `batch_noop`；
-  `desc_required` 退场（不再能从 add 抬出）
+  `desc_required` 退场（不再能从 add 抬出）；轮 I（v0.10.0）补 `group_exists`
 - 面板分类分区视图（v0.8.0 轮 G，纯视图轮）：浏览主形态从 chips+平铺改成“一个分组一个区块”
   （组名·张数 + 一句说明 + 块头“全选本组/编辑说明”就地操作 + 块内网格），“未分组”也是
-  区块沉底；搜索跨区块：组名/组说明命中整组都在，否则只留命中图，空区块不出现；
+  区块沉底；搜索跨区块：组名/组说明命中整组都在，否则只留命中图，空区块不出现
+  （**“空区块不出现”已被 v0.10.0 轮 I 反转，新边界见陷阱 21**）；
   排序沿用现尺不另发明；刻意不做折叠/不加“试发本组”（主人拍板）。后端入口零变化
 - 表情墙（v0.9.0 轮 G-2 → v0.9.1 定稿，纯视图轮，主人对 v0.8.0 卡片的“表单感”反馈而做）：
   格子只露图（auto-fill 128~176px 方块墙；`object-fit: scale-down` 只缩不放——小图被
@@ -89,6 +90,24 @@
   取图共用 `useStickerPreview`（格子=IntersectionObserver 视口懒加载提前 240px、聚焦卡=
   直接排队；同缓存同全局并发尺限同时 2 张；无观察器直接排队宁多拉不漏图；alive 护栏）；
   后端入口/配置/错误码零变化
+- **分类优先（v0.10.0 轮 I，主人要求重设计分类系统而做）**：分类从“图的附带属性”升为**显式对象**：
+  ① **先立分类**——`group_create(name, desc)`（desc 可空，名字必填）。空分类能存住：
+  `catalog.json.groups` 里 `{名: ""}` = “在册但未写说明”；**`load()` 不再丢空说明**、
+  `set_group_desc("")` 不再删键（清空那句话≠拆掉这个分类，拆它只用 `group_remove`）；
+  在册名判定收敛到 `Library.group_names()`（显式 ∪ 隐式）一把尺；
+  ② **往分类里收图**——“收一张新表情”表单整块拆掉（逐图字段全归聚焦卡），收图入口下放到
+  分类块头（`add(desc="")`，**不再拿文件名当描述**——哈希名会把自己压到分类说明头上）；
+  全库共用一个隐藏 `input[type=file]`，目标分类走 ref 传递（`collectTargetRef`）；
+  ③ **拆分类 = 连带删图**（主人拍板 1C）：`group_remove(name)` → `Library.remove_group`——
+  先改内存、`save()` 成了再删文件（同 `remove()` 纪律，不留暗孤儿）；确认里摊的是
+  **服务端张数**（`section.total`），不是搜索筛过的 `rows.length`；服务端 timeout=120s 与面板
+  `LONG_CALL` 同尺（陷阱 19）；
+  ④ 逐图归类从自由输入升为 **Select（只列已有分类 + 未分组）**，聚焦卡与批量条共用
+  `categoryOptions()`——手打新名字会静默立一个没说明的隐式分类，把“先分类后收图”戳穿；
+  ⑤ 面板术语统一叫“分类”（只动面板文案；模型面目录格式 `套图：G`/【套图分类】有测试钉着，本轮不动）。
+  新码：`group_exists`（重名——含名字已被图住着的情况，那种该去「编辑说明」）；`group_not_found` 复用。
+  **不做**（主人拍板 3A）：分类改名 `group_rename`（牵动批量改写 + 说明迁移 + 台账语义，单独立轮；
+  现阶段改名 = 新建分类 + 批量移入）
 - i18n：zh-CN + en（Python `tr()` 与 TSX `t()` 键全部入文件，有门钉着）
 
 ## Out of Scope（v0.1.0 刻意不做）
@@ -121,10 +140,10 @@
    （"最近发过什么"是事实记忆不是节奏状态），重启仍生效——两个维度别"顺手统一"。
    概率判定缓存在内存（重启重掷，同冷却纪律）。
 10. ruff 门跑 `--ignore-noqa`：noqa 注释不作数，E731（lambda 赋值）这类要真的改掉。
-11. **文件名→描述清洗有两份**（`core.catalog.desc_from_filename` 与面板 `guessDesc`）：
-    iframe 碰不到 Python，这是跨运行时的必要重复不是偷懒——改规则必须两边一起改，
-    否则批量两通道入库的描述形态会分叉。同理单张上限 `MAX_STICKER_BYTES`（Python）与
-    面板同名常量两处同数。
+11. **文件名→描述清洗只剩一份**（`core.catalog.desc_from_filename`）：轮 I 之前面板还有一份
+    镜像 `guessDesc`，而收图不再拿文件名当描述（描述交空串走回落尺）后那份已删。
+    收件箱/裸包导入（服务端）仍用它。单张上限 `MAX_STICKER_BYTES`（Python）与面板同名常量
+    **仍是两处同数**（iframe 碰不到 Python，这是跨运行时的必要重复）——改规则两边一起改。
 12. **hosted TSX 里 `Array.from(x || [])` 推成 `unknown[]`**：取 `.size/.name` 直接
     tsc 报错（hosted-tsx 门真跑类型检查）——要写 `const list: any[] = Array.from(...)`。
 13. 收件箱导入的处置纪律：**成功/重复的源文件删，超限/坏图留**（删留着重试）；
@@ -169,6 +188,22 @@
     遮罩只压暗卡片区域、弹窗底部被卡片边界裁没。插件侧无权改平台 CSS（写区纪律），
     正解是换承载：**就地展开（聚焦卡）**，零 fixed 零 overlay。新入口要详情面时同此例。
     （升级 kit 修好包含块前，本约定不变；判据：在卡片里摆一个会弹的东西前先想这条。）
+
+21. **分类的两侧不对称，别“顺手统一”**（v0.10.0 轮 I）：空分类（在册、零张）**必须显示给主人、
+    必须对她隐形**。一边：面板区块与 `state.groups` 要带它出（否则建完就消失，等于没建）——
+    这把 v0.8.0 的“空区块不出现”反转了，新边界是：本来就没图的分区块在、被搜索筛空的有图
+    分区块仍不在。另一边：`format_group_overview`（她的分类目录）、`sticker_list(group=)` 与
+    `sticker_send(group=)` 的候选组名**全部只从有图的贴纸算**——她选中一个空分类就是鬼打墙
+    （目录里有它、一发回 `group_not_found`）。test_groups.py 的
+    `test_empty_category_never_reaches_her` 是这条的防回归门。
+    另记：`group_exists` 把“名字已被图住着”也算撞名（不是只查显式表），否则会出现
+    “一个名字两张卡”；隐式分类（有图无说明）与新模型共存，不强迫洗库。
+
+22. **删分类的确认数与面板筛后的数不是一回事**（v0.10.0）：`section.rows.length` 是**搜索筛过**
+    的行数，`section.total` 才是服务端报的真张数。破坏性确认只能摄 `total`——
+    否则主人搜了一个词、看到 2 张，确认“删 2 张”实际删了 30 张。
+    （同理：`Library.remove_group` 先 `save()` 成功再删文件，失败回滚内存，
+    不留“目录里没这张、盘上还在”的暗孤儿；孤儿文件收尾交给 `repair()`。）
 
 ## Read Context Plan
 

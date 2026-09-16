@@ -76,6 +76,7 @@ class TestCatalogBodyChain:
 
 class TestLibraryGroups:
     def test_set_persist_clear(self, tmp_path):
+        """轮 I 语义：清空说明≠删掉分类——`{名: ""}` = “在册但没写说明”。"""
         lib = Library(tmp_path / "lib")
         lib.load()
         ok, err = lib.set_group_desc(" 猫猫日常 ", " 被夸时用 ")
@@ -86,7 +87,13 @@ class TestLibraryGroups:
         assert reloaded.group_descs() == {"猫猫日常": "被夸时用"}
         ok, _ = lib.set_group_desc("猫猫日常", "")
         assert ok
-        assert lib.group_descs() == {}
+        assert lib.group_descs() == {"猫猫日常": ""}
+        # 说明清空后的分类仍然在册，并且活过一次重载
+        assert "猫猫日常" in lib.group_names()
+        again = Library(tmp_path / "lib")
+        again.load()
+        assert again.group_descs() == {"猫猫日常": ""}
+        assert "猫猫日常" in again.group_names()
 
     def test_clamps_and_guards(self, tmp_path):
         lib = Library(tmp_path / "lib")
@@ -111,7 +118,94 @@ class TestLibraryGroups:
         lib = Library(root)
         result = lib.load(force=True)
         assert result.ok
-        assert lib.group_descs() == {"好组": "ok"}
+        # 轮 I：空白说明洗成空串后**保留键**（= 一个没写说明的分类）；
+        # 非字符串值与无名键仍是垃圾，照旧丢。
+        assert lib.group_descs() == {"好组": "ok", "空组": ""}
+
+
+class TestCategoryLifecycle:
+    """轮 I（分类优先）：先立分类→往分类里收图→整间拆掉（连带删图，主人拍板 1C）。"""
+
+    def test_create_empty_category_is_registered(self, tmp_path):
+        lib = Library(tmp_path / "lib")
+        lib.load()
+        assert lib.create_group(" 晚安 ", " 凌晨两点说累了时用 ") == (True, "")
+        assert lib.group_descs() == {"晚安": "凌晨两点说累了时用"}
+        assert "晚安" in lib.group_names()
+        # 零张图的分类活过一次重载（面板建完刷新不丢 = 不是“建完就消失”）
+        again = Library(tmp_path / "lib")
+        again.load()
+        assert again.group_descs() == {"晚安": "凌晨两点说累了时用"}
+
+    def test_create_guards(self, tmp_path):
+        lib = Library(tmp_path / "lib")
+        lib.load()
+        assert lib.create_group("  ", "没名字") == (False, "group_required")
+        assert lib.create_group("G", "一次") == (True, "")
+        assert lib.create_group("G", "两次") == (False, "group_exists")
+        assert lib.group_descs() == {"G": "一次"}  # 撞名不许静默改写主人的话
+
+    def test_create_collides_with_implicit_group(self, tmp_path, run_async):
+        """图已经住着的组名也算“在册”：再建一次是错事，该去「编辑说明」。"""
+        plugin = _plugin(tmp_path)
+        run_async(_add(plugin, desc="甲", group="猫猫日常"))
+        assert str(run_async(plugin.group_create_entry(group="猫猫日常", desc="x")).error) == "group_exists"
+        # 同一名字补说明：合法且立刻生效
+        assert run_async(plugin.group_set_desc_entry(group="猫猫日常", desc="想被摸摸时用")).is_ok()
+
+    def test_entry_shapes(self, tmp_path, run_async):
+        plugin = _plugin(tmp_path)
+        assert str(run_async(plugin.group_create_entry()).error) == "group_required"
+        assert str(run_async(plugin.group_create_entry(group="新组", desc="x" * 301)).error) == "group_desc_too_long"
+        created = run_async(plugin.group_create_entry(group="新组", desc=""))
+        assert created.is_ok() and created.value["note"] == "group_created"
+        payload = run_async(plugin.dashboard_context(**_ctx("K")))
+        # 空分类在面板 state 里带 count=0（v0.8.0“空区块不出现”在本轮被反转：
+        # 人不看得到就永远传不进图），但下面的“她的视角”门证明它不露脸。
+        assert {"name": "新组", "count": 0, "desc": ""} in payload["groups"]
+
+    def test_remove_empty_category(self, tmp_path, run_async):
+        plugin = _plugin(tmp_path)
+        run_async(plugin.group_create_entry(group="拆得掉的安静"))
+        gone = run_async(plugin.group_remove_entry(group="拆得掉的安静"))
+        assert gone.is_ok() and gone.value["note"] == "group_removed" and gone.value["removed"] == 0
+        assert "拆得掉的安静" not in plugin._library.group_names()
+        assert str(run_async(plugin.group_remove_entry(group="拆得掉的安静")).error) == "group_not_found"
+
+    def test_remove_takes_its_stickers_and_files(self, tmp_path, run_async):
+        """1C 拍板：删分类 = 连带删图。目录、文件两个面都得真干净。"""
+        plugin = _plugin(tmp_path)
+        run_async(_add(plugin, desc="甲", group="拆间"))
+        run_async(_add(plugin, desc="乙", group="拆间"))
+        run_async(_add(plugin, desc="丙", group="留下"))
+        lib = plugin._library
+        files_before = sorted(p.name for p in lib.stickers_dir.iterdir())
+        assert len(files_before) == 3
+        gone = run_async(plugin.group_remove_entry(group="拆间"))
+        assert gone.is_ok() and gone.value["removed"] == 2
+        left = run_async(plugin.list_entry()).value["stickers"]
+        assert [r["desc"] for r in left] == ["丙"]
+        files_after = sorted(p.name for p in lib.stickers_dir.iterdir())
+        assert len(files_before) - len(files_after) == 2  # 孤儿文件不能留在盘上
+        assert "拆间" not in lib.group_names()
+        assert "留下" in lib.group_names()
+
+    def test_empty_category_never_reaches_her(self, tmp_path, run_async):
+        """防回归门（本轮核心不变量）：空分类是管理概念，不是发送目标。
+
+        她看到的分类目录、组名候选、发图目标全部只从“有图的”算：
+        否则会出现“她选中一个空分类→永远发不出”的鬼打墙。
+        """
+        plugin = _plugin(tmp_path, send=SendSettings(cooldown_sec=0.0, recent_dedup_count=0))
+        run_async(plugin.group_create_entry(group="永远空的", desc="这句话不该出现在她眼前"))
+        run_async(_add(plugin, desc="甲", group="有货的"))
+        listed = run_async(plugin.tool_sticker_list(**_ctx("K")))
+        assert listed["ok"] and listed["catalog"]
+        assert "永远空的" not in listed["catalog"]
+        assert "有货的" in listed["catalog"]
+        sent = run_async(plugin.tool_sticker_send(group="永远空的", **_ctx("K")))
+        assert sent["ok"] is False and sent["reason"] == "group_not_found"
+        assert "永远空的" not in sent["hint"]
 
 
 # ----------------------------------------------------------------------

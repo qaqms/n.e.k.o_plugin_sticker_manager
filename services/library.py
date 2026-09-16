@@ -151,16 +151,17 @@ class Library:
                 sticker = Sticker.from_dict(item)
                 if sticker is not None:
                     self._stickers[sticker.id] = sticker
-        # 分组说明宽松读（轮 F）：坏键/坏值跳过，空说明不存；旧库无此键 = 空字典。
+        # 分组说明宽松读（轮 F）：坏键/坏值跳过；旧库无此键 = 空字典。
+        # 轮 I 语义改一寸：**空说明也保留键**——`{名: ""}` 的意思是
+        # “这个分类在册（主人建过/图还住着），只是暂时没写说明”。
+        # 分类的生死从此只由 create_group/remove_group 决定，写空说明不再顺手杀分类。
         groups_raw = raw.get("groups") if isinstance(raw, dict) else None
         if isinstance(groups_raw, dict):
             for key, value in groups_raw.items():
                 group = normalize_group(key)
                 if not group or not isinstance(value, str):
                     continue
-                desc = value.strip()[:GROUP_DESC_MAX_CHARS]
-                if desc:
-                    self._groups[group] = desc
+                self._groups[group] = value.strip()[:GROUP_DESC_MAX_CHARS]
         self._loaded = True
         self._io_dirty = False
         return LibraryResult(ok=True)
@@ -196,29 +197,91 @@ class Library:
         """组名 -> 一句话说明（副本）。"""
         return dict(self._groups)
 
+    def group_names(self) -> set[str]:
+        """在册分类名（轮 I）：主人建过的（含零张的空分类）∪ 有图在住的（隐式分类）。
+
+        一把尺量两处：入口层判“这个组存不存在”、面板层列可移入的分类，
+        都从这里取，不再各自拼一遍 `sticker groups | group_descs`。
+        """
+        return {sticker.group for sticker in self._stickers.values() if sticker.group} | set(self._groups)
+
     def set_group_desc(self, name: Any, desc: Any) -> tuple[bool, str]:
-        """写/改/清一个分组的说明；回 (是否成功, 错误码)。
+        """写/改/清一个分类的说明；回 (是否成功, 错误码)。
 
         合法性在入口层把关（group_required / group_desc_too_long），这里只兕宽钳位；
-        空说明 = 清除意图。写盘失败回滚内存，不把假成功留给面板。
+        **空说明 = 清空这句话，不是删掉这个分类**（轮 I：生死归 create/remove）。
+        写盘失败回滚内存，不把假成功留给面板。
         """
         group = normalize_group(name)
         if not group:
             return False, "group_required"
         cleaned = desc.strip()[:GROUP_DESC_MAX_CHARS] if isinstance(desc, str) else ""
+        existed = group in self._groups
         previous = self._groups.get(group, "")
-        if cleaned:
-            self._groups[group] = cleaned
-        else:
-            self._groups.pop(group, None)
+        self._groups[group] = cleaned
         saved = self.save()
         if not saved.ok:
-            if previous:
+            if existed:
                 self._groups[group] = previous
             else:
                 self._groups.pop(group, None)
             return False, saved.code or ERR_IO
         return True, ""
+
+    def create_group(self, name: Any, desc: Any = "") -> tuple[bool, str]:
+        """新建一个分类（轮 I：先立分类，再往分类里塞图）；回 (是否成功, 错误码)。
+
+        空分类是合法状态：她在目录里看不见它、也发不出它（`format_group_overview`
+        与发图候选都只从有图的贴纸算）——分类是**管理概念**，不是发送目标。
+        重名回 `group_exists`：名字已被图住着（隐式分类）也算撞名，
+        那种情况主人该走「编辑说明」而不是再建一个同名分类。
+        """
+        group = normalize_group(name)
+        if not group:
+            return False, "group_required"
+        if group in self.group_names():
+            return False, "group_exists"
+        cleaned = desc.strip()[:GROUP_DESC_MAX_CHARS] if isinstance(desc, str) else ""
+        self._groups[group] = cleaned
+        saved = self.save()
+        if not saved.ok:
+            self._groups.pop(group, None)
+            return False, saved.code or ERR_IO
+        self._log(f"group created: {group}")
+        return True, ""
+
+    def remove_group(self, name: Any) -> tuple[bool, str, int]:
+        """删分类，**连带删掉这一组的图与文件**（主人拍板 1C）；回 (成功, 错误码, 删掉的张数)。
+
+        纪律照 `remove()`：先改内存、`save()` 落盘成功再动文件（失败回滚内存，
+        绝不留“目录里没这张、盘上还留着”的暗孤儿）；单个文件删不掉只记日志
+        （孤儿文件由 `repair()` 收尾）。张数回给入口，面板确认后如实报数。
+        """
+        group = normalize_group(name)
+        if not group:
+            return False, "group_required", 0
+        if group not in self.group_names():
+            return False, "group_not_found", 0
+        victims = [(sid, sticker) for sid, sticker in self._stickers.items() if sticker.group == group]
+        for sid, _ in victims:
+            self._stickers.pop(sid)
+        existed = group in self._groups
+        previous = self._groups.get(group, "")
+        self._groups.pop(group, None)
+        saved = self.save()
+        if not saved.ok:
+            for sid, sticker in victims:
+                self._stickers[sid] = sticker
+            if existed:
+                self._groups[group] = previous
+            return False, saved.code or ERR_IO, 0
+        for sid, sticker in victims:
+            try:
+                self.image_path(sticker).unlink(missing_ok=True)
+            except Exception:
+                self._log(f"sticker file removal failed: id={sid}")
+        self._log(f"group removed: {group} stickers={len(victims)}")
+        return True, "", len(victims)
 
     # ------------------------------------------------------------------
     # 查询
