@@ -211,5 +211,12 @@
   "panel.group.desc_ph": "When to use this group — the catalog line she reads",
   "panel.group.desc_save": "Save group note",
   "panel.group.desc_saved": "Group note updated",
-  "panel.add.desc_optional": "Description (optional: she can pick by group note/caption)"
+  "panel.add.desc_optional": "Description (optional: she can pick by group note/caption)",
+  "panel.section.summary": "{groups} sections · {images} stickers",
+  "panel.section.select_all": "Select group",
+  "panel.section.desc_edit": "Edit note",
+  "panel.section.desc_cancel": "Cancel",
+  "panel.section.desc_hint": "No note yet — add one line on when to use this group; it is the catalog text she reads.",
+  "panel.filter.empty_title": "No matches for this filter",
+  "panel.filter.empty_hint": "Try another word, or clear the search box."
 }

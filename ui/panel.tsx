@@ -29,7 +29,6 @@ import {
   Switch,
   Text,
   useConfirm,
-  useEffect,
   useRef,
   useState,
 } from "@neko/plugin-ui";
@@ -69,6 +68,15 @@ type GroupInfo = {
   name: string;
   count?: number;
   desc?: string;
+};
+
+// 轮 G：浏览主形态——一个分组一个区块（组名 + 张数 + 组说明 + 块内网格）。
+type Section = {
+  key: string;
+  name: string;
+  desc: string;
+  rows: StickerRow[];
+  editable: boolean;
 };
 
 type State = {
@@ -723,13 +731,14 @@ export default function Panel(props: Surface) {
   const state = props.state || {};
   const t = props.t;
   const [query, setQuery] = useState("");
-  const [group, setGroup] = useState("");
   const [libraryNote, setLibraryNote] = useState("");
   const [uploading, setUploading] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [batchTags, setBatchTags] = useState("");
   const [batchGroup, setBatchGroup] = useState("");
-  const [groupNote, setGroupNote] = useState("");
+  // 轮 G：分组说明改为就地编辑——同一时刻只开一个区块的编辑行。
+  const [descEditing, setDescEditing] = useState("");
+  const [descDraft, setDescDraft] = useState("");
   const confirm = useConfirm();
   const zipInputRef = useRef<any>(null);
   const [awarenessNote, setAwarenessNote] = useState("");
@@ -918,26 +927,21 @@ export default function Panel(props: Surface) {
     setUploading(false);
   };
 
-  // 轮 F：分组说明编辑（“分类即 prompt”的一句维护入口）与批量整理。
-  const activeGroup = groups.find((item) => item.name === group) || null;
-  useEffect(() => {
-    const found = (state.groups || []).find((item) => item.name === group);
-    setGroupNote(found && found.desc ? found.desc : "");
-  }, [group]);
-
+  // 轮 G：分组说明编辑（“分类即 prompt”的一句维护入口），就地挂在区块头上。
   const saveGroupDesc = async () => {
-    if (!activeGroup) {
+    if (!descEditing) {
       return;
     }
     setLibraryNote("");
     try {
       await callAction(props, "group_set_desc", {
-        group: activeGroup.name,
-        desc: groupNote.trim(),
+        group: descEditing,
+        desc: descDraft.trim(),
       });
       setLibraryNote(
         t("panel.group.desc_saved", { defaultValue: "分组说明已更新" }),
       );
+      setDescEditing("");
       await props.api.refresh();
     } catch (error) {
       const raw =
@@ -957,6 +961,17 @@ export default function Panel(props: Surface) {
         ? previous.filter((x) => x !== id)
         : previous.concat(id),
     );
+  };
+
+  // 全选本组：没全选过→补齐；已全选→再点取消本组选择。
+  const selectSection = (rows: StickerRow[]) => {
+    const ids = rows.map((row) => row.id);
+    setSelected((previous: string[]) => {
+      const missing = ids.filter((id) => previous.indexOf(id) < 0);
+      return missing.length
+        ? previous.concat(missing)
+        : previous.filter((id) => ids.indexOf(id) < 0);
+    });
   };
 
   const runBatch = async (patch: Record<string, unknown>) => {
@@ -1036,13 +1051,7 @@ export default function Panel(props: Surface) {
   };
 
   const term = query.trim().toLowerCase();
-  const rows = stickers.filter((row) => {
-    if (group === "__none__" && row.group) {
-      return false;
-    }
-    if (group && group !== "__none__" && row.group !== group) {
-      return false;
-    }
+  const rowMatches = (row: StickerRow): boolean => {
     if (!term) {
       return true;
     }
@@ -1055,7 +1064,36 @@ export default function Panel(props: Surface) {
       .join(" ")
       .toLowerCase();
     return haystack.indexOf(term) >= 0;
+  };
+  // 搜索语义对齐参考面板：组名/组说明命中→整组都在；否则只留命中的图；空区块不出现。
+  const sections: Section[] = [];
+  groups.forEach((info) => {
+    const catHit =
+      !term ||
+      `${info.name} ${info.desc || ""}`.toLowerCase().indexOf(term) >= 0;
+    const rows = stickers.filter(
+      (row) => row.group === info.name && (catHit || rowMatches(row)),
+    );
+    if (rows.length) {
+      sections.push({
+        key: info.name,
+        name: info.name,
+        desc: info.desc || "",
+        rows,
+        editable: true,
+      });
+    }
   });
+  const ungrouped = stickers.filter((row) => !row.group && rowMatches(row));
+  if (ungrouped.length) {
+    sections.push({
+      key: "__none__",
+      name: t("panel.group.none", { defaultValue: "未分组" }),
+      desc: "",
+      rows: ungrouped,
+      editable: false,
+    });
+  }
 
   return (
     <Page
@@ -1283,61 +1321,16 @@ export default function Panel(props: Surface) {
                 {t("panel.repair.button", { defaultValue: "体检与修复" })}
               </Button>
             </Inline>
-            {groups.length > 0 ? (
-              <Inline gap={6} align="center" wrap>
-                <Button
-                  tone={group === "" ? "success" : "default"}
-                  onClick={() => {
-                    setGroup("");
-                  }}
-                >
-                  {t("panel.group.all", { defaultValue: "全部" })}
-                </Button>
-                {groups.map((info) => (
-                  <Button
-                    key={info.name}
-                    tone={group === info.name ? "success" : "default"}
-                    onClick={() => {
-                      setGroup(group === info.name ? "" : info.name);
-                    }}
-                  >
-                    {info.name}（{info.count || 0}）
-                  </Button>
-                ))}
-                <Button
-                  tone={group === "__none__" ? "success" : "default"}
-                  onClick={() => {
-                    setGroup(group === "__none__" ? "" : "__none__");
-                  }}
-                >
-                  {t("panel.group.none", { defaultValue: "未分组" })}
-                </Button>
-              </Inline>
-            ) : null}
-            {activeGroup ? (
-              <Inline gap={6} align="center" wrap>
-                <Text>
-                  {t("panel.group.desc_label", {
-                    name: activeGroup.name,
-                    defaultValue: "「{name}」的说明",
-                  })}
-                </Text>
-                <Input
-                  value={groupNote}
-                  onChange={setGroupNote}
-                  placeholder={t("panel.group.desc_ph", {
-                    defaultValue: "什么时候用这一组——她选图时看到的分类正文",
-                  })}
-                />
-                <Button
-                  tone="primary"
-                  onClick={() => {
-                    saveGroupDesc();
-                  }}
-                >
-                  {t("panel.group.desc_save", { defaultValue: "存分组说明" })}
-                </Button>
-              </Inline>
+            {sections.length > 0 ? (
+              // 轮 G：分类分区视图——每块「组名 · 张数 + 一句说明 + 就地操作」，
+              // 一路滚下去就是她的收藏间目录。搜索时整块命中或逐图命中都支持。
+              <Text>
+                {t("panel.section.summary", {
+                  groups: sections.length,
+                  images: stickers.length,
+                  defaultValue: "{groups} 个分区 · 共 {images} 张",
+                })}
+              </Text>
             ) : null}
             {selected.length > 0 ? (
               <Inline gap={6} align="center" wrap>
@@ -1429,28 +1422,118 @@ export default function Panel(props: Surface) {
               </Text>
             ) : null}
             {libraryNote ? <Text>{libraryNote}</Text> : null}
-            {rows.length === 0 ? (
+            {sections.length === 0 ? (
               <EmptyState
-                title={t("panel.empty.title", { defaultValue: "库还是空的" })}
-                description={t("panel.empty.hint", {
-                  defaultValue:
-                    "在上方收藏第一张表情，她就能在对话里把它甩出去。",
-                })}
+                title={
+                  term
+                    ? t("panel.filter.empty_title", {
+                        defaultValue: "当前筛选没有命中",
+                      })
+                    : t("panel.empty.title", {
+                        defaultValue: "库还是空的",
+                      })
+                }
+                description={
+                  term
+                    ? t("panel.filter.empty_hint", {
+                        defaultValue: "换个词试试，或清空搜索框。",
+                      })
+                    : t("panel.empty.hint", {
+                        defaultValue:
+                          "在上方收藏第一张表情，她就能在对话里把它甩出去。",
+                      })
+                }
               />
             ) : (
-              <Grid cols={2} gap={10}>
-                {rows.map((row) => (
-                  <StickerCard
-                    key={row.id}
-                    row={row}
-                    surface={props}
-                    selected={selected.indexOf(row.id) >= 0}
-                    onToggleSelect={() => {
-                      toggleSelected(row.id);
-                    }}
-                  />
-                ))}
-              </Grid>
+              sections.map((section, index) => (
+                <Stack key={section.key} gap={8}>
+                  {index > 0 ? <Divider /> : null}
+                  <Inline gap={8} align="center" wrap>
+                    <Text>
+                      {section.name}（{section.rows.length}）
+                    </Text>
+                    <Button
+                      tone="default"
+                      onClick={() => {
+                        selectSection(section.rows);
+                      }}
+                    >
+                      {t("panel.section.select_all", {
+                        defaultValue: "全选本组",
+                      })}
+                    </Button>
+                    {section.editable ? (
+                      <Button
+                        tone="default"
+                        onClick={() => {
+                          setDescEditing(
+                            descEditing === section.key ? "" : section.key,
+                          );
+                          setDescDraft(section.desc);
+                        }}
+                      >
+                        {t("panel.section.desc_edit", {
+                          defaultValue: "编辑说明",
+                        })}
+                      </Button>
+                    ) : null}
+                  </Inline>
+                  {section.editable && descEditing !== section.key ? (
+                    <Text>
+                      {section.desc ||
+                        t("panel.section.desc_hint", {
+                          defaultValue:
+                            "未写说明——补一句『什么时候用这一组』，她目录里看到的分类正文就是它。",
+                        })}
+                    </Text>
+                  ) : null}
+                  {section.editable && descEditing === section.key ? (
+                    <Inline gap={6} align="center" wrap>
+                      <Input
+                        value={descDraft}
+                        onChange={setDescDraft}
+                        placeholder={t("panel.group.desc_ph", {
+                          defaultValue:
+                            "什么时候用这一组——她选图时看到的分类正文",
+                        })}
+                      />
+                      <Button
+                        tone="primary"
+                        onClick={() => {
+                          saveGroupDesc();
+                        }}
+                      >
+                        {t("panel.group.desc_save", {
+                          defaultValue: "存分组说明",
+                        })}
+                      </Button>
+                      <Button
+                        tone="default"
+                        onClick={() => {
+                          setDescEditing("");
+                        }}
+                      >
+                        {t("panel.section.desc_cancel", {
+                          defaultValue: "取消",
+                        })}
+                      </Button>
+                    </Inline>
+                  ) : null}
+                  <Grid cols={2} gap={10}>
+                    {section.rows.map((row) => (
+                      <StickerCard
+                        key={row.id}
+                        row={row}
+                        surface={props}
+                        selected={selected.indexOf(row.id) >= 0}
+                        onToggleSelect={() => {
+                          toggleSelected(row.id);
+                        }}
+                      />
+                    ))}
+                  </Grid>
+                </Stack>
+              ))
             )}
           </Stack>
         </Card>

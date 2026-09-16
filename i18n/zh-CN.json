@@ -211,5 +211,12 @@
   "panel.group.desc_ph": "什么时候用这一组——她选图时看到的分类正文",
   "panel.group.desc_save": "存分组说明",
   "panel.group.desc_saved": "分组说明已更新",
-  "panel.add.desc_optional": "描述（可选：不写也行，她靠分组说明/梗义选图）"
+  "panel.add.desc_optional": "描述（可选：不写也行，她靠分组说明/梗义选图）",
+  "panel.section.summary": "{groups} 个分区 · 共 {images} 张",
+  "panel.section.select_all": "全选本组",
+  "panel.section.desc_edit": "编辑说明",
+  "panel.section.desc_cancel": "取消",
+  "panel.section.desc_hint": "未写说明——补一句『什么时候用这一组』，她目录里看到的分类正文就是它。",
+  "panel.filter.empty_title": "当前筛选没有命中",
+  "panel.filter.empty_hint": "换个词试试，或清空搜索框。"
 }
