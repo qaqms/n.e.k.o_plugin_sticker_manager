@@ -19,15 +19,18 @@ from conftest import (
     build_plugin,
     conversation_record,
 )
-from sticker_manager.core.awareness import build_awareness_text, pick_recent
-from sticker_manager.core.catalog import Sticker
-from sticker_manager.core.configuration import (
+from sticker_manager.core.awareness import (  # pyright: ignore[reportMissingImports] — 包名由 conftest 在测试时注册；独立仓静态面不可解析
+    build_awareness_text,
+    pick_recent,
+)
+from sticker_manager.core.catalog import Sticker  # pyright: ignore[reportMissingImports] — 同上
+from sticker_manager.core.configuration import (  # pyright: ignore[reportMissingImports] — 同上
     AwarenessSettings,
     SendSettings,
     StickerManagerSettings,
     StorageSettings,
 )
-from sticker_manager.services.awareness import latest_lanlan
+from sticker_manager.services.awareness import latest_lanlan  # pyright: ignore[reportMissingImports] — 同上
 
 
 def _st(sid: str, *, desc: str = "", use: int = 0, last: float = 0.0, disabled: bool = False) -> Sticker:
@@ -77,9 +80,13 @@ class TestCoreSelection:
     def test_text_carries_usage_guidance_and_candidate_hint(self):
         # 轮 C：注入文案带"使用规则+数量软提示"（区分安慰/自述、宁缺毋滥）
         # 与候选机制告知（多候选回清单），软提示在文案、硬闸在冷却——两层分离。
+        # 轮 D 追加：去重与概率闸的软提示必须同层告知（硬闸在 sender 节奏闸）。
         text = build_awareness_text([_st("a", desc="笑", use=1)], max_lines=5)
         assert "安慰对方" in text and "宁缺毋滥" in text
         assert "候选" in text and "id" in text
+        assert "最近不重复" in text  # 去重软提示（轮 D①）
+        assert "别重试" in text  # 概率闸软提示：被拒不许二次撞闸（轮 D②）
+        assert "force" in text  # 主人点名重发的绕行通道告知
 
     def test_max_lines_caps_the_block(self):
         stickers = [_st(f"s{i}", use=i) for i in range(10)]
@@ -264,9 +271,7 @@ class TestInjectNow:
         assert run_async(plugin._awareness.maybe_run(settings=settings, now=51.0))["status"] == "waiting"
         forced = run_async(plugin._awareness.inject_now(settings=settings, lanlan="K", now=52.0))
         assert forced["status"] == "injected"
-        blocked = run_async(
-            plugin._awareness.inject_now(settings=_settings(enabled=False), lanlan="K", now=53.0)
-        )
+        blocked = run_async(plugin._awareness.inject_now(settings=_settings(enabled=False), lanlan="K", now=53.0))
         assert blocked["status"] == "disabled"
 
     def test_manual_hint_targets_without_bus_read(self, tmp_path, run_async):

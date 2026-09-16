@@ -109,6 +109,8 @@
   "panel.error.library_io_error": "Library read/write failed",
   "panel.error.config_unavailable": "Config read/write unavailable",
   "panel.error.invalid_value": "Invalid parameter value",
+  "panel.error.recent_repeat": "She sent this one recently — blocked by the recent-repeat guard (force resend only on the master's explicit ask)",
+  "panel.error.probability_declined": "The rhythm gate said no sticker this round — she replied in text",
   "panel.error.send_cooldown": "She just sent one — wait for the cooldown to end.",
   "panel.error.not_enabled": "Master switch is off: she neither sends nor sees the catalog.",
   "panel.error.sticker_disabled": "This one is disabled; re-enable it in Edit first.",

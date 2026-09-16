@@ -34,7 +34,7 @@ import binascii
 import time
 from typing import Any
 
-from plugin.sdk.plugin import (
+from plugin.sdk.plugin import (  # pyright: ignore[reportMissingImports] — 独立仓无宿主包树；挂载态可解析，测试由 conftest 桩接管
     Err,
     NekoPluginBase,
     Ok,
@@ -69,6 +69,15 @@ __all__ = ["StickerManagerPlugin"]
 
 # 上传解码前的字节上限提示（真正的 8 MiB 判定在 add 入口）。
 _MAX_BASE64_CHARS = 12 * 1024 * 1024
+
+
+# 工具层拒发的二段指引（面向模型，同 multi_candidates 的 hint 一样走硬编码中文：
+# 消费方是模型不是面板，不走 i18n；reason 码本身才是给面板/日志的稳态契约）。
+_SEND_HINTS: dict[str, str] = {
+    "recent_repeat": "这张最近发过了——换一张或干脆用文字回；只有主人点名要再看这张时才 force=true 重发。",
+    "probability_declined": "这一轮不配图：直接用文字回复，别重试、也别换一张再试。",
+    "send_cooldown": "刚发过一张，她在冷却：这轮用文字回复。",
+}
 
 
 @neko_plugin
@@ -220,9 +229,7 @@ class StickerManagerPlugin(NekoPluginBase):
         text_caption, caption_error = validate_optional_text(caption, limit=CAPTION_MAX_CHARS)
         if caption_error:
             return Err(SdkError("caption_too_long"))
-        text_visible, visible_error = validate_optional_text(
-            visible_text, limit=VISIBLE_TEXT_MAX_CHARS
-        )
+        text_visible, visible_error = validate_optional_text(visible_text, limit=VISIBLE_TEXT_MAX_CHARS)
         if visible_error:
             return Err(SdkError("visible_text_too_long"))
         if not isinstance(data_base64, str) or not data_base64:
@@ -328,9 +335,7 @@ class StickerManagerPlugin(NekoPluginBase):
                 return Err(SdkError("caption_too_long"))
         new_visible: str | None = None
         if isinstance(visible_text, str):
-            new_visible, visible_error = validate_optional_text(
-                visible_text, limit=VISIBLE_TEXT_MAX_CHARS
-            )
+            new_visible, visible_error = validate_optional_text(visible_text, limit=VISIBLE_TEXT_MAX_CHARS)
             if visible_error:
                 return Err(SdkError("visible_text_too_long"))
         sticker, error = self._library.update(
@@ -399,8 +404,8 @@ class StickerManagerPlugin(NekoPluginBase):
     async def send_entry(self, id: str = "", **kwargs):  # noqa: A002
         lanlan = _lanlan_from_kwargs(kwargs)
         sticker, failure = self._pick_for_send(id, lanlan)
-        if failure is not None:
-            return failure
+        if failure is not None or sticker is None:
+            return failure if failure is not None else Err(SdkError("sticker_not_found"))
         result = await self._sender.send(
             sticker, lanlan=lanlan, settings=self._settings, source="panel", now=time.time()
         )
@@ -434,9 +439,7 @@ class StickerManagerPlugin(NekoPluginBase):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
-        pool = search_stickers(
-            self._library.all(), query if isinstance(query, str) else "", include_disabled=True
-        )
+        pool = search_stickers(self._library.all(), query if isinstance(query, str) else "", include_disabled=True)
         rows = [s.as_dict() for s in pool if include_disabled or not s.disabled]
         return Ok({"note": "library_listed", "count": len(rows), "stickers": rows})
 
@@ -506,7 +509,9 @@ class StickerManagerPlugin(NekoPluginBase):
     @plugin_entry(
         id="history",
         name=tr("entries.history.name", default="最近的表情包使用记录"),
-        description=tr("entries.history.description", default="返回发送台账尾部若干条（时刻/用了哪张/谁/成败），不含对话原文"),
+        description=tr(
+            "entries.history.description", default="返回发送台账尾部若干条（时刻/用了哪张/谁/成败），不含对话原文"
+        ),
         input_schema={
             "type": "object",
             "properties": {
@@ -592,8 +597,14 @@ class StickerManagerPlugin(NekoPluginBase):
         input_schema={
             "type": "object",
             "properties": {
-                "tags": {"type": "string", "description": tr("fields.tags", default="标签，逗号分隔（可选，整批共用）")},
-                "group": {"type": "string", "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）")},
+                "tags": {
+                    "type": "string",
+                    "description": tr("fields.tags", default="标签，逗号分隔（可选，整批共用）"),
+                },
+                "group": {
+                    "type": "string",
+                    "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）"),
+                },
             },
         },
         llm_result_fields=["note", "imported", "duplicates", "rejected", "failed"],
@@ -603,9 +614,7 @@ class StickerManagerPlugin(NekoPluginBase):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
-        summary = self._library.ingest_inbox(
-            tags=parse_tags_field(tags), group=normalize_group(group)
-        )
+        summary = self._library.ingest_inbox(tags=parse_tags_field(tags), group=normalize_group(group))
         return Ok({"note": "inbox_imported", **summary})
 
     @ui.action(
@@ -653,9 +662,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     async def awareness_now_entry(self, **kwargs):
         lanlan = _lanlan_from_kwargs(kwargs)
-        result = await self._awareness.inject_now(
-            settings=self._settings, lanlan=lanlan, now=time.time()
-        )
+        result = await self._awareness.inject_now(settings=self._settings, lanlan=lanlan, now=time.time())
         status = str(result.get("status", ""))
         if status in {"disabled", "no_target", "empty_library"}:
             return Err(SdkError(f"awareness_{status}"))
@@ -688,13 +695,14 @@ class StickerManagerPlugin(NekoPluginBase):
                 "pending": len(self._library.inbox_files()),
                 "path": str(self._library.inbox_dir),
             },
-            "awareness": self._awareness.snapshot(
-                interval_sec=settings.awareness.interval_sec, now=time.time()
-            ),
+            "awareness": self._awareness.snapshot(interval_sec=settings.awareness.interval_sec, now=time.time()),
             "config": {
                 "cooldown_sec": settings.send.cooldown_sec,
                 "inline_max_bytes": settings.send.inline_max_bytes,
                 "catalog_limit_for_model": settings.storage.catalog_limit_for_model,
+                "recent_dedup_count": settings.send.recent_dedup_count,
+                "probability": settings.send.probability,
+                "probability_reuse_sec": settings.send.probability_reuse_sec,
                 "awareness_enabled": settings.awareness.enabled,
                 "awareness_interval_sec": settings.awareness.interval_sec,
             },
@@ -726,9 +734,7 @@ class StickerManagerPlugin(NekoPluginBase):
         if not self._settings.enabled:
             return {"ok": False, "reason": "not_enabled"}
         self._library.load()
-        pool = search_stickers(
-            self._library.all(), query if isinstance(query, str) else "", include_disabled=False
-        )
+        pool = search_stickers(self._library.all(), query if isinstance(query, str) else "", include_disabled=False)
         catalog = format_catalog_for_model(pool, self._settings.storage.catalog_limit_for_model)
         if not catalog:
             return {"ok": True, "count": 0, "catalog": "", "note": "库里还没有表情包，或没有匹配的"}
@@ -739,23 +745,40 @@ class StickerManagerPlugin(NekoPluginBase):
         description=(
             "发一张表情包到聊天里。给 id 最准；给关键词：筛得只剩一张就直接发，"
             "候选不止一张会把清单回给你——看一眼再用 id 发第二刀。id 和关键词都没给会拒。"
-            "发不出去会告诉你原因，别连试。"
+            "发不出去会告诉你原因，别连试；刚发过的会被'最近不重复'挡下，"
+            "只有主人点名要再看某张时才带 force=true 绕行。"
         ),
         parameters={
             "type": "object",
             "properties": {
                 "sticker_id": {"type": "string", "description": "表情包的 id（首选）"},
                 "query": {"type": "string", "description": "没有 id 时给关键词（想表达的态度/场景，会按梗义筛）"},
+                "force": {
+                    "type": "boolean",
+                    "description": "仅当主人明确点名要再看/再发这张时置 true：跳过最近不重复与概率闸（冷却仍生效）",
+                },
             },
             "required": [],
         },
         timeout=20.0,
     )
-    async def tool_sticker_send(self, sticker_id: str = "", query: str = "", **kwargs: Any) -> dict[str, Any]:
+    async def tool_sticker_send(
+        self, sticker_id: str = "", query: str = "", force: bool = False, **kwargs: Any
+    ) -> dict[str, Any]:
         if not self._settings.enabled:
             return {"ok": False, "reason": "not_enabled"}
         lanlan = _lanlan_from_kwargs(kwargs)
         self._library.load()
+        settings = self._settings
+        bypass = bool(force)
+        # 去重（轮 D①）：query 候选池剔除"她最近发过的 N 张"（同一角色卡）。
+        # 显式 id 不在这拦——那是 sender.send 里和冷却/概率闸一起过的同一把尺，
+        # 保证 tool 以外没有第二条能绕开的通道。
+        recent = (
+            self._sender.recent_sent_ids(lanlan, settings)
+            if (not bypass and settings.send.recent_dedup_count > 0)
+            else set()
+        )
         sticker = None
         has_id = isinstance(sticker_id, str) and bool(sticker_id.strip())
         has_query = isinstance(query, str) and bool(query.strip())
@@ -765,7 +788,20 @@ class StickerManagerPlugin(NekoPluginBase):
                 sticker = None
         candidates: list[Sticker] = []
         if sticker is None and has_query:
-            sticker, candidates = resolve_send_target(self._library.all(), query)
+            pool = self._library.all()
+            filtered = [s for s in pool if s.id not in recent] if recent else pool
+            sticker, candidates = resolve_send_target(filtered, query)
+            if sticker is None and not candidates and recent:
+                # 区分"根本没匹配"和"匹配的全是刚发过的"——前者让她换词，
+                # 后者让她换一张而不是重试同一刀。
+                old_sticker, old_candidates = resolve_send_target(pool, query)
+                if old_sticker is not None or old_candidates:
+                    return {
+                        "ok": False,
+                        "reason": "recent_repeat",
+                        "hint": "匹配的全是最近发过的——换一张或干脆用文字回；"
+                        "只有主人点名要再看这张才用 force=true 重发。",
+                    }
         if candidates:
             # 头部并列：不替她拍板。回候选清单（行形状与 sticker_list 同一把尺），
             # 不算失败——"看到了、还没选"是选图流程的中间态。
@@ -783,14 +819,26 @@ class StickerManagerPlugin(NekoPluginBase):
             # 轮 C 起选图必须有依据——那是它"发得准"的另一半）。
             return {"ok": False, "reason": "no_match" if (has_id or has_query) else "id_or_query_required"}
         result = await self._sender.send(
-            sticker, lanlan=lanlan, settings=self._settings, source="tool", now=time.time()
+            sticker,
+            lanlan=lanlan,
+            settings=settings,
+            source="tool",
+            now=time.time(),
+            force=bypass,
         )
         if not result.ok:
             self._sender.note_attempt_failed(
-                lanlan=lanlan, sticker_id=sticker.id, code=result.code,
-                settings=self._settings, now=time.time(),
+                lanlan=lanlan,
+                sticker_id=sticker.id,
+                code=result.code,
+                settings=self._settings,
+                now=time.time(),
             )
-            return {"ok": False, "reason": result.code, "tried": sticker.id}
+            out: dict[str, Any] = {"ok": False, "reason": result.code, "tried": sticker.id}
+            hint = _SEND_HINTS.get(result.code)
+            if hint:
+                out["hint"] = hint
+            return out
         return {"ok": True, "sent": sticker.id, "desc": sticker.desc}
 
     # ------------------------------------------------------------------

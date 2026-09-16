@@ -109,6 +109,8 @@
   "panel.error.library_io_error": "表情库读写失败",
   "panel.error.config_unavailable": "配置读写不可用",
   "panel.error.invalid_value": "参数值不合法",
+  "panel.error.recent_repeat": "这张她最近发过了——被'最近不重复'挡下（主人点名要再看可用 force 重发）",
+  "panel.error.probability_declined": "这一轮被节奏闸判定不配图——她用文字回了",
   "panel.error.send_cooldown": "刚发过一张，她在歇着——冷却结束前再点也没用。",
   "panel.error.not_enabled": "总开关没开：她现在不发图也看不到目录。",
   "panel.error.sticker_disabled": "这张被她收进了禁用区，想发先在编辑里恢复。",

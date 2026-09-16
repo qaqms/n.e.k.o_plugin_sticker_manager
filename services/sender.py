@@ -12,10 +12,18 @@
 
 冷却是**按角色卡的内存表**：不持久化。跨重启的发送节奏没必要留痕，
 反而持久化会让"刚重启就误判冷却中"这种体验变糟。
+
+去重（轮 D①）与冷却相反，读的是**持久台账**（usage.json 里该角色卡最近
+ N 张成功发送的 distinct id）："最近发过什么"是事实记忆，重启不该失忆。
+概率闸门（轮 D②）掷后复用，判定缓存是内存表（重启重掷，与冷却同纪律）：
+同一角色卡在复用窗口内只掷一次——multi_candidates→拿 id 二次定夺是同一次
+意愿的延续，不重掷（外部系统的 p² 教训）。两者都只拦 `source=="tool"`：
+面板"试发"是主人的直接动作，不该被她的行为节奏闸拦下。
 """
 
 from __future__ import annotations
 
+import random
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -31,6 +39,12 @@ ERR_BAD_IMAGE = "sticker_image_unreadable"
 ERR_TOO_LARGE = "sticker_too_large"
 ERR_COOLDOWN = "send_cooldown"
 ERR_TRANSPORT = "transport_unavailable"
+# 轮 D 新增：两个节奏闸的稳定码（进台账、面板可翻译）。
+ERR_RECENT_REPEAT = "recent_repeat"
+ERR_PROBABILITY = "probability_declined"
+
+# 掷骰用模块级实例：测试里 monkeypatch `sender._RNG` 即可钉死随机序列。
+_RNG = random.Random()
 
 
 @dataclass
@@ -58,6 +72,7 @@ class Sender:
         self._library = library
         self._logger = logger
         self._last_sent: dict[str, float] = {}  # lanlan -> 上次成功投递的时刻
+        self._prob_rolls: dict[str, tuple[float, bool]] = {}  # lanlan -> (掷骰时刻, 命中)
 
     def _log(self, message: str, *, exc: bool = False) -> None:
         if self._logger is None:
@@ -81,6 +96,49 @@ class Sender:
         return max(0.0, settings.send.cooldown_sec - (now - last))
 
     # ------------------------------------------------------------------
+    # 节奏闸（轮 D）
+    # ------------------------------------------------------------------
+
+    def recent_sent_ids(self, lanlan: str, settings: StickerManagerSettings) -> set[str]:
+        """该角色卡最近 `recent_dedup_count` 张**成功发出**的 distinct id（台账源，跨重启）。
+
+        读整本台账（封顶 usage_history_keep，文件很小）再筛：ok=True 且角色卡匹配，
+        新的在前，取前 N 个 distinct id。一次成功发送只占一个名额（同一张连发两次
+        不挤掉更早的另一张）。
+        """
+        n = settings.send.recent_dedup_count
+        if n <= 0:
+            return set()
+        out: set[str] = set()
+        for row in self._library.read_usage(limit=settings.storage.usage_history_keep):
+            if not row.get("ok"):
+                continue
+            if str(row.get("lanlan") or "") != lanlan:
+                continue
+            sid = str(row.get("id") or "")
+            if sid:
+                out.add(sid)
+                if len(out) >= n:
+                    break
+        return out
+
+    def probability_allow(self, lanlan: str, settings: StickerManagerSettings, *, now: float) -> bool:
+        """概率闸门：掷一次、缓存、复用窗口内不重掷（防 p²）。
+
+        `probability >= 1.0` 短路放行（默认关闭，不白耗随机）；判定缓存是内存表，
+        重启重掷——与冷却同纪律（DESIGN 陷阱 9 的适用面就是节奏状态，去重不在内）。
+        """
+        p = settings.send.probability
+        if p >= 1.0:
+            return True
+        rolled = self._prob_rolls.get(lanlan)
+        if rolled is not None and (now - rolled[0]) < settings.send.probability_reuse_sec:
+            return rolled[1]
+        hit = _RNG.random() < p
+        self._prob_rolls[lanlan] = (now, hit)
+        return hit
+
+    # ------------------------------------------------------------------
     # 投递
     # ------------------------------------------------------------------
 
@@ -92,6 +150,7 @@ class Sender:
         settings: StickerManagerSettings,
         source: str,
         now: float | None = None,
+        force: bool = False,
     ) -> SendResult:
         """投递一张表情包并记账。source 只进台账（"tool" / "panel"），不面向用户。"""
         moment = time.time() if now is None else now
@@ -103,6 +162,14 @@ class Sender:
         remaining = self.cooldown_remaining(lanlan, settings, now=moment)
         if remaining > 0.0:
             return SendResult.failure(ERR_COOLDOWN, sticker_id=sticker.id)
+        # 两个节奏闸只拦她（source=="tool"）；force=主人点名要再看这张，绕行两个闸
+        # （冷却仍生效——那是防刷屏，不是表达问题）。先查重（确定性）再掷骰，
+        # 不让重复图白耗一次判定。
+        if source == "tool" and not force:
+            if sticker.id in self.recent_sent_ids(lanlan, settings):
+                return SendResult.failure(ERR_RECENT_REPEAT, sticker_id=sticker.id)
+            if not self.probability_allow(lanlan, settings, now=moment):
+                return SendResult.failure(ERR_PROBABILITY, sticker_id=sticker.id)
 
         try:
             data = self._library.image_path(sticker).read_bytes()
@@ -141,9 +208,7 @@ class Sender:
         self._log(f"sticker sent: id={sticker.id} source={source}")
         return SendResult.success(sticker)
 
-    async def _build_part(
-        self, data: bytes, mime: str, *, settings: StickerManagerSettings
-    ) -> dict[str, Any] | None:
+    async def _build_part(self, data: bytes, mime: str, *, settings: StickerManagerSettings) -> dict[str, Any] | None:
         """构造 push_message 的 image part；无法投递时返回 None。"""
         inline_budget = settings.send.inline_max_bytes
         if mime == "image/gif" and not settings.send.animated_via_upload:
