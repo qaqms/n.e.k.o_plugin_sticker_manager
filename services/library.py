@@ -22,6 +22,7 @@ from ..core.catalog import (
     DEFAULT_ZONE_NAME,
     GROUP_DESC_MAX_CHARS,
     MAX_STICKER_BYTES,
+    OFFICIAL_ZONE_NAME,
     UPLOAD_CHUNK_BYTES,
     UPLOAD_MAX_TOTAL_BYTES,
     Sticker,
@@ -91,9 +92,12 @@ class Library:
         self._groups: dict[str, str] = {}
         # 区（v0.11.0 J-1）：`_zones` 按插入序就是面板 tab 序；`_group_zone` 是分类→区的归属；
         # `_active_zone` 是她看世界的唯一窗口（非激活区的分类/图对她整体隐形，陷阱 21 的推广版）。
-        self._zones: dict[str, dict[str, str]] = {}
+        # meta 值形如 {name, desc, builtin?}（J-2 起 builtin 为真才写，旧库形状不变）。
+        self._zones: dict[str, dict[str, Any]] = {}
         self._group_zone: dict[str, str] = {}
         self._active_zone: str = ""
+        # 官方播种台账（J-2 P2A，拍板 P3：只播一次 + 恢复按钮）：catalog 顶层 `official_seeded`。
+        self._official_seeded = False
         self._loaded = False
         self._io_dirty = False
         # zip 直传会话（仅本进程，sid -> {h, path, seq, size, name, at}）：
@@ -152,6 +156,7 @@ class Library:
         self._zones = {}
         self._group_zone = {}
         self._active_zone = ""
+        self._official_seeded = False
         legacy_shape = True
         try:
             raw = json.loads(self.catalog_path.read_text(encoding="utf-8"))
@@ -194,10 +199,14 @@ class Library:
                 if not isinstance(zone_id, str) or not zone_id or not zone_name:
                     continue
                 zone_desc = item.get("desc")
-                self._zones[zone_id] = {
+                meta: dict[str, Any] = {
                     "name": zone_name,
                     "desc": zone_desc.strip()[:GROUP_DESC_MAX_CHARS] if isinstance(zone_desc, str) else "",
                 }
+                # J-2：builtin 位宽松读（旧库无此键 = 非官方区）；只存真值，假值不占键位。
+                if item.get("builtin"):
+                    meta["builtin"] = True
+                self._zones[zone_id] = meta
             gz_raw = raw.get("group_zone") if isinstance(raw, dict) else None
             if isinstance(gz_raw, dict):
                 for group_name, zone_id in gz_raw.items():
@@ -207,6 +216,9 @@ class Library:
             active_raw = raw.get("active_zone")
             if isinstance(active_raw, str) and active_raw in self._zones:
                 self._active_zone = active_raw
+        # 播种台账宽松读（J-2）：只认布尔真（非布尔一律当未播——宁可下拍重试，不可假装封过）。
+        seeded_raw = raw.get("official_seeded") if isinstance(raw, dict) else None
+        self._official_seeded = isinstance(seeded_raw, bool) and seeded_raw
         self._ensure_zone_invariant(migrated=legacy_shape)
         self._loaded = True
         self._io_dirty = False
@@ -246,11 +258,20 @@ class Library:
                 "stickers": [s.as_dict() for s in self._stickers.values()],
                 "groups": dict(self._groups),
                 "zones": [
-                    {"id": zone_id, "name": meta["name"], "desc": meta["desc"]} for zone_id, meta in self._zones.items()
+                    {
+                        **({"builtin": True} if meta.get("builtin") else {}),
+                        "id": zone_id,
+                        "name": meta["name"],
+                        "desc": meta["desc"],
+                    }
+                    for zone_id, meta in self._zones.items()
                 ],
                 "active_zone": self._active_zone,
                 "group_zone": dict(self._group_zone),
             }
+            # J-2：播种台账只在真时写键（纯插入，旧库/未播种库的盘形一字不变）。
+            if self._official_seeded:
+                payload["official_seeded"] = True
             tmp = self.catalog_path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self.catalog_path)
@@ -280,6 +301,7 @@ class Library:
                 "id": zone_id,
                 "name": meta["name"],
                 "desc": meta["desc"],
+                "builtin": bool(meta.get("builtin")),
                 "active": zone_id == self._active_zone,
                 "total": counts.get(zone_id, 0),
             }
@@ -410,6 +432,72 @@ class Library:
                 self._log(f"sticker file removal failed: id={sticker.id}")
         self._log(f"zone removed: id={zone_id} stickers={len(victims)}")
         return True, "", len(victims)
+
+    # ------------------------------------------------------------------
+    # 官方区播种（v0.12.0 J-2 P2A：完全内置 + 只播一次 + 恢复按钮）
+    # ------------------------------------------------------------------
+
+    def official_seeded(self) -> bool:
+        """播种台账（catalog 顶层 `official_seeded`）：封过盘就不再自动重播。"""
+        return self._official_seeded
+
+    def official_zone(self) -> str:
+        """官方区 id：`builtin` 位优先，其次同名收编（主人手建的「官方」区）；都没有回空串。
+
+        真身尺是 builtin 位——收编那次就地补打；改名后靠位不靠名。
+        """
+        for zone_id, meta in self._zones.items():
+            if meta.get("builtin"):
+                return zone_id
+        for zone_id, meta in self._zones.items():
+            if meta["name"] == OFFICIAL_ZONE_NAME:
+                return zone_id
+        return ""
+
+    def seed_official(self, pack_path: Path, *, force: bool = False) -> dict[str, Any]:
+        """把内置官方包收进官方区；回 {status, zone?, imported/duplicates/rejected/failed}。
+
+        尺（拍板 P2A/P3，全部可重放）：
+        - 只播一次：`official_seeded` 在册且非 force → status=already，不碰包；
+          force（恢复按钮）跳台账但照样吃指纹查重，不会重入重图；
+        - 同名收编：有同名区就直接收编它（补打 builtin 位）而不是造重名区；
+        - 不抢台：播种前全库有图 → 激活区不动；只有空库（新装态）才默认激活官方区；
+        - 台账只在包干净（rejected+failed=0）时盖：半截/坏包下拍重试，幂等不重入；
+        - 入库走 `import_pack` 全套尺（魔数/查重/原子写盘/zip-slip 免疫），不造第二条入库路。
+        """
+        loaded = self.load()
+        if not loaded.ok:
+            return {"status": "io", "error": loaded.code or ERR_IO}
+        if self._official_seeded and not force:
+            return {"status": "already"}
+        zone_id = self.official_zone()
+        created = False
+        if zone_id:
+            if not self._zones[zone_id].get("builtin"):
+                self._zones[zone_id] = {**self._zones[zone_id], "builtin": True}
+                self.save()
+        else:
+            zone_id, error = self.create_zone(OFFICIAL_ZONE_NAME, "")
+            if error:
+                return {"status": "io", "error": error}
+            created = True
+            self._zones[zone_id] = {**self._zones[zone_id], "builtin": True}
+            self.save()
+        fresh_library = self.count() == 0
+        summary = self.import_pack(pack_path, zone=zone_id)
+        if summary["rejected"] == 0 and summary["failed"] == 0:
+            self._official_seeded = True
+            self.save()
+        if fresh_library and (summary["imported"] + summary["duplicates"]) > 0:
+            # 新装语义：官方区就是她的默认世界；空库 force 恢复同样适用（合法的偏好默认）。
+            self.activate_zone(zone_id)
+        status = "restored" if force else "seeded"
+        self._log(
+            "official seed: status={} zone={} imported={} duplicates={} rejected={} failed={}".format(
+                status, zone_id, summary["imported"], summary["duplicates"], summary["rejected"], summary["failed"]
+            )
+        )
+        return {"status": status, "zone": zone_id, "created": created, **summary}
 
     # ------------------------------------------------------------------
     # 分组说明（v0.7.0 轮 F）

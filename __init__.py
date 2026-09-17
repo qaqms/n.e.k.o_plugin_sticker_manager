@@ -33,6 +33,7 @@ import base64
 import binascii
 import random
 import time
+from pathlib import Path
 from typing import Any
 
 from plugin.sdk.plugin import (  # pyright: ignore[reportMissingImports] — 独立仓无宿主包树；挂载态可解析，测试由 conftest 桩接管
@@ -53,6 +54,7 @@ from .core import (
     CAPTION_MAX_CHARS,
     GROUP_DESC_MAX_CHARS,
     MAX_STICKER_BYTES,
+    OFFICIAL_PACK_RELPATH,
     PREVIEW_CHUNK_BYTES,
     UPLOAD_CHUNK_BYTES,
     VISIBLE_TEXT_MAX_CHARS,
@@ -146,17 +148,31 @@ class StickerManagerPlugin(NekoPluginBase):
     async def on_startup(self, **_):
         await self._reload_settings()
         loaded = self._library.load(force=True)
+        seed_note = "absent"
+        try:
+            # J-2 官方区内置（P2A）：首启把随包官方收藏收进「官方」区——尺在 Library.seed_official
+            # （只播一次/同名收编/空库才默认激活）。播种炸了不许拦 startup：它是锦上添花，
+            # 库的管理面不因此受伤；台账未盖，下次启动自动重试（幂等吃指纹查重）。
+            pack = self._official_pack_path()
+            if pack.is_file():
+                seed = self._library.seed_official(pack)
+                seed_note = str(seed.get("status", "?") if seed.get("status") != "io" else f"io:{seed.get('error')}")
+        except Exception:  # noqa: BLE001 - 播种异常只进日志，不拖死启动
+            self.logger.warning("sticker_manager official seed leaked", exc_info=True)
+            seed_note = "leaked"
         self.logger.info(
-            "sticker_manager ready: enabled={} stickers={} io_ok={}",
+            "sticker_manager ready: enabled={} stickers={} io_ok={} official_seed={}",
             self._settings.enabled,
             self._library.count(),
             loaded.ok,
+            seed_note,
         )
         return Ok(
             {
                 "status": "ready",
                 "enabled": self._settings.enabled,
                 "stickers": self._library.count(),
+                "official_seed": seed_note,
             }
         )
 
@@ -759,6 +775,39 @@ class StickerManagerPlugin(NekoPluginBase):
         if not ok:
             return Err(SdkError(error or "zone_io_error"))
         return Ok({"note": "zone_removed", "zone_id": zone_id, "removed": removed})
+
+    def _official_pack_path(self) -> Path:
+        """内置官方包的定位尺（代码根只读区，J-2 P2A）：打包、首启播种、恢复按钮三处同源。
+
+        测试把同名实例属性换成假包路径即可（入口/快照/启动都走这把尺）。
+        """
+        return Path(str(self.plugin_dir)).joinpath(*OFFICIAL_PACK_RELPATH)
+
+    @ui.action(
+        id="zone_restore_official",
+        label=tr("actions.zone_restore_official.label", default="Restore official"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="zone_restore_official",
+        name=tr("entries.zone_restore_official.name", default="恢复官方收藏区"),
+        description=tr(
+            "entries.zone_restore_official.description",
+            default="官方区被拆掉后的补救入口：把随包的官方收藏重新收进「官方」区（内容指纹查重，不会重入重图）；不会抢走她当前正在用的区，除非库本来就是空的",
+        ),
+        input_schema={"type": "object", "properties": {}},
+        llm_result_fields=["note", "zone", "imported", "duplicates"],
+        timeout=120.0,
+    )
+    async def zone_restore_official_entry(self, **_):
+        pack = self._official_pack_path()
+        if not pack.is_file():
+            return Err(SdkError("official_pack_missing"))
+        seed = self._library.seed_official(pack, force=True)
+        if seed.get("status") == "io":
+            return Err(SdkError(str(seed.get("error") or "library_io_error")))
+        return Ok({"note": "official_restored", **seed})
 
     @ui.action(
         id="batch_update",
@@ -1363,6 +1412,13 @@ class StickerManagerPlugin(NekoPluginBase):
             # J-1：区的脸面（tab 序=插入序）+ 她的世界窗口在哪个区。
             "zones": self._library.zones(),
             "active_zone": self._library.active_zone(),
+            # J-2：官方区的脸面——pack=随包官方装在不在（恢复按钮的前提），zone=它在哪个区
+            # （空串=不在册，面板 tab 尾出「恢复官方收藏」），seeded=播种台账。
+            "official": {
+                "pack": self._official_pack_path().is_file(),
+                "zone": self._library.official_zone(),
+                "seeded": self._library.official_seeded(),
+            },
             "usage": self._library.read_usage(limit=12),
             "inbox": {
                 "pending": len(self._library.inbox_files()),

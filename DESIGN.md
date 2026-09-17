@@ -99,6 +99,17 @@
   所有写入（建类/收图/导入）落正在看的区。拆区=连带拆全部分类与图（`zone_remove`，服务端 120s 与
   `LONG_CALL` 同尺；最后一个区不许拆），面板确认摊 zone.total + **3 秒防误删闸**（纯前端，
   服务端不装慢；官方区同样可删，J-2 另留「恢复官方收藏」补种口）。
+- **官方区内置（v0.12.0 J-2 P2A，完全内置）**：随包官方收藏 = `official/official_pack.zip`
+  （190 张压后 gif，manifest v3，34.8MiB；尺 `core.catalog.OFFICIAL_PACK_RELPATH`，
+  打包/播种/入口三处同源）。`on_startup` 调 `Library.seed_official(pack)`：只播一次
+  （顶层 `official_seeded` 台账，**只认布尔真**，脏值当未播）；台账只在包干净（rejected+failed=0）
+  时盖，半截包下拍重试；入库走 `import_pack` 同一把尺（指纹查重，重放不重入）；
+  区的真身尺是 **`builtin` 位不是名字**（同名区收编补位、改名后靠位不认名）；
+  **空库才默认激活官方区，旧库不抓台**（陷阱 23 的 `active_pool()` 天然接管未激活的官方区）。
+  盘形纯插入：`zones[].builtin` 与 `official_seeded` 只在真时写键，schema 仍 v2。
+  面板：tab 官方徽章；官方区不在册且随包在→tab 尾「恢复官方收藏」
+  （`zone_restore_official`，force 播种跳台账但照样吃查重；长任务两把尺对齐，陷阱 19 对偶）；
+  新码 `official_pack_missing`；播种炸不拦 startup；快照 `official:{pack,zone,seeded}`。
 - **分类优先（v0.10.0 轮 I，主人要求重设计分类系统而做）**：分类从“图的附带属性”升为**显式对象**：
   ① **先立分类**——`group_create(name, desc)`（desc 可空，名字必填）。空分类能存住：
   `catalog.json.groups` 里 `{名: ""}` = “在册但未写说明”；**`load()` 不再丢空说明**、
@@ -144,7 +155,7 @@
 - 不声明 `[plugin.store]`：持久化走 `data_path` 文件通道（失败是响亮的，规避 store 静默失效坑）
 - SDK surfaces：`plugin.sdk.plugin` 唯一门面；`ctx.push_message` / `ctx.images.upload`（仅 entry/tool 里用，lifecycle 不可）
 - UI：hosted-tsx；`ImageUpload`/`ImagePreview` 是 kit 现成件；缩略图懒加载走 `preview` action（context 不带图字节）
-- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / duplicate_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required（v0.7.0 起退场，add 不再拦空描述） / desc_too_long / image_too_large / image_undecodable / recent_repeat / probability_declined / upload_not_zip / upload_session_unknown / upload_seq_gap / upload_chunk_bad / upload_too_large / upload_empty / upload_write_failed / zone_required / zone_exists / zone_not_found / zone_last（J-1））
+- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / duplicate_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required（v0.7.0 起退场，add 不再拦空描述） / desc_too_long / image_too_large / image_undecodable / recent_repeat / probability_declined / upload_not_zip / upload_session_unknown / upload_seq_gap / upload_chunk_bad / upload_too_large / upload_empty / upload_write_failed / zone_required / zone_exists / zone_not_found / zone_last（J-1） / official_pack_missing（J-2））
 
 ## 已知陷阱（本机/宿主源码核实，改动前先读）
 
@@ -233,6 +244,12 @@
     默认区名「自制区」也是数据不是文案，不走 i18n。
     面板侧的镜像尺：主人可看任意区（viewZone），但写入落当前区——两把尺分开，别“顺手统一”。
 
+24. **官方区的真身是 `builtin` 位，台账只认布尔真**（v0.12.0 J-2）：播种/收编/恢复按钮的判据都
+    从 `Library.official_zone()` 拿（位优先、同名只当收编线索）——**新代码别拿名字当官方区的身份证**
+    （主人改完名之后靠位不靠名）；`official_seeded` 与 `builtin` 都是**库数据不是配置**，不碰三处同源；
+    台账盖章只在包干净时（半截包下拍重试），播种走 `import_pack` 同一把尺——**别开第二条入库路**；
+    空库才默认激活官方区，旧库升级绝不抓台（主人的激活位是他的决定）。
+
 ## Read Context Plan
 
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）
@@ -257,27 +274,23 @@ push 不再触发任何云端验证，质量链只有本地五门 `tools/release
     她只感知激活区（陷阱 23）；旧库 load 即迁入默认区「自制区」。
     **✅ 2026-09-18 主人拍板：0.11.0 包已导入并完成区操作验收，无问题**
     （装机态实测复核：catalog schema v2、默认区在册、库零图属刻意清库）。
-  - **J-2 官方区内置（主人拍板 P2A 完全内置 + P3 只播种一次+恢复按钮；spike 前置不变：
-    不通过就全案转 B（配方包放固定路径））**：语义设定（首启播种进「官方」区标 builtin 只播一次/
-    官方区缺席时 tab 尾出「恢复官方收藏」/新装默认激活官方区/拆官方区同样 3 秒闸/
-    payload 带大包后 release_gate 复制探针变慢属已接受代价）——**开工时照旧执行**。
-  - **J-2 弹药就绪（2026-09-18 准备轮，只剩主人实机两步）**：
-    - **压图已完工**（甲方案落地）：`sticker_pack_lab/tools/compress_gifs.py` + gifsicle 1.95
-      （`tools/bin/gifsicle/`）——**190/190 全部达标**，85.4→**34.7MiB**，最大张 249KiB；
-      阶梯分布：无损 49 / 轻 lossy 60 / lossy100 12 / 减帧+lossy 56 / 减帧+lossy150 仅 1，
-      重刀（收色板/缩尺/降帧率）一张未用。实际官方包体积将远低于 86MB 预估。
-      **本机 win 构建两条实测怪癖（上游文档不认，二进制说了算）**：`file#spec` 拼接式不认、
-      逗号帧列表不认（`#0,2` 也拒）——减帧只能走 `-U → --explode → 隔步长 merge` 三段路（已写进脚本 docstring）。
-    - **夹具已造齐**（`sticker_pack_lab/out/spike/`）：`official_pack.zip`（190 张 manifest v3，34.8MiB）/
-      `boundary_pack.zip`（三张 ~249KiB 贴尺样张）/ `dist\sticker_manager_SPIKE_86MB.neko-plugin`
-      （85.5MiB，sha256 `fab80566…165991c`，含 51MiB 不可压垫块；**一次性 spike，验完必须重导干净
-      v0.11.0 包恢复装机态**——只换代码不动 data）。
-    - **离线对账 7/7**（`tools/verify_spike_fixtures.py`，跑 `Library.import_pack` 真路）：
-      首导 190/0/0/0 → 复导 190 全 duplicate；超尺 0；动画保真 190/190；active_pool 对账；
-      边界样张全 ≤250KiB 且带动画；manifest 零回退；封套条目齐。报告 `out/spike_verify_report.txt`。
-    - **待主人实机两步**：甲 = 插件中心导入 SPIKE 包（验 ~86MB 封套链路）；
-      乙 = 面板导入 `boundary_pack.zip` 后让她实发一张（验 gif 内联贴尺落地、聊天里动画活着）。
-      甲过 → J-2 按 P2A 开工；任一红 → 全案转 B。
+  - **J-2 已完工（v0.12.0，P2A 完全内置 + P3 只播一次+恢复按钮，2026-09-18）**：
+    - 官方包进 payload：`official/official_pack.zip`（190 张压后 gif，manifest v3，34.8MiB）。
+      压图流水线在 `sticker_pack_lab/tools/compress_gifs.py`（190/190 达标，85.4→34.7MiB，最大张 249KiB，
+      重刀零命中；本机 gifsicle win 构建不认拼接帧选择/逗号列表，减帧走 explode→merge 三段路）。
+    - 播种尺/恢复入口/官方徽章/快照三键全落地（语义见能力面「官方区内置」条与陷阱 24）；
+      夹具离线对账 7/7（`sticker_pack_lab/tools/verify_spike_fixtures.py`，报告 `out/spike_verify_report.txt`：
+      真路 import_pack 首导 190/0/0/0→复导全 dup、动画保真、active_pool 对账）；测试 250→261。
+    - **spike 状态**：甲（86MB 封套）✅——主人已实导 `dist\sticker_manager_SPIKE_86MB.neko-plugin`
+      （装机态实测 86.4MiB/48 文件解盘完整，插件正常启动、面板可用，2026-09-18）；
+      乙（贴尺 gif 实发）**未跑**——并入下方验收清单第③步（官方包入库后直接点名最大的那几张）。
+    - **v0.12.0 实机验收清单（待主人回账，详单见本条下方注）**：导真包→首启 `official_seed=seeded`、
+      官方区 190 张、新装默认激活、徽章在→实发一张贴尺 gif（=乙补票）→拆官方区→恢复按钮闭环。
+      全绿 → J-2 销账转 J-3；任一红 → 按拍板评估转 B。装机态此刻还是 SPIKE 假货（含 51MiB 垫块），
+      导真包时自然被覆盖恢复（覆盖导入不重置知情同意，data 不动）。
+    - 历史弹药仍在 `sticker_pack_lab/out/spike/`（含 `boundary_pack.zip` 三张贴尺样张，可单独实发）。
+    - 注：验收操作细案在 `sticker_pack_lab/out/spike/验收卡_J2spike.md`（乙那张卡按本条更新后的顺序用：
+      先真包再谈样张包，样张包若单独导会在官方区外多住三张同指纹——查重尺会拒，不算脏数据但别奇怪）。
   - **J-3 待开工（内容轮，可与 J-2 并行）**：190 张 GIF 的分区与打标在 `sticker_pack_lab` 做；
     文件名已带草稿线索（`007_生气`、`012~015_吐舌`、`001~006_通知_提示`）；现有测试库主人已拍板全清。
   - **分类改名（轮 I 欠账）**仍未做：主人拍板 3A 单独立轮；区的改名已因内部 id 设计在 J-1 顺手解决。

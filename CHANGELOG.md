@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.12.0
+
+v0.12.0「官方区内置」（J-2，主人拍板 P2A 完全内置 + P3 只播一次+恢复按钮）——她的收藏间开张即存货：**随包官方收藏 190 张，首启自动播种进「官方」区**：
+
+- **官方包进 payload**：`official/official_pack.zip`（190 张压后 gif，manifest v3，34.8MiB）——
+  甲方案压图尺在 `sticker_pack_lab`（每张 ≤250KiB，内联预算边缘，重刀零命中；
+  gifsicle win 构建不认拼接帧选择/逗号列表，减帧走 explode→merge 三段路，已入该仓脚本档）。
+  尺在 `core.catalog.OFFICIAL_PACK_RELPATH`（打包/播种/入口三处同源一把尺）。
+- **播种尺（`Library.seed_official`）**：只播一次（catalog 顶层 `official_seeded` 台账，**只认布尔真**——
+  脏值一律当未播，宁可重试不可假装封过）；台账只在包干净（rejected+failed=0）时盖，半截包下拍重试；
+  入库走 `import_pack` 全套尺（魔数/指纹查重/原子写盘），重放不重入；**同名收编**：主人手建的「官方」区
+  被补打 `builtin` 位就地收编，不造重名区；区的真身尺是 `builtin` 位不是名字（改名后靠位不靠名）。
+- **不抓台**：只有播种前全库零图（新装态）才默认激活官方区；旧库升级官方区静默躺在 tab 里，
+  她的世界不动（陷阱 23 的 `active_pool()` 尺天然接管：没激活就是没存货）。
+- **入口面 +1**：`zone_restore_official`（服务端 120s 与 `LONG_CALL` 同尺，陷阱 19 对偶）；
+  新码 `official_pack_missing`。`on_startup` 里播种炸了不拦启动（台账未盖下次自动重试）；
+  startup 回包与日志带 `official_seed` 状态（absent/already/seeded/restored/io:码）。
+- **面板**：区 tab 官方徽章（「 ·官方」）；官方区不在册且随包在——tab 尾出「恢复官方收藏」
+  （dashboard 快照新增 `official:{pack,zone,seeded}` 三键当判据）；拆官方区同样 3 秒闸（J-1 现尺，无特例）。
+- **盘形纯插入**：zones 条目可选 `builtin:true`、顶层可选 `official_seeded:true`——只在真时写键，
+  未播种库的盘形一字不变（schema 仍 v2，不升号：旧 reader 遇新键自然忽略）。
+- i18n +6 键（zh-CN/en 同键集，尾部纯插入）；plugin.description/short_description 双通道（toml + i18n）同改。
+- 测试 **250 → 261 passed**（新 `tests/test_official_seed.py` 十一条：生命周期五门 + 宽松读两门 + 入口/快照/启动四门）。
+- 下一轮就位：v0.12.0 包实机验收（首启播种 190 张 + 实发一张贴尺 gif = spike 乙补票 + 拆官方区→恢复闭环）；
+  J-3 官方 190 张分区打标（`sticker_pack_lab`）。
+
 ## 0.11.0
 
 v0.11.0「区」（J-1）——三层管理面的地基：**区 → 分类 → 图**，她只感知激活区（主人拍板 Q1b/Q3/Q4/P1）：

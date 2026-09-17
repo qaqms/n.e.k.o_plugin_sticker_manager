@@ -2,6 +2,9 @@
 
 给她一个自己的表情包收藏间。
 
+**开张即存货**：随包内置 190 张官方收藏（全部保动画的贴尺 gif），首次启动自动收进「官方」区——
+只播一次，拆掉后面板 tab 尾可一键「恢复官方收藏」（v0.12.0 J-2）。
+
 主人先选**区**（分类的上层：J-1 三层「区→分类→图」，她只感知当前激活的那个区），
 再**建分类**（名字 + 一句“什么时候用这一类”），点分类块头的「收图进这一类」
 把图收进来（想逐图补什么，点开图在聚焦卡里改）；猫娘通过
@@ -12,9 +15,10 @@
 
 | 面 | 内容 |
 | --- | --- |
-| 管理入口 | `add` / `update` / `remove` / `send` / `list` / `preview` / `history` / `switch` / `repair` / `import_inbox` / 直传三入口 `import_upload_start`→`chunk`→`finish` / `group_create` / `group_remove` / `group_set_desc` / `batch_update` / `batch_remove` / **`zone_create` / `zone_rename` / `zone_set_desc` / `zone_activate` / `zone_remove`（J-1：区是分类的上层，内部 id 引用所以改名白送）** |
+| 管理入口 | `add` / `update` / `remove` / `send` / `list` / `preview` / `history` / `switch` / `repair` / `import_inbox` / 直传三入口 `import_upload_start`→`chunk`→`finish` / `group_create` / `group_remove` / `group_set_desc` / `batch_update` / `batch_remove` / `zone_create` / `zone_rename` / `zone_set_desc` / `zone_activate` / `zone_remove`（J-1：区是分类的上层，内部 id 引用所以改名白送） / **`zone_restore_official`（J-2：官方区被拆后的补救，长任务走 120s 尺）** |
 | 分类优先（轮 I） | 默认空库什么都没有：先在区内点「新建分类」写名字（必填）+“什么时候用这一类”（可留空），建完就能往它里收图。**收图不问逐图字段**（描述交空串，目录正文按回落尺取分类说明），想逐图改就点开图用聚焦卡。**删分类 = 连带删它里的图**（1C 拍板），确认里先摊精确张数 |
 | 区（J-1） | 三层「区→分类→图」：分类名**全库唯一**（跨区也算——她按名字选图，一个名字不能两个家）；**她只感知激活区**：目录/发图/检索/注入全走 `active_pool()`，其余区整体隐形；主人可浏览任意区，但所有写入（建类/收图/导入）落正在看的区。拆区连带拆全部分类与图（最后一个不许拆；面板确认摊服务端张数 + **3 秒防误删闸**，纯前端）。旧库 load 即迁入默认区「自制区」，无需手工迁移 |
+| 官方区（J-2） | 官方收藏 190 张随包内置（`official/official_pack.zip`，manifest v3）；首启播种只播一次（`official_seeded` 台账，脏包不盖章下拍重试）；区的真身是 `builtin` 位，同名手建区就地收编；**空库才默认激活官方区，旧库升级不抓台**；官方区不在册时 tab 尾出「恢复官方收藏」（`zone_restore_official`，吃指纹查重不重入）；tab 带「官方」徽章 |
 | 轻打标 | 逐图文本全可选：一句**分类说明**就是她看到的分类目录正文；目录行正文回落 `梗义>描述>分类说明>未标注`，不造假描述；逐图归类**只能从已有分类里选**（Select，不再是自由输入——手打新名字会静默立一个没说明的分类）；批量勾选即可加/删标签、移入分类、启停、删除 |
 | LLM 工具 | `sticker_list`（看目录）、`sticker_send`（按 id / 分类 / 关键词发），带**注册心跳**：宿主/main_server 重启后静默缺席的工具每 5 分钟被点名补挂 |
 | 面板 | hosted-tsx：**区 tab（新建/改名/说明/激活/拆区 3 秒确认）** + 分类分区墙（一格一图 + 就地聚焦卡）、新建/删分类、逐分类收图、总开关。**零覆盖层弹窗**（平台坑，见 DESIGN 陷阱 20）；v0.10.2 起「她最近用过的」台账卡退场（后端台账保留，仍供去重/排序） |

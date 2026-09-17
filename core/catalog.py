@@ -50,6 +50,11 @@ GROUP_MAX_CHARS = 40
 ZONE_MAX_CHARS = 40
 # 新建库的默认区名：这是数据（主人可改名），不是 i18n 文案。
 DEFAULT_ZONE_NAME = "自制区"
+# 官方区（v0.12.0 J-2 P2A）：内置官方收藏的容器区。名字同样是数据不是文案；
+# 区的真身尺是 `builtin` 位，名字只当"收编"线索——主人手建过一个叫「官方」的区不冲突。
+OFFICIAL_ZONE_NAME = "官方"
+# 内置官方包在插件目录（只读代码根）里的相对路径：首启播种与恢复按钮共用这一把尺。
+OFFICIAL_PACK_RELPATH = ("official", "official_pack.zip")
 # 分组说明（轮 F，对齐外部系统「分类描述即 prompt」）：一句给模型看的话挂在组上。
 # 比单图 desc 宽、与 caption 同量级：它要独立说清“什么时候用这一组”。
 GROUP_DESC_MAX_CHARS = 300

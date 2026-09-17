@@ -14,12 +14,14 @@ export function ZoneBar(props: {
   zones: ZoneInfo[];
   view: string;
   activeZone: string;
+  showRestore: boolean;
   onSwitch: (zoneId: string) => void;
   onCreate: (name: string, desc: string) => Promise<boolean>;
   onRename: (zoneId: string, name: string) => Promise<boolean>;
   onSetDesc: (zoneId: string, desc: string) => Promise<boolean>;
   onActivate: (zoneId: string) => Promise<boolean>;
   onRemove: (zoneId: string, name: string) => Promise<boolean>;
+  onRestore: () => Promise<boolean>;
 }) {
   const t = props.surface.t;
   const [creating, setCreating] = useState(false);
@@ -86,9 +88,11 @@ export function ZoneBar(props: {
   const tabLabel = (zone: ZoneInfo) => {
     const base = String(zone.name || "");
     const count = " (" + String(zone.total ?? 0) + ")";
+    // J-2：官方区挂「官方」徽章（builtin 位是真身尺，改名不丢）；激活徽章语义不变。
+    const tag = zone.builtin ? t("panel.zone.badge_builtin", { defaultValue: " ·官方" }) : "";
     return zone.active
-      ? base + count + t("panel.zone.badge_active", { defaultValue: " ·她在用" })
-      : base + count;
+      ? base + count + tag + t("panel.zone.badge_active", { defaultValue: " ·她在用" })
+      : base + count + tag;
   };
 
   return (
@@ -115,6 +119,17 @@ export function ZoneBar(props: {
         >
           {t("panel.zone.new", { defaultValue: "新建区" })}
         </Button>
+        {/* J-2 拍板 P3：官方区不在册且随包官方装在——tab 尾给一个补救入口（长任务，model 层已配 LONG_CALL）。 */}
+        {props.showRestore ? (
+          <Button
+            tone="default"
+            onClick={() => {
+              props.onRestore();
+            }}
+          >
+            {t("panel.zone.restore_official", { defaultValue: "恢复官方收藏" })}
+          </Button>
+        ) : null}
       </Inline>
       {creating ? (
         <Inline gap={6} align="center" wrap>

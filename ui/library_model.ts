@@ -96,11 +96,12 @@ export function useLibraryModel(surface: Surface) {
         surface,
         actionId,
         args,
-        actionId === "zone_remove" ? LONG_CALL : undefined,
+        actionId === "zone_remove" || actionId === "zone_restore_official" ? LONG_CALL : undefined,
       );
       const extra: Record<string, unknown> = { defaultValue: doneDefault };
       if (result) {
-        extra.count = result.removed ?? 0;
+        // 拆区报删掉的张数，恢复官方报收进的张数——同一只 toast 位，两把尺各自取数。
+        extra.count = result.removed ?? result.imported ?? 0;
       }
       if (params) {
         const keys = Object.keys(params);
@@ -134,6 +135,9 @@ export function useLibraryModel(surface: Surface) {
     zoneAction("zone_activate", { zone_id: zoneId }, "panel.zone.activated", "她的世界已切到这个区");
   const removeZone = (zoneId: string, name: string) =>
     zoneAction("zone_remove", { zone_id: zoneId }, "panel.zone.removed", "已拆区「{name}」（连带 {count} 张图）", { name });
+  // J-2：官方区被拆后的补救（拍板 P3：只播一次 + 恢复按钮）——长任务，走 LONG_CALL 那把尺。
+  const restoreOfficial = () =>
+    zoneAction("zone_restore_official", {}, "panel.zone.restored", "官方收藏已恢复：收了 {count} 张");
 
   const exportPack = async () => {
     setLibraryNote("");
@@ -586,11 +590,13 @@ export function useLibraryModel(surface: Surface) {
     activeZone,
     view,
     setViewZone,
+    officialInfo: (surface.state && surface.state.official) || {},
     createZone,
     renameZone,
     setZoneDesc,
     activateZone,
     removeZone,
+    restoreOfficial,
     libraryNote,
     uploading,
     collectBusy,

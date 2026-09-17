@@ -44,12 +44,14 @@ export type GroupInfo = {
 };
 
 // J-1：区（分类的上层）。active = 她在用的那个区；非激活区对她整体隐形。
+// J-2：builtin = 官方区（随包播种的那个）；它的生死决定「恢复官方收藏」按钮出不出。
 export type ZoneInfo = {
   id: string;
   name: string;
   desc?: string;
   active?: boolean;
   total?: number;
+  builtin?: boolean;
 };
 
 // 轮 I（分类优先）：浏览与收图都以分类为单位——一个分类一个区块，
@@ -81,6 +83,8 @@ export type State = {
   // J-1：区的脸面（tab 序）与她的世界窗口。usage/inbox 后端仍发，面板不展示。
   zones?: ZoneInfo[];
   active_zone?: string;
+  // J-2：官方区的尺——pack=随包官方装在不在，zone=它在哪个区（空=不在册），seeded=播种台账。
+  official?: { pack?: boolean; zone?: string; seeded?: boolean };
   // 注：后端 state 仍带 usage 与 inbox（台账是跨轮去重的事实记忆，收件箱是服务端旁路），
   // 只是面板 v0.10.2/v0.10.3 起都不再展示。
   awareness?: AwarenessState;

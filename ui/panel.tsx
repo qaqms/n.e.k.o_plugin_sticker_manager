@@ -107,12 +107,14 @@ export default function Panel(props: Surface) {
               zones={zones}
               view={view}
               activeZone={lib.activeZone}
+              showRestore={!!(lib.officialInfo && lib.officialInfo.pack && !lib.officialInfo.zone)}
               onSwitch={lib.setViewZone}
               onCreate={lib.createZone}
               onRename={lib.renameZone}
               onSetDesc={lib.setZoneDesc}
               onActivate={lib.activateZone}
               onRemove={lib.removeZone}
+              onRestore={lib.restoreOfficial}
             />
             <LibraryToolbar
               surface={props}
