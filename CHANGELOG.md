@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.2
+
+v0.10.2「台账卡退场」——主人拍板：面板不再展示「她最近用过的」（纯视图轮，**后端零变化**）：
+
+- `ui/components/usage_card.tsx` 删除；`ui/panel.tsx` 装配去位（台账卡与 Divider 间的空 Stack 一并收掉）；
+  `ui/shared.ts` 退场 `UsageRow` 类型与 `State.usage` 字段（留注释说明后端仍发）。
+- **后端不动**：`history` 入口、`state.usage`、`usage.json` 全部保留——台账的正职是跨轮去重
+  （`recent_dedup_count`）与最近爱用排序（目录/注入文案），展示只是附带面；重启不失忆纪律（陷阱 9）不变。
+- i18n：`panel.card.usage` / `panel.usage.*` 退场键按仓内先例留档不删；
+  `plugin.description` 双通道（toml + zh-CN/en）同步改写（不再承诺「面板能看到最近爱用」）。
+- 顺手：`Translate` 的 params 从 `Record<string, any>` 收紧为 `Record<string, unknown>`（hosted-tsx 门实测通过）。
+- 验证：五门全绿（pytest 242 passed 不增不减；release `payload_hash_verified=True`；hosted-tsx 过）。
+
 ## 0.10.1
 
 v0.10.1「面板拆分」——纯架构轮（主人选定方向：表情包管理类问题与面板整体管理的地基）：`ui/panel.tsx` 从 1924 行收敛为 273 行**装配骨架**，其余按 our_life v0.6.0 的拆分先例落位，**行为零变化、后端零变化、错误码零变化**：

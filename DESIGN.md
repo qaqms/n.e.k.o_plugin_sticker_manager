@@ -112,7 +112,8 @@
   其余落位——`ui/shared.ts`（类型/常量/纯函数：两处以上共用的尺）、
   `ui/preview.ts`（预览缓存 + 懒加载调度 + `useStickerPreview`）、
   `ui/library_model.ts`（库卡动作模型 `useLibraryModel`，无 JSX）、
-  `ui/components/**`（tile/focus/usage/awareness/batch/section/toolbar 七块）。
+  `ui/components/**`（tile/focus/awareness/batch/section/toolbar 六块；usage 台账卡于 v0.10.2 从面板退场，
+  后端 `history` 入口与 `usage.json` 保留——台账的正职是跨轮去重与排序，不是展示）。
   多文件纪律：相对导入只写 `./shared` 这类简单具名导出（链接器拒 re-export/`export list`），
   运行时依赖账在 32 文件 / 512 KiB 内；新文件的 `t()` 键由 i18n 门的 `ui/**` 递归扫兜住；
   带 `key={...}` 的组件 props 必须声明 `key?: string`（hosted-tsx 真跑类型检查）。

@@ -11,7 +11,7 @@
 
 import type { PluginSurfaceProps } from "@neko/plugin-ui"
 
-export type Translate = (key: string, params?: Record<string, any>) => string
+export type Translate = (key: string, params?: Record<string, unknown>) => string
 
 export type StickerRow = {
   id: string;
@@ -25,15 +25,6 @@ export type StickerRow = {
   group?: string;
   caption?: string;
   visible_text?: string;
-};
-
-export type UsageRow = {
-  at?: number;
-  id?: string;
-  lanlan?: string;
-  source?: string;
-  ok?: boolean;
-  code?: string;
 };
 
 export type AwarenessState = {
@@ -75,7 +66,7 @@ export type State = {
   };
   stickers?: StickerRow[];
   groups?: GroupInfo[];
-  usage?: UsageRow[];
+  // 注：后端 state 仍带 usage（台账是跨轮去重的事实记忆，只是面板不再展示）。
   inbox?: { pending?: number; path?: string };
   awareness?: AwarenessState;
   config?: {

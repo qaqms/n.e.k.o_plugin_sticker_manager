@@ -1,7 +1,7 @@
 [plugin]
 id = "sticker_manager"
 name = "表情包管理"
-description = "给她一个自己的表情包收藏间：先建分类（名字 + 一句什么时候用这一类），再往分类里收图，点开图补梗义即可；她在对话里按分类和情境自己挑一张发出去。支持 png/jpg/gif/webp，动图保留动画；每次发送都记台账，面板能看到她最近爱用什么、哪张想发却没发出去。"
+description = "给她一个自己的表情包收藏间：先建分类（名字 + 一句什么时候用这一类），再往分类里收图，点开图补梗义即可；她在对话里按分类和情境自己挑一张发出去。支持 png/jpg/gif/webp，动图保留动画；每次发送都记台账，供跨轮去重与最近爱用排序。"
 short_description = "表情包收藏与发送：面板管理库，猫娘通过工具自主挑图发到聊天"
 keywords = [
     "表情包",
@@ -13,7 +13,7 @@ keywords = [
     "meme",
     "gallery",
 ]
-version = "0.10.1"
+version = "0.10.2"
 type = "plugin"
 entry = "plugin.plugins.sticker_manager:StickerManagerPlugin"
 

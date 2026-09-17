@@ -4,7 +4,7 @@
 // - ui/shared.ts          类型 + 常量 + 纯函数（两处以上共用的尺）
 // - ui/preview.ts         预览缓存 / 懒加载调度 / useStickerPreview
 // - ui/library_model.ts   库卡的状态与动作闭包（无 JSX，"这张卡怎么想"）
-// - ui/components/**      格子 / 聚焦卡 / 台账卡 / 注入卡 / 批量条 / 分类区块 / 工具条
+// - ui/components/**      格子 / 聚焦卡 / 注入卡 / 批量条 / 分类区块 / 工具条
 // 纪律照旧：新增 t() 键必须入 i18n（契约门递归扫 ui/ 全域）；长任务走 LONG_CALL；
 // 覆盖层弹窗禁用（陷阱 20）。
 //
@@ -32,7 +32,6 @@ import { BatchBar } from "./components/batch_bar";
 import { CategorySection } from "./components/category_section";
 import { FocusCard } from "./components/focus_card";
 import { LibraryToolbar } from "./components/library_toolbar";
-import { UsageCard } from "./components/usage_card";
 import { useLibraryModel } from "./library_model";
 import { buildSections, callAction } from "./shared";
 import type { Surface } from "./shared";
@@ -92,9 +91,6 @@ export default function Panel(props: Surface) {
           </Inline>
         </Inline>
         <Divider />
-        <Stack gap={12}>
-          <UsageCard t={t} usage={state.usage || []} />
-        </Stack>
         <AwarenessCard surface={props} />
         <Card title={t("panel.card.library", { defaultValue: "她的表情库" })}>
           <Stack gap={10}>
