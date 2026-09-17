@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.10.3
+
+v0.10.3「导入出口只留一个」——主人拍板的面板文案/操作轮（纯视图轮，**后端零变化**）：
+
+- 库卡改名：「她的表情库」→**「管理表情包」**（`panel.card.library` zh/en 与 tsx defaultValue 同改）。
+- 直传按钮改短：「选择套图包导入」→**「导入」**（busy 态「上传中…」不变）。
+- **收件箱从面板彻底退场**：「导入收件箱 (N)」按钮与 `{path}` 路径提示行删除；
+  `library_model.ts` 的 `importInbox` 闭包随之退场（不留死代码，同 guessDesc 先例）。
+  服务端 `import_inbox` 入口、`panel.inbox.*` 键、陷阱 13 处置纪律全部保留——
+  收件箱降为纯服务端旁路（放进目录的图仍能被入口整批收，只是面板不再给入口）。
+- `shared.ts` 的 `State.inbox` 字段退场（后端仍发，注到 usage 同一条注释里）。
+- 验证：五门全绿（pytest 242 passed 不增不减；release `payload_hash_verified=True`；hosted-tsx 过）。
+
 ## 0.10.2
 
 v0.10.2「台账卡退场」——主人拍板：面板不再展示「她最近用过的」（纯视图轮，**后端零变化**）：

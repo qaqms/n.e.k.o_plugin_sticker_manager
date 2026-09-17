@@ -92,7 +92,7 @@ export default function Panel(props: Surface) {
         </Inline>
         <Divider />
         <AwarenessCard surface={props} />
-        <Card title={t("panel.card.library", { defaultValue: "她的表情库" })}>
+        <Card title={t("panel.card.library", { defaultValue: "管理表情包" })}>
           <Stack gap={10}>
             <LibraryToolbar
               surface={props}
@@ -101,7 +101,6 @@ export default function Panel(props: Surface) {
               creating={lib.creating}
               uploading={lib.uploading}
               collectBusy={lib.collectBusy}
-              pendingInbox={(state.inbox && state.inbox.pending) || 0}
               newName={lib.newName}
               setNewName={lib.setNewName}
               newDesc={lib.newDesc}
@@ -123,9 +122,6 @@ export default function Panel(props: Surface) {
               }}
               onImageFiles={(files: any) => {
                 lib.chooseCollectedFiles(files);
-              }}
-              onImportInbox={() => {
-                lib.importInbox();
               }}
               onExport={() => {
                 lib.exportPack();
@@ -160,15 +156,6 @@ export default function Panel(props: Surface) {
               }}
               onClear={lib.clearSelection}
             />
-            {state.inbox && state.inbox.path ? (
-              <Text>
-                {t("panel.inbox.hint", {
-                  path: state.inbox.path,
-                  defaultValue:
-                    "套图包也可以点「选择套图包导入」直接选文件；或把图片放进 {path} 后点「导入收件箱」，描述取自文件名。",
-                })}
-              </Text>
-            ) : null}
             {lib.libraryNote ? <Text>{lib.libraryNote}</Text> : null}
             {focusRow ? (
               <FocusCard

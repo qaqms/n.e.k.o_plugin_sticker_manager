@@ -66,8 +66,8 @@ export type State = {
   };
   stickers?: StickerRow[];
   groups?: GroupInfo[];
-  // 注：后端 state 仍带 usage（台账是跨轮去重的事实记忆，只是面板不再展示）。
-  inbox?: { pending?: number; path?: string };
+  // 注：后端 state 仍带 usage 与 inbox（台账是跨轮去重的事实记忆，收件箱是服务端旁路），
+  // 只是面板 v0.10.2/v0.10.3 起都不再展示。
   awareness?: AwarenessState;
   config?: {
     cooldown_sec?: number;

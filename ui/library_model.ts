@@ -113,34 +113,8 @@ export function useLibraryModel(surface: Surface) {
     }
   };
 
-  const importInbox = async () => {
-    setLibraryNote("");
-    try {
-      const result = await callAction(surface, "import_inbox", {}, LONG_CALL);
-      if (result) {
-        setLibraryNote(
-          t("panel.inbox.done", {
-            imported: result.imported ?? 0,
-            duplicates: result.duplicates ?? 0,
-            rejected: result.rejected ?? 0,
-            failed: result.failed ?? 0,
-            defaultValue:
-              "导入完成：收进 {imported}、重复跳过 {duplicates}、坏图/超限 {rejected}、失败 {failed}",
-          }),
-        );
-      }
-      await surface.api.refresh();
-    } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setLibraryNote(
-        t("panel.toast.failed", {
-          code: extractCode(raw),
-          defaultValue: "操作失败：{code}",
-        }),
-      );
-    }
-  };
+  // 收件箱导入的按钮已于 v0.10.3 从面板退场（主人拍板）：`import_inbox` 服务端入口与
+  // `panel.inbox.done` 键照旧保留，只是这里不再有人按它。
 
   // 套图包直传（v0.6.0）：选择 .zip → 分块上传 → 服务端同一把尺导入。
   // 分块大小由服务端 start 回包定（与预览共用同一条 ZMQ 帧尺），面板不硬编码。
@@ -559,7 +533,6 @@ export function useLibraryModel(surface: Surface) {
     imgInputRef,
     exportPack,
     repair,
-    importInbox,
     importZip,
     saveGroupDesc,
     createCategory,

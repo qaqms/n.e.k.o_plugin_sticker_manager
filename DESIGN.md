@@ -45,9 +45,10 @@
 - 套图包导出/导入（v0.2.0）：`data/library/exports/*.zip`（manifest.json + stickers/）；
   导入走收件箱通道认 `.zip`（manifest 优先、裸图包按文件名清洗）；zip 条目名只当包内定位符，
   落盘永远走 add() 服务端发号（zip-slip 免疫）；刻意不兼容外部系统的 memes_data.json
-- 选择文件直传（v0.6.0 轮 E）：面板「选择套图包导入」→ `.zip` 分块上传会话
+- 选择文件直传（v0.6.0 轮 E）：面板「导入」（轮 E 时叫「选择套图包导入」，v0.10.3 改短）→ `.zip` 分块上传会话
   （`import_upload_start/chunk/finish` 三入口，块大小服务端定）——收件箱不再是唯一包入口，
-  只当高级旁路留着。纪律：会话只存本进程内存 + `data/uploads/.sid.part`（重启即作废，
+  v0.10.3 起进一步降为**纯服务端旁路**：面板的「导入收件箱」按钮与路径提示行全部退场（主人拍板：
+  导入出口只留一个），`import_inbox` 入口与处置纪律（陷阱 13）原样保留。纪律：会话只存本进程内存 + `data/uploads/.sid.part`（重启即作废，
   不做断点续传这种短命交互的复杂度）；seq 乱序/超限/写失败一律**作废会话**不静默拼接；
   finish 走 import_pack 同一把尺，暂存体无论成败都删（会话一次性，重试=重选文件）；
   新错误码 upload_not_zip / upload_session_unknown / upload_seq_gap / upload_chunk_bad /
@@ -108,12 +109,13 @@
   新码：`group_exists`（重名——含名字已被图住着的情况，那种该去「编辑说明」）；`group_not_found` 复用。
   **不做**（主人拍板 3A）：分类改名 `group_rename`（牵动批量改写 + 说明迁移 + 台账语义，单独立轮；
   现阶段改名 = 新建分类 + 批量移入）
-- **面板架构（v0.10.1 拆分轮，纯架构）**：`ui/panel.tsx` 只留装配骨架（顶栏 + 三卡摆位），
+- **面板架构（v0.10.1 拆分轮，纯架构；v0.10.2/v0.10.3 两张卡退场后仍适用）**：`ui/panel.tsx` 只留装配骨架（顶栏 + 卡片摆位），
   其余落位——`ui/shared.ts`（类型/常量/纯函数：两处以上共用的尺）、
   `ui/preview.ts`（预览缓存 + 懒加载调度 + `useStickerPreview`）、
   `ui/library_model.ts`（库卡动作模型 `useLibraryModel`，无 JSX）、
   `ui/components/**`（tile/focus/awareness/batch/section/toolbar 六块；usage 台账卡于 v0.10.2 从面板退场，
-  后端 `history` 入口与 `usage.json` 保留——台账的正职是跨轮去重与排序，不是展示）。
+  后端 `history` 入口与 `usage.json` 保留——台账的正职是跨轮去重与排序，不是展示；
+  v0.10.3 文案/操作面：库卡改名「管理表情包」、直传按钮改短「导入」、收件箱按钮与路径提示退场）。
   多文件纪律：相对导入只写 `./shared` 这类简单具名导出（链接器拒 re-export/`export list`），
   运行时依赖账在 32 文件 / 512 KiB 内；新文件的 `t()` 键由 i18n 门的 `ui/**` 递归扫兜住；
   带 `key={...}` 的组件 props 必须声明 `key?: string`（hosted-tsx 真跑类型检查）。

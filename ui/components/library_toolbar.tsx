@@ -1,5 +1,6 @@
 // 库卡工具条（v0.10.1 拆分自 panel.tsx）：搜索、新建分类（含就地展开的创建表单）、
-// 套图包直传、收件箱导入、导出、体检——以及全库共用的两个隐藏文件输入框。
+// 套图包直传（v0.10.3 起单入口「导入」：收件箱按钮已退场）、导出、体检
+// ——以及全库共用的两个隐藏文件输入框。
 // 隐藏输入框放这里是因为它们的宿主 DOM 就在这一排按钮旁边；
 // 目标分类走 ref 传递的纪律在 library_model.ts（轮 I）。
 
@@ -13,7 +14,6 @@ export function LibraryToolbar(props: {
   creating: boolean;
   uploading: boolean;
   collectBusy: boolean;
-  pendingInbox: number;
   newName: string;
   setNewName: (next: string) => void;
   newDesc: string;
@@ -26,7 +26,6 @@ export function LibraryToolbar(props: {
   onPickZip: () => void;
   onZipChosen: (file: any) => void;
   onImageFiles: (files: any) => void;
-  onImportInbox: () => void;
   onExport: () => void;
   onRepair: () => void;
 }) {
@@ -59,7 +58,7 @@ export function LibraryToolbar(props: {
         >
           {props.uploading
             ? t("panel.upload.busy", { defaultValue: "上传中…" })
-            : t("panel.upload.pick", { defaultValue: "选择套图包导入" })}
+            : t("panel.upload.pick", { defaultValue: "导入" })}
         </Button>
         <input
           ref={props.zipInputRef}
@@ -75,17 +74,6 @@ export function LibraryToolbar(props: {
             event.target.value = "";
           }}
         />
-        <Button
-          tone="primary"
-          onClick={() => {
-            props.onImportInbox();
-          }}
-        >
-          {(t("panel.inbox.button", {
-            defaultValue: "导入收件箱",
-          }) as string) +
-            (props.pendingInbox ? " (" + props.pendingInbox + ")" : "")}
-        </Button>
         <Button
           tone="info"
           onClick={() => {
