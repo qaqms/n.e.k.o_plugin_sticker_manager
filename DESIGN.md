@@ -91,6 +91,14 @@
   取图共用 `useStickerPreview`（格子=IntersectionObserver 视口懒加载提前 240px、聚焦卡=
   直接排队；同缓存同全局并发尺限同时 2 张；无观察器直接排队宁多拉不漏图；alive 护栏）；
   后端入口/配置/错误码零变化
+- **区（v0.11.0 J-1，分类的上层）**：三层「区→分类→图」。区是显式对象（`catalog.json` 顶层
+  `zones:[{id,name,desc}]` + `active_zone` + `group_zone`，schema v2；旧库 load 即迁入默认区「自制区」并补写一次盘）；
+  区用**内部 id** 引用所以改名白送（`zone_rename`）。分类名**全库唯一（跨区也算）**——她按名字选图，
+  一个名字不能有两个家。**她只感知激活区**：`sticker_list`/`sticker_send`（含显式 id）/query 检索/
+  awareness 全走 `Library.active_pool()`，非激活区对她整体隐形（陷阱 23）；主人可浏览任意区，
+  所有写入（建类/收图/导入）落正在看的区。拆区=连带拆全部分类与图（`zone_remove`，服务端 120s 与
+  `LONG_CALL` 同尺；最后一个区不许拆），面板确认摊 zone.total + **3 秒防误删闸**（纯前端，
+  服务端不装慢；官方区同样可删，J-2 另留「恢复官方收藏」补种口）。
 - **分类优先（v0.10.0 轮 I，主人要求重设计分类系统而做）**：分类从“图的附带属性”升为**显式对象**：
   ① **先立分类**——`group_create(name, desc)`（desc 可空，名字必填）。空分类能存住：
   `catalog.json.groups` 里 `{名: ""}` = “在册但未写说明”；**`load()` 不再丢空说明**、
@@ -110,10 +118,11 @@
   **不做**（主人拍板 3A）：分类改名 `group_rename`（牵动批量改写 + 说明迁移 + 台账语义，单独立轮；
   现阶段改名 = 新建分类 + 批量移入）
 - **面板架构（v0.10.1 拆分轮，纯架构；v0.10.2/v0.10.3 两张卡退场后仍适用）**：`ui/panel.tsx` 只留装配骨架（顶栏 + 卡片摆位），
-  其余落位——`ui/shared.ts`（类型/常量/纯函数：两处以上共用的尺）、
+  其余落位——`ui/shared.ts`（类型/常量/纯函数：两处以上共用的尺；J-1 加 ZoneInfo，
+  `buildSections`/`categoryOptions` 按区筛）、
   `ui/preview.ts`（预览缓存 + 懒加载调度 + `useStickerPreview`）、
-  `ui/library_model.ts`（库卡动作模型 `useLibraryModel`，无 JSX）、
-  `ui/components/**`（tile/focus/awareness/batch/section/toolbar 六块；usage 台账卡于 v0.10.2 从面板退场，
+  `ui/library_model.ts`（库卡动作模型 `useLibraryModel`，无 JSX；J-1 加 viewZone 与区动作一把尺 `zoneAction`）,
+  `ui/components/**`（tile/focus/awareness/batch/section/toolbar/zone_bar 七块；usage 台账卡于 v0.10.2 从面板退场，
   后端 `history` 入口与 `usage.json` 保留——台账的正职是跨轮去重与排序，不是展示；
   v0.10.3 文案/操作面：库卡改名「管理表情包」、直传按钮改短「导入」、收件箱按钮与路径提示退场）。
   多文件纪律：相对导入只写 `./shared` 这类简单具名导出（链接器拒 re-export/`export list`），
@@ -135,7 +144,7 @@
 - 不声明 `[plugin.store]`：持久化走 `data_path` 文件通道（失败是响亮的，规避 store 静默失效坑）
 - SDK surfaces：`plugin.sdk.plugin` 唯一门面；`ctx.push_message` / `ctx.images.upload`（仅 entry/tool 里用，lifecycle 不可）
 - UI：hosted-tsx；`ImageUpload`/`ImagePreview` 是 kit 现成件；缩略图懒加载走 `preview` action（context 不带图字节）
-- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / duplicate_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required（v0.7.0 起退场，add 不再拦空描述） / desc_too_long / image_too_large / image_undecodable / recent_repeat / probability_declined / upload_not_zip / upload_session_unknown / upload_seq_gap / upload_chunk_bad / upload_too_large / upload_empty / upload_write_failed）
+- 错误码契约：`^[a-z][a-z0-9_]*$` 稳定 ASCII（invalid_image / duplicate_image / sticker_not_found / send_cooldown / not_enabled / sticker_disabled / sticker_too_large / sticker_file_missing / library_io_error / config_unavailable / desc_required（v0.7.0 起退场，add 不再拦空描述） / desc_too_long / image_too_large / image_undecodable / recent_repeat / probability_declined / upload_not_zip / upload_session_unknown / upload_seq_gap / upload_chunk_bad / upload_too_large / upload_empty / upload_write_failed / zone_required / zone_exists / zone_not_found / zone_last（J-1））
 
 ## 已知陷阱（本机/宿主源码核实，改动前先读）
 
@@ -215,6 +224,14 @@
     否则主人搜了一个词、看到 2 张，确认“删 2 张”实际删了 30 张。
     （同理：`Library.remove_group` 先 `save()` 成功再删文件，失败回滚内存，
     不留“目录里没这张、盘上还在”的暗孤儿；孤儿文件收尾交给 `repair()`。）
+
+23. **她只感知激活区，这是一把尺不是两把**（v0.11.0 J-1）：目录/发图/检索/awareness
+    全部只能从 `Library.active_pool()` 拿图——**新入口碰她的可选面时必须走这把尺**，
+    别在调用点各自 `all()` 再手写区过滤（漏一处就是“她发出了看不见的图”）。
+    另两条同族边界：① 分类名全库唯一（`group_exists` 跨区也算）——区只限**可见性**，
+    不限名；② 区的生死不进配置：`zones` 是库数据（catalog.json），改它不碰三处同源；
+    默认区名「自制区」也是数据不是文案，不走 i18n。
+    面板侧的镜像尺：主人可看任意区（viewZone），但写入落当前区——两把尺分开，别“顺手统一”。
 
 ## Read Context Plan
 

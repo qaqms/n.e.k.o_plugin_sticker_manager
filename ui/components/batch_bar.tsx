@@ -8,6 +8,8 @@ import type { Surface } from "../shared";
 export function BatchBar(props: {
   surface: Surface;
   selected: string[];
+  // J-1：批量归类只列**这些图所在区**的分类（面板把当前视图区递进来）。
+  zone: string;
   batchTags: string;
   setBatchTags: (next: string) => void;
   batchGroup: string;
@@ -56,7 +58,7 @@ export function BatchBar(props: {
       </Text>
       <Select
         value={props.batchGroup}
-        options={categoryOptions(props.surface, t)}
+        options={categoryOptions(props.surface, t, props.zone)}
         onChange={(next: any) => {
           props.setBatchGroup(
             String(next === undefined || next === null ? "" : next),

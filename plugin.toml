@@ -13,7 +13,7 @@ keywords = [
     "meme",
     "gallery",
 ]
-version = "0.10.3"
+version = "0.11.0"
 type = "plugin"
 entry = "plugin.plugins.sticker_manager:StickerManagerPlugin"
 

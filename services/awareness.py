@@ -174,7 +174,8 @@ class Awareness:
             if waiting > 0.0:
                 return {"status": "waiting", "wait_sec": round(waiting, 1)}
         text = build_awareness_text(
-            self._library.all(),
+            self._library.active_pool(),
+            # J-1：存在感只报她当前世界（激活区）的家底，不报跨区总量。
             max_lines=settings.awareness.max_recent_lines,
             groups=self._library.group_descs(),
         )

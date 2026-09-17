@@ -142,7 +142,7 @@ export function FocusCard(props: {
             >
               <Select
                 value={editGroup}
-                options={categoryOptions(surface, t)}
+                options={categoryOptions(surface, t, String(row.zone || ""))}
                 onChange={(next: any) => {
                   setEditGroup(
                     String(next === undefined || next === null ? "" : next),

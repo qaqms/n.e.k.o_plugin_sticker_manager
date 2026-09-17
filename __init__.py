@@ -62,6 +62,7 @@ from .core import (
     format_group_overview,
     normalize_group,
     normalize_tags,
+    normalize_zone_name,
     parse_tags_field,
     resolve_send_target,
     search_stickers,
@@ -234,6 +235,10 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "string",
                     "description": tr("fields.group", default="套图分组（可选，如：猫猫日常）"),
                 },
+                "zone": {
+                    "type": "string",
+                    "description": tr("fields.zone_target", default="目标区 id（留空=落在分类所在的区/激活区）"),
+                },
                 "caption": {
                     "type": "string",
                     "description": tr(
@@ -258,6 +263,7 @@ class StickerManagerPlugin(NekoPluginBase):
         desc: str = "",
         tags: str = "",
         group: str = "",
+        zone: str = "",
         caption: str = "",
         visible_text: str = "",
         **_,
@@ -287,6 +293,7 @@ class StickerManagerPlugin(NekoPluginBase):
             desc=text_desc,
             tags=parse_tags_field(tags),
             group=normalize_group(group),
+            zone=zone if isinstance(zone, str) else "",
             caption=text_caption,
             visible_text=text_visible,
             now=time.time(),
@@ -503,13 +510,17 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "string",
                     "description": tr("fields.group_desc", default="什么时候用这一组（≤300字）"),
                 },
+                "zone": {
+                    "type": "string",
+                    "description": tr("fields.zone_target", default="目标区 id（留空=落在分类所在的区/激活区）"),
+                },
             },
             "required": ["group"],
             "additionalProperties": False,
         },
         llm_result_fields=["note", "group"],
     )
-    async def group_create_entry(self, group: str = "", desc: str = "", **_):
+    async def group_create_entry(self, group: str = "", desc: str = "", zone: str = "", **_):
         name = normalize_group(group)
         if not name:
             return Err(SdkError("group_required"))
@@ -519,7 +530,7 @@ class StickerManagerPlugin(NekoPluginBase):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
-        ok, create_error = self._library.create_group(name, text)
+        ok, create_error = self._library.create_group(name, text, zone if isinstance(zone, str) else "")
         if not ok:
             return Err(SdkError(create_error or "group_io_error"))
         return Ok({"note": "group_created", "group": name})
@@ -564,6 +575,187 @@ class StickerManagerPlugin(NekoPluginBase):
         if not ok:
             return Err(SdkError(error or "group_io_error"))
         return Ok({"note": "group_removed", "group": name, "removed": removed})
+
+    # ---------------------------------------------------------------
+    # J-1（v0.11.0）：区——分类的上层。她只感知激活区，其余区整体隐形。
+    # 区用内部 id 引用（改名白送）；面板 tab 就是区的脸面。
+    # ---------------------------------------------------------------
+
+    @ui.action(
+        id="zone_create",
+        label=tr("actions.zone_create.label", default="New zone"),
+        tone="primary",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="zone_create",
+        name=tr("entries.zone_create.name", default="新建一个上层区"),
+        description=tr(
+            "entries.zone_create.description",
+            default="区是分类的上层（比如官方自带/自己的主题收藏）：名字必填，说明可留空。新区不自动激活",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "zone": {"type": "string", "description": tr("fields.zone_name_new", default="区名字")},
+                "desc": {
+                    "type": "string",
+                    "description": tr("fields.zone_desc", default="这个区是干什么的（可选，≤300字）"),
+                },
+            },
+            "required": ["zone"],
+            "additionalProperties": False,
+        },
+        llm_result_fields=["note", "zone_id"],
+    )
+    async def zone_create_entry(self, zone: str = "", desc: str = "", **_):
+        name = normalize_zone_name(zone)
+        if not name:
+            return Err(SdkError("zone_required"))
+        text, error = validate_optional_text(desc, limit=GROUP_DESC_MAX_CHARS)
+        if error:
+            return Err(SdkError("group_desc_too_long"))
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        zone_id, create_error = self._library.create_zone(name, text)
+        if create_error:
+            return Err(SdkError(create_error))
+        return Ok({"note": "zone_created", "zone_id": zone_id})
+
+    @ui.action(
+        id="zone_rename",
+        label=tr("actions.zone_rename.label", default="Rename zone"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="zone_rename",
+        name=tr("entries.zone_rename.name", default="改区名"),
+        description=tr(
+            "entries.zone_rename.description",
+            default="区用内部 id 引用，改名不扯动任何归属——想改就改（分类改名仍是另一回事）",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "zone_id": {"type": "string", "description": tr("fields.zone_id", default="区 id")},
+                "zone": {"type": "string", "description": tr("fields.zone_name_new", default="新名字")},
+            },
+            "required": ["zone_id", "zone"],
+            "additionalProperties": False,
+        },
+        llm_result_fields=["note", "zone_id"],
+    )
+    async def zone_rename_entry(self, zone_id: str = "", zone: str = "", **_):
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        ok, error = self._library.rename_zone(zone_id, zone)
+        if not ok:
+            return Err(SdkError(error or "zone_io_error"))
+        return Ok({"note": "zone_renamed", "zone_id": zone_id})
+
+    @ui.action(
+        id="zone_set_desc",
+        label=tr("actions.zone_set_desc.label", default="Zone note"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="zone_set_desc",
+        name=tr("entries.zone_set_desc.name", default="给区写一句说明"),
+        description=tr(
+            "entries.zone_set_desc.description",
+            default="区的说明只给主人看（面板 tab 下的提示语），不进她的目录；空串=清空",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "zone_id": {"type": "string", "description": tr("fields.zone_id", default="区 id")},
+                "desc": {"type": "string", "description": tr("fields.zone_desc", default="这个区是干什么的（可选，≤300字）")},
+            },
+            "required": ["zone_id"],
+            "additionalProperties": False,
+        },
+        llm_result_fields=["note", "zone_id"],
+    )
+    async def zone_set_desc_entry(self, zone_id: str = "", desc: str = "", **_):
+        text, error = validate_optional_text(desc, limit=GROUP_DESC_MAX_CHARS)
+        if error:
+            return Err(SdkError("group_desc_too_long"))
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        ok, set_error = self._library.set_zone_desc(zone_id, text)
+        if not ok:
+            return Err(SdkError(set_error or "zone_io_error"))
+        return Ok({"note": "zone_desc_set", "zone_id": zone_id})
+
+    @ui.action(
+        id="zone_activate",
+        label=tr("actions.zone_activate.label", default="Use this zone"),
+        tone="primary",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="zone_activate",
+        name=tr("entries.zone_activate.name", default="激活一个区"),
+        description=tr(
+            "entries.zone_activate.description",
+            default="切她的世界：只有激活区的分类与图对她可见可选；其余区整体隐形",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "zone_id": {"type": "string", "description": tr("fields.zone_id", default="区 id")},
+            },
+            "required": ["zone_id"],
+            "additionalProperties": False,
+        },
+        llm_result_fields=["note", "zone_id"],
+    )
+    async def zone_activate_entry(self, zone_id: str = "", **_):
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        ok, error = self._library.activate_zone(zone_id)
+        if not ok:
+            return Err(SdkError(error or "zone_io_error"))
+        return Ok({"note": "zone_activated", "zone_id": zone_id})
+
+    @ui.action(
+        id="zone_remove",
+        label=tr("actions.zone_remove.label", default="Delete zone"),
+        tone="danger",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="zone_remove",
+        name=tr("entries.zone_remove.name", default="拆掉一个区（连带拆它全部分类与图）"),
+        description=tr(
+            "entries.zone_remove.description",
+            default="拆区是删分类的放大版：区内每一张图、每一个分类连同文件一起消失，不可恢复；最后一个区不许拆。面板先把精确张数摊开再等 3 秒确认",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "zone_id": {"type": "string", "description": tr("fields.zone_id", default="区 id")},
+            },
+            "required": ["zone_id"],
+            "additionalProperties": False,
+        },
+        llm_result_fields=["note", "zone_id", "removed"],
+        timeout=120.0,
+    )
+    async def zone_remove_entry(self, zone_id: str = "", **_):
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        ok, error, removed = self._library.remove_zone(zone_id)
+        if not ok:
+            return Err(SdkError(error or "zone_io_error"))
+        return Ok({"note": "zone_removed", "zone_id": zone_id, "removed": removed})
 
     @ui.action(
         id="batch_update",
@@ -919,16 +1111,24 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "string",
                     "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）"),
                 },
+                "zone": {
+                    "type": "string",
+                    "description": tr("fields.zone_target", default="目标区 id（留空=落在分类所在的区/激活区）"),
+                },
             },
         },
         llm_result_fields=["note", "imported", "duplicates", "rejected", "failed"],
         timeout=120.0,
     )
-    async def import_inbox_entry(self, tags: str = "", group: str = "", **_):
+    async def import_inbox_entry(self, tags: str = "", group: str = "", zone: str = "", **_):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
-        summary = self._library.ingest_inbox(tags=parse_tags_field(tags), group=normalize_group(group))
+        summary = self._library.ingest_inbox(
+            tags=parse_tags_field(tags),
+            group=normalize_group(group),
+            zone=zone if isinstance(zone, str) else "",
+        )
         return Ok({"note": "inbox_imported", **summary})
 
     # ------------------------------------------------------------------
@@ -1046,17 +1246,26 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "string",
                     "description": tr("fields.group", default="套图分组（可选，整批共用；包里自带的优先）"),
                 },
+                "zone": {
+                    "type": "string",
+                    "description": tr("fields.zone_target", default="目标区 id（留空=落在分类所在的区/激活区）"),
+                },
             },
             "required": ["session"],
         },
         llm_result_fields=["note", "imported", "duplicates", "rejected", "failed"],
         timeout=120.0,
     )
-    async def import_upload_finish_entry(self, session: str = "", tags: str = "", group: str = "", **_):
+    async def import_upload_finish_entry(self, session: str = "", tags: str = "", group: str = "", zone: str = "", **_):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
-        summary, error = self._library.upload_finish(session, tags=parse_tags_field(tags), group=normalize_group(group))
+        summary, error = self._library.upload_finish(
+            session,
+            tags=parse_tags_field(tags),
+            group=normalize_group(group),
+            zone=zone if isinstance(zone, str) else "",
+        )
         if error:
             return Err(SdkError(error))
         return Ok({"note": "pack_uploaded", **summary})
@@ -1128,7 +1337,12 @@ class StickerManagerPlugin(NekoPluginBase):
             if s.group:
                 group_counts[s.group] = group_counts.get(s.group, 0) + 1
         groups = [
-            {"name": n, "count": group_counts.get(n, 0), "desc": group_descs.get(n, "")}
+            {
+                "name": n,
+                "count": group_counts.get(n, 0),
+                "desc": group_descs.get(n, ""),
+                "zone": self._library.zone_of_group(n) or self._library.active_zone(),
+            }
             for n in sorted(set(group_counts) | set(group_descs))
         ]
         payload: dict[str, Any] = {
@@ -1143,6 +1357,9 @@ class StickerManagerPlugin(NekoPluginBase):
             "stickers": [s.as_dict() for s in stickers],
             "groups": groups,
             "group_descs": group_descs,
+            # J-1：区的脸面（tab 序=插入序）+ 她的世界窗口在哪个区。
+            "zones": self._library.zones(),
+            "active_zone": self._library.active_zone(),
             "usage": self._library.read_usage(limit=12),
             "inbox": {
                 "pending": len(self._library.inbox_files()),
@@ -1190,7 +1407,8 @@ class StickerManagerPlugin(NekoPluginBase):
             return {"ok": False, "reason": "not_enabled"}
         self._library.load()
         limit = self._settings.storage.catalog_limit_for_model
-        all_stickers = self._library.all()
+        # J-1：目录只报激活区——她看不到的区，连名字都不该出现在分类行里。
+        all_stickers = self._library.active_pool()
         descs = self._library.group_descs()
         gname = normalize_group(group)
         if gname:
@@ -1280,9 +1498,12 @@ class StickerManagerPlugin(NekoPluginBase):
         has_id = isinstance(sticker_id, str) and bool(sticker_id.strip())
         has_query = isinstance(query, str) and bool(query.strip())
         has_group = isinstance(group, str) and bool(normalize_group(group))
-        pool = self._library.all()
+        # J-1：她的候选池 = 激活区。非激活区的图与分类对她不存在（id 点到了也算没找到）。
+        pool = self._library.active_pool()
+        known_ids = {s.id for s in pool}
         if has_id:
-            sticker = self._library.get(sticker_id.strip())
+            raw_sticker = self._library.get(sticker_id.strip())
+            sticker = raw_sticker if raw_sticker is not None and raw_sticker.id in known_ids else None
             if sticker is not None and sticker.disabled:
                 sticker = None
         candidates: list[Sticker] = []

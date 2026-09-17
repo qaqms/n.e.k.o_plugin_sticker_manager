@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from ..core.catalog import (
+    DEFAULT_ZONE_NAME,
     GROUP_DESC_MAX_CHARS,
     MAX_STICKER_BYTES,
     UPLOAD_CHUNK_BYTES,
@@ -28,7 +29,9 @@ from ..core.catalog import (
     desc_from_filename,
     detect_image_format,
     new_sticker_id,
+    new_zone_id,
     normalize_group,
+    normalize_zone_name,
 )
 from ..core.pack import (
     PACK_DIR_PREFIX,
@@ -40,7 +43,9 @@ from ..core.pack import (
     safe_member_name,
 )
 
-CATALOG_VERSION = 1
+# v2（v0.11.0 J-1）：顶层新增 zones / active_zone / group_zone 三键（区→分类→图）。
+# 读侧宽松兼容 v1（无这三键 = 旧平铺库，load() 里一次性迁进默认区）；写侧永远按 v2 写。
+CATALOG_VERSION = 2
 CATALOG_FILENAME = "catalog.json"
 USAGE_FILENAME = "usage.json"
 STICKER_DIRNAME = "stickers"
@@ -84,6 +89,11 @@ class Library:
         self._stickers: dict[str, Sticker] = {}
         # 分组说明（轮 F：“分类=描述”挂在组上，不挂在图上）；catalog.json 顶层 groups。
         self._groups: dict[str, str] = {}
+        # 区（v0.11.0 J-1）：`_zones` 按插入序就是面板 tab 序；`_group_zone` 是分类→区的归属；
+        # `_active_zone` 是她看世界的唯一窗口（非激活区的分类/图对她整体隐形，陷阱 21 的推广版）。
+        self._zones: dict[str, dict[str, str]] = {}
+        self._group_zone: dict[str, str] = {}
+        self._active_zone: str = ""
         self._loaded = False
         self._io_dirty = False
         # zip 直传会话（仅本进程，sid -> {h, path, seq, size, name, at}）：
@@ -130,18 +140,28 @@ class Library:
                 pass
 
     def load(self, *, force: bool = False) -> LibraryResult:
-        """全量读目录。坏 JSON / 坏条目宽松处理：能救多少救多少。"""
+        """全量读目录。坏 JSON / 坏条目宽松处理：能救多少救多少。
+
+        区的不变量在此兜住：**zones 永远非空、active_zone 永远在册**；
+        旧库（无 zones 键）在这里一次性迁进默认区（当场补写一次盘，失败不阻断读）。
+        """
         if self._loaded and not force:
             return LibraryResult(ok=True)
         self._stickers = {}
         self._groups = {}
+        self._zones = {}
+        self._group_zone = {}
+        self._active_zone = ""
+        legacy_shape = True
         try:
             raw = json.loads(self.catalog_path.read_text(encoding="utf-8"))
         except FileNotFoundError:
+            self._ensure_zone_invariant()
             self._loaded = True
             self._io_dirty = False
             return LibraryResult(ok=True)
         except Exception:
+            self._ensure_zone_invariant()
             self._loaded = True
             self._io_dirty = True
             return LibraryResult.failure(ERR_IO, "catalog_unreadable")
@@ -162,9 +182,60 @@ class Library:
                 if not group or not isinstance(value, str):
                     continue
                 self._groups[group] = value.strip()[:GROUP_DESC_MAX_CHARS]
+        # --- 区（v0.11.0 J-1）：宽松读三键，坏项逐项丢 ---
+        zones_raw = raw.get("zones") if isinstance(raw, dict) else None
+        if isinstance(zones_raw, list) and zones_raw:
+            legacy_shape = False
+            for item in zones_raw:
+                if not isinstance(item, dict):
+                    continue
+                zone_id = item.get("id")
+                zone_name = normalize_zone_name(item.get("name"))
+                if not isinstance(zone_id, str) or not zone_id or not zone_name:
+                    continue
+                zone_desc = item.get("desc")
+                self._zones[zone_id] = {
+                    "name": zone_name,
+                    "desc": zone_desc.strip()[:GROUP_DESC_MAX_CHARS] if isinstance(zone_desc, str) else "",
+                }
+            gz_raw = raw.get("group_zone") if isinstance(raw, dict) else None
+            if isinstance(gz_raw, dict):
+                for group_name, zone_id in gz_raw.items():
+                    group = normalize_group(group_name)
+                    if group and isinstance(zone_id, str) and zone_id in self._zones:
+                        self._group_zone[group] = zone_id
+            active_raw = raw.get("active_zone")
+            if isinstance(active_raw, str) and active_raw in self._zones:
+                self._active_zone = active_raw
+        self._ensure_zone_invariant(migrated=legacy_shape)
         self._loaded = True
         self._io_dirty = False
         return LibraryResult(ok=True)
+
+    def _ensure_zone_invariant(self, *, migrated: bool = False) -> None:
+        """区的地板：没有区就造一个默认区；激活位、分类归属、图上 zone 全部补齐。
+
+        旧库（migrated=True 或整库无区）全部进默认区（第一个区）；
+        新库里指不到区的分类/图也兜到默认区——宽松读的铁律是**永不因脏数据拒绝整本库**。
+        """
+        if not self._zones:
+            self._zones = {new_zone_id(set()): {"name": DEFAULT_ZONE_NAME, "desc": ""}}
+        first = next(iter(self._zones))
+        if self._active_zone not in self._zones:
+            self._active_zone = first
+        for group in self._groups:
+            self._group_zone.setdefault(group, first)
+        for sticker_id, sticker in self._stickers.items():
+            mapped = self._group_zone.get(sticker.group) if sticker.group else None
+            want = mapped or (sticker.zone if sticker.zone in self._zones else first)
+            if sticker.zone != want:
+                self._stickers[sticker_id] = replace(sticker, zone=want)
+                if sticker.group:
+                    self._group_zone.setdefault(sticker.group, want)
+        if migrated:
+            # 一次性迁移写盘：失败只是下次再迁一遍（幂等），不把读拖死。
+            self.save()
+            self._log("catalog migrated to zones v2")
 
     def save(self) -> LibraryResult:
         try:
@@ -174,6 +245,12 @@ class Library:
                 "updated_at": time.time(),
                 "stickers": [s.as_dict() for s in self._stickers.values()],
                 "groups": dict(self._groups),
+                "zones": [
+                    {"id": zone_id, "name": meta["name"], "desc": meta["desc"]}
+                    for zone_id, meta in self._zones.items()
+                ],
+                "active_zone": self._active_zone,
+                "group_zone": dict(self._group_zone),
             }
             tmp = self.catalog_path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -188,6 +265,152 @@ class Library:
     def io_dirty(self) -> bool:
         """上一次读/写是否走过 IO 异常。面板横幅用它。"""
         return self._io_dirty
+
+    # ------------------------------------------------------------------
+    # 区（v0.11.0 J-1：区→分类→图的上层；她只感知激活区，其余整体隐形）
+    # ------------------------------------------------------------------
+
+    def zones(self) -> list[dict[str, Any]]:
+        """按 tab 序（插入序）列区：id/名/说明/是否激活/区内张数（含未分组）。"""
+        counts: dict[str, int] = {}
+        for sticker in self._stickers.values():
+            zone_id = self.zone_of_sticker(sticker)
+            counts[zone_id] = counts.get(zone_id, 0) + 1
+        return [
+            {
+                "id": zone_id,
+                "name": meta["name"],
+                "desc": meta["desc"],
+                "active": zone_id == self._active_zone,
+                "total": counts.get(zone_id, 0),
+            }
+            for zone_id, meta in self._zones.items()
+        ]
+
+    def zone_ids(self) -> set[str]:
+        return set(self._zones)
+
+    def active_zone(self) -> str:
+        return self._active_zone
+
+    def zone_of_group(self, group: str) -> str:
+        return self._group_zone.get(group, "")
+
+    def zone_of_sticker(self, sticker: Sticker) -> str:
+        """图在哪个区：分类住哪区它就在哪区（分类归属优先），未分组看自己的 zone。"""
+        if sticker.group:
+            mapped = self._group_zone.get(sticker.group)
+            if mapped:
+                return mapped
+        return sticker.zone if sticker.zone in self._zones else self._active_zone
+
+    def zone_group_names(self, zone_id: str) -> set[str]:
+        """一个区里的分类名（显式 ∪ 区内图在住的隐式）。跨区查名请走 `group_names()`。"""
+        names = {g for g, z in self._group_zone.items() if z == zone_id and g in self._groups}
+        names |= {s.group for s in self._stickers.values() if s.group and self.zone_of_sticker(s) == zone_id}
+        return names
+
+    def create_zone(self, name: Any, desc: Any = "") -> tuple[str, str]:
+        """新建一个区；回 (区 id, 错误码)。重名回 `zone_exists`（tab 撞名和分类撞名同理）。"""
+        zone_name = normalize_zone_name(name)
+        if not zone_name:
+            return "", "zone_required"
+        if any(meta["name"] == zone_name for meta in self._zones.values()):
+            return "", "zone_exists"
+        cleaned = desc.strip()[:GROUP_DESC_MAX_CHARS] if isinstance(desc, str) else ""
+        zone_id = new_zone_id(set(self._zones))
+        self._zones[zone_id] = {"name": zone_name, "desc": cleaned}
+        saved = self.save()
+        if not saved.ok:
+            self._zones.pop(zone_id, None)
+            return "", saved.code or ERR_IO
+        self._log(f"zone created: id={zone_id}")
+        return zone_id, ""
+
+    def rename_zone(self, zone_id: Any, name: Any) -> tuple[bool, str]:
+        """改区名：内部 id 设计所以改名白送（分类改名的债不新埋）；回 (是否成功, 错误码)。"""
+        if not isinstance(zone_id, str) or zone_id not in self._zones:
+            return False, "zone_not_found"
+        zone_name = normalize_zone_name(name)
+        if not zone_name:
+            return False, "zone_required"
+        if any(meta["name"] == zone_name for zid, meta in self._zones.items() if zid != zone_id):
+            return False, "zone_exists"
+        previous = self._zones[zone_id]["name"]
+        self._zones[zone_id] = {**self._zones[zone_id], "name": zone_name}
+        saved = self.save()
+        if not saved.ok:
+            self._zones[zone_id] = {**self._zones[zone_id], "name": previous}
+            return False, saved.code or ERR_IO
+        return True, ""
+
+    def set_zone_desc(self, zone_id: Any, desc: Any) -> tuple[bool, str]:
+        if not isinstance(zone_id, str) or zone_id not in self._zones:
+            return False, "zone_not_found"
+        cleaned = desc.strip()[:GROUP_DESC_MAX_CHARS] if isinstance(desc, str) else ""
+        previous = self._zones[zone_id]["desc"]
+        self._zones[zone_id] = {**self._zones[zone_id], "desc": cleaned}
+        saved = self.save()
+        if not saved.ok:
+            self._zones[zone_id] = {**self._zones[zone_id], "desc": previous}
+            return False, saved.code or ERR_IO
+        return True, ""
+
+    def activate_zone(self, zone_id: Any) -> tuple[bool, str]:
+        """切她的世界：激活区以外的分类/图从她目录、检索与发图候选里整体消失。"""
+        if not isinstance(zone_id, str) or zone_id not in self._zones:
+            return False, "zone_not_found"
+        previous = self._active_zone
+        self._active_zone = zone_id
+        saved = self.save()
+        if not saved.ok:
+            self._active_zone = previous
+            return False, saved.code or ERR_IO
+        self._log(f"zone activated: id={zone_id}")
+        return True, ""
+
+    def remove_zone(self, zone_id: Any) -> tuple[bool, str, int]:
+        """拆区：**连带拆它全部分类与图**（与 remove_group 同一条裁决，放大一层）。
+
+        回 (成功, 错误码, 删掉的张数)；最后一个区不许拆（`zone_last`，否则她的世界空了）；
+        拆的是激活区时自动激活剩下的第一个。纪律照 `remove_group()`：先改内存、
+        save() 成功再删文件，失败全量回滚，不留暗孤儿。
+        """
+        if not isinstance(zone_id, str) or zone_id not in self._zones:
+            return False, "zone_not_found", 0
+        if len(self._zones) <= 1:
+            return False, "zone_last", 0
+        victims = [(sid, s) for sid, s in self._stickers.items() if self.zone_of_sticker(s) == zone_id]
+        gone_groups = [g for g, z in self._group_zone.items() if z == zone_id]
+        snapshot_stickers = dict(self._stickers)
+        snapshot_groups = dict(self._groups)
+        snapshot_group_zone = dict(self._group_zone)
+        snapshot_zone = self._zones.get(zone_id)
+        snapshot_active = self._active_zone
+        for sid, _ in victims:
+            self._stickers.pop(sid)
+        for group in gone_groups:
+            self._groups.pop(group, None)
+            self._group_zone.pop(group, None)
+        self._zones.pop(zone_id)
+        if self._active_zone == zone_id:
+            self._active_zone = next(iter(self._zones))
+        saved = self.save()
+        if not saved.ok:
+            self._stickers = snapshot_stickers
+            self._groups = snapshot_groups
+            self._group_zone = snapshot_group_zone
+            if snapshot_zone is not None:
+                self._zones[zone_id] = snapshot_zone
+            self._active_zone = snapshot_active
+            return False, saved.code or ERR_IO, 0
+        for _, sticker in victims:
+            try:
+                self.image_path(sticker).unlink(missing_ok=True)
+            except Exception:
+                self._log(f"sticker file removal failed: id={sticker.id}")
+        self._log(f"zone removed: id={zone_id} stickers={len(victims)}")
+        return True, "", len(victims)
 
     # ------------------------------------------------------------------
     # 分组说明（v0.7.0 轮 F）
@@ -228,26 +451,31 @@ class Library:
             return False, saved.code or ERR_IO
         return True, ""
 
-    def create_group(self, name: Any, desc: Any = "") -> tuple[bool, str]:
-        """新建一个分类（轮 I：先立分类，再往分类里塞图）；回 (是否成功, 错误码)。
+    def create_group(self, name: Any, desc: Any = "", zone: Any = "") -> tuple[bool, str]:
+        """新建一个分类（轮 I：先立分类，再往分类里塞图；J-1：分类住在区里）；回 (是否成功, 错误码)。
 
         空分类是合法状态：她在目录里看不见它、也发不出它（`format_group_overview`
         与发图候选都只从有图的贴纸算）——分类是**管理概念**，不是发送目标。
-        重名回 `group_exists`：名字已被图住着（隐式分类）也算撞名，
-        那种情况主人该走「编辑说明」而不是再建一个同名分类。
+        重名回 `group_exists`：**全局唯一**（跨区也算）——检索、目录、台账只认名字，
+        允许两区同名会让她在激活区里发出另一区的图。区不存在回 `zone_not_found`。
         """
         group = normalize_group(name)
         if not group:
             return False, "group_required"
+        if zone and (not isinstance(zone, str) or zone not in self._zones):
+            return False, "zone_not_found"
+        target_zone = zone if isinstance(zone, str) and zone else self._active_zone
         if group in self.group_names():
             return False, "group_exists"
         cleaned = desc.strip()[:GROUP_DESC_MAX_CHARS] if isinstance(desc, str) else ""
         self._groups[group] = cleaned
+        self._group_zone[group] = target_zone
         saved = self.save()
         if not saved.ok:
             self._groups.pop(group, None)
+            self._group_zone.pop(group, None)
             return False, saved.code or ERR_IO
-        self._log(f"group created: {group}")
+        self._log(f"group created: {group} zone={target_zone}")
         return True, ""
 
     def remove_group(self, name: Any) -> tuple[bool, str, int]:
@@ -267,6 +495,7 @@ class Library:
             self._stickers.pop(sid)
         existed = group in self._groups
         previous = self._groups.get(group, "")
+        previous_zone = self._group_zone.pop(group, "")
         self._groups.pop(group, None)
         saved = self.save()
         if not saved.ok:
@@ -274,6 +503,8 @@ class Library:
                 self._stickers[sid] = sticker
             if existed:
                 self._groups[group] = previous
+            if previous_zone:
+                self._group_zone[group] = previous_zone
             return False, saved.code or ERR_IO, 0
         for sid, sticker in victims:
             try:
@@ -292,6 +523,14 @@ class Library:
             self._stickers.values(),
             key=lambda s: -s.added_at,
         )
+
+    def active_pool(self) -> list[Sticker]:
+        """她的全世界：激活区内的全部图（与 `all()` 同序）。
+
+        J-1 的总闸：目录、检索、发图候选、awareness 一律从这里拿——
+        非激活区对她整体隐形（陷阱 21 的推广版；新防回归门钉这条）。
+        """
+        return [s for s in self.all() if self.zone_of_sticker(s) == self._active_zone]
 
     def get(self, sticker_id: str) -> Sticker | None:
         return self._stickers.get(sticker_id)
@@ -337,6 +576,7 @@ class Library:
         tags: list[str],
         now: float | None = None,
         group: str = "",
+        zone: str = "",
         caption: str = "",
         visible_text: str = "",
     ) -> tuple[Sticker | None, str]:
@@ -345,6 +585,8 @@ class Library:
         错误码：invalid_image（不是受支持的图片格式）/ duplicate_image（库里已有同图）/ io_error。
         查重只认内容指纹，不认文件名（见 core/catalog 设计决定 5）。
         group/caption/visible_text 由入口层收敛后才进来（core 层负责合法性，这里只搬运）。
+        区的尺（J-1）：分好类的图跟着分类走（分类住哪区就哪区）；未分组用 zone 参数，
+        再缺省落激活区。
         """
         detected = detect_image_format(data or b"")
         if detected is None:
@@ -377,6 +619,7 @@ class Library:
             added_at=moment,
             sha256=digest,
             group=group,
+            zone=self._group_zone.get(group) or (zone if zone in self._zones else "") or self._active_zone,
             caption=caption,
             visible_text=visible_text,
         )
@@ -421,6 +664,11 @@ class Library:
             patch["caption"] = caption
         if visible_text is not None:
             patch["visible_text"] = visible_text
+        if "group" in patch and patch["group"]:
+            # J-1：换分类 = 换住户；图跟着分类搬区（隐式新名字就地登记到目标区）。
+            mapped = self._group_zone.get(patch["group"]) or sticker.zone or self._active_zone
+            self._group_zone.setdefault(patch["group"], mapped)
+            patch["zone"] = mapped
         updated = replace(sticker, **patch) if patch else sticker
         self._stickers[sticker_id] = updated
         saved = self.save()
@@ -463,6 +711,7 @@ class Library:
         返回计数字典（面板如实展示）：removed_entries / purged_files / backfilled_hashes。
         纪律：只在自己生成的 `stickers/` 目录里活动；条目表就是引用集，
         不在表里的文件视为孤儿（目录里的文件全部由 add() 生成，无用户自放位）。
+        区卫生（J-1）同批：分类无人住且无说明→退册；图上 zone 记法统一成规范形。
         """
         removed_entries = 0
         purged_files = 0
@@ -485,6 +734,20 @@ class Library:
                     continue  # 读不动的图：不回填也不删条目，交给下次体检
                 self._stickers[sticker_id] = sticker.with_sha256(digest)
                 backfilled += 1
+                dirty = True
+        if dirty:
+            self.save()
+        # 区卫生（J-1，不进计数字典：面板三格形状不变）。
+        live_groups = {sticker.group for sticker in self._stickers.values() if sticker.group}
+        stale = [g for g, z in self._group_zone.items() if g not in live_groups and g not in self._groups]
+        for group in stale:
+            self._group_zone.pop(group, None)
+        for sticker_id, sticker in list(self._stickers.items()):
+            want = self.zone_of_sticker(sticker)
+            if sticker.group:
+                self._group_zone.setdefault(sticker.group, want)
+            if sticker.zone != want:
+                self._stickers[sticker_id] = replace(sticker, zone=want)
                 dirty = True
         if dirty:
             self.save()
@@ -566,8 +829,10 @@ class Library:
         self._log(f"pack exported: file={target.name} stickers={exported} skipped={skipped}")
         return {"file": str(target), "exported": exported, "skipped": skipped}, ""
 
-    def import_pack(self, path: Path, *, group: str = "", tags: list[str] | None = None) -> dict[str, int]:
+    def import_pack(self, path: Path, *, group: str = "", tags: list[str] | None = None, zone: str = "") -> dict[str, int]:
         """导入一个套图 zip（manifest 协议见 core/pack）。返回与收件箱同款四类计数。
+
+        区的尺（J-1）：整包收进 `zone` 指定的区（缺省落激活区）；包内分类就地登记到那个区。
 
         纪律：
         - **zip-slip**：条目名过 `safe_member_name`（core 层唯一的门），目录/上跳/隐藏一律拒；
@@ -577,6 +842,10 @@ class Library:
           描述取文件名清洗——与收件箱单文件通道同一形态；两种形态都吃整批 tags/group 兜底。
         """
         summary = {"imported": 0, "duplicates": 0, "rejected": 0, "failed": 0}
+        target_zone = zone if zone in self._zones else self._active_zone
+        if group and isinstance(group, str) and group.strip():
+            # 整批兑底组名（裸包通道）：就地登记归属，否则这些图会成无户籍的隐式分类。
+            self._group_zone.setdefault(group.strip(), target_zone)
         try:
             pack = zipfile.ZipFile(path)
         except Exception:
@@ -625,6 +894,7 @@ class Library:
                     desc=entry.desc if entry is not None else desc_from_filename(file_name),
                     tags=entry_tags,
                     group=entry_group or group,
+                    zone=target_zone,
                     caption=entry.caption if entry is not None else "",
                     visible_text=entry.visible_text if entry is not None else "",
                     now=time.time(),
@@ -638,8 +908,12 @@ class Library:
                     if sticker is not None and sticker.group:
                         imported_groups.add(sticker.group)
             # 分组说明随包迁移（轮 F）：只补缺不覆盖——主人已写过的组话不被包/import 消音。
+            # J-1：同时把包里的分类登记进目标区（已有归属的不改——分类不跨区搬家）。
             changed = False
             for group_name in imported_groups:
+                if group_name not in self._group_zone:
+                    self._group_zone[group_name] = target_zone
+                    changed = True
                 group_desc = pack_groups.get(group_name, "")
                 if group_desc and not self._groups.get(group_name):
                     self._groups[group_name] = group_desc
@@ -662,6 +936,7 @@ class Library:
         *,
         tags: list[str],
         group: str = "",
+        zone: str = "",
         max_bytes: int = MAX_STICKER_BYTES,
     ) -> dict[str, int]:
         """把收件箱里的图片逐张收进库（描述取自文件名，走 add 的全部规则：
@@ -676,7 +951,7 @@ class Library:
         summary = {"imported": 0, "duplicates": 0, "rejected": 0, "failed": 0}
         for path in self.inbox_files():
             if path.suffix.lower() == ".zip":
-                pack_summary = self.import_pack(path, group=group, tags=tags)
+                pack_summary = self.import_pack(path, group=group, tags=tags, zone=zone)
                 if not (pack_summary["rejected"] or pack_summary["failed"]):
                     self._discard_inbox_file(path)
                 for key in summary:
@@ -695,6 +970,7 @@ class Library:
                 desc=desc_from_filename(path.name),
                 tags=tags,
                 group=group,
+                zone=zone,
                 now=time.time(),
             )
             if error == ERR_DUPLICATE:
@@ -784,7 +1060,7 @@ class Library:
         session["at"] = time.time()
         return ""
 
-    def upload_finish(self, sid: str, *, tags: list[str] | None = None, group: str = "") -> tuple[dict[str, int], str]:
+    def upload_finish(self, sid: str, *, tags: list[str] | None = None, group: str = "", zone: str = "") -> tuple[dict[str, int], str]:
         """收尾：关流→同一把尺 import_pack→删暂存体。
 
         与 inbox “成功即删/失败留原地重试”不同：直传会话没有“原地”——面板会话
@@ -801,7 +1077,7 @@ class Library:
         if session["size"] == 0:
             self._drop_upload_file(session["path"])
             return {}, "upload_empty"
-        summary = self.import_pack(session["path"], tags=tags, group=group)
+        summary = self.import_pack(session["path"], tags=tags, group=group, zone=zone)
         self._drop_upload_file(session["path"])
         return summary, ""
 

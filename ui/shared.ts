@@ -16,6 +16,7 @@ export type Translate = (key: string, params?: Record<string, unknown>) => strin
 export type StickerRow = {
   id: string;
   file?: string;
+  zone?: string;
   desc?: string;
   tags?: string[];
   disabled?: boolean;
@@ -38,6 +39,17 @@ export type GroupInfo = {
   name: string;
   count?: number;
   desc?: string;
+  // J-1：分类住哪个区（后端永远带；全库分类名唯一，zone 只是归属）。
+  zone?: string;
+};
+
+// J-1：区（分类的上层）。active = 她在用的那个区；非激活区对她整体隐形。
+export type ZoneInfo = {
+  id: string;
+  name: string;
+  desc?: string;
+  active?: boolean;
+  total?: number;
 };
 
 // 轮 I（分类优先）：浏览与收图都以分类为单位——一个分类一个区块，
@@ -66,6 +78,9 @@ export type State = {
   };
   stickers?: StickerRow[];
   groups?: GroupInfo[];
+  // J-1：区的脸面（tab 序）与她的世界窗口。usage/inbox 后端仍发，面板不展示。
+  zones?: ZoneInfo[];
+  active_zone?: string;
   // 注：后端 state 仍带 usage 与 inbox（台账是跨轮去重的事实记忆，收件箱是服务端旁路），
   // 只是面板 v0.10.2/v0.10.3 起都不再展示。
   awareness?: AwarenessState;
@@ -137,7 +152,12 @@ export async function callAction(
 // 轮 I：逐图归类只能从已有分类里挑（要新名字请先「新建分类」）。
 // 为什么不用输入框：手打一个新名字会静默立一个没说明的隐式分类，
 // 把“先分类、后收图”的模型戳穿；选项首位是空值 = 未分组（批量也能把图迁出来）。
-export function categoryOptions(surface: Surface, t: Translate): any[] {
+// J-1：只列**这个区**的分类——图跟着分类走，选项跨区就会把图捐到别的世界。
+export function categoryOptions(
+  surface: Surface,
+  t: Translate,
+  zone: string,
+): any[] {
   const listed: GroupInfo[] = (surface.state && surface.state.groups) || [];
   const options: any[] = [
     {
@@ -147,7 +167,7 @@ export function categoryOptions(surface: Surface, t: Translate): any[] {
   ];
   listed.forEach((info: GroupInfo) => {
     const name = String((info && info.name) || "");
-    if (name) {
+    if (name && String(info.zone || "") === zone) {
       options.push({ value: name, label: name });
     }
   });
@@ -162,6 +182,7 @@ export function buildSections(
   groups: GroupInfo[],
   term: string,
   t: Translate,
+  zone: string,
 ): Section[] {
   const rowMatches = (row: StickerRow): boolean => {
     if (!term) {
@@ -178,27 +199,35 @@ export function buildSections(
     return haystack.indexOf(term) >= 0;
   };
   const sections: Section[] = [];
-  groups.forEach((info: GroupInfo) => {
-    const catHit =
-      !term ||
-      `${info.name} ${info.desc || ""}`.toLowerCase().indexOf(term) >= 0;
-    const rows = stickers.filter(
-      (row) => row.group === info.name && (catHit || rowMatches(row)),
-    );
-    const total = info.count ?? 0;
-    if (rows.length || (catHit && !total)) {
-      sections.push({
-        key: info.name,
-        name: info.name,
-        desc: info.desc || "",
-        rows,
-        total,
-        group: info.name,
-        editable: true,
-      });
-    }
-  });
-  const ungrouped = stickers.filter((row) => !row.group && rowMatches(row));
+  // J-1：区块只在**当前区**里长出来：分类按归属筛，图按 zone 筛。
+  groups
+    .filter((info: GroupInfo) => String(info.zone || "") === zone)
+    .forEach((info: GroupInfo) => {
+      const catHit =
+        !term ||
+        `${info.name} ${info.desc || ""}`.toLowerCase().indexOf(term) >= 0;
+      const rows = stickers.filter(
+        (row) =>
+          String(row.zone || "") === zone &&
+          row.group === info.name &&
+          (catHit || rowMatches(row)),
+      );
+      const total = info.count ?? 0;
+      if (rows.length || (catHit && !total)) {
+        sections.push({
+          key: info.name,
+          name: info.name,
+          desc: info.desc || "",
+          rows,
+          total,
+          group: info.name,
+          editable: true,
+        });
+      }
+    });
+  const ungrouped = stickers.filter(
+    (row) => String(row.zone || "") === zone && !row.group && rowMatches(row),
+  );
   if (ungrouped.length) {
     sections.push({
       key: "__none__",

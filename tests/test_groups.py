@@ -162,7 +162,8 @@ class TestCategoryLifecycle:
         payload = run_async(plugin.dashboard_context(**_ctx("K")))
         # 空分类在面板 state 里带 count=0（v0.8.0“空区块不出现”在本轮被反转：
         # 人不看得到就永远传不进图），但下面的“她的视角”门证明它不露脸。
-        assert {"name": "新组", "count": 0, "desc": ""} in payload["groups"]
+        # J-1：groups 行多了 zone 字段（面板按它分区渲染）；新分类落在激活区。
+        assert {"name": "新组", "count": 0, "desc": "", "zone": payload["active_zone"]} in payload["groups"]
 
     def test_remove_empty_category(self, tmp_path, run_async):
         plugin = _plugin(tmp_path)
@@ -222,7 +223,9 @@ class TestGroupDescEntry:
         assert result.is_ok()
         assert result.value["note"] == "group_desc_set"
         payload = run_async(plugin.dashboard_context(**_ctx("K")))
-        assert payload["groups"] == [{"name": "猫猫日常", "count": 1, "desc": "被夸/撒娇时用"}]
+        assert payload["groups"] == [
+            {"name": "猫猫日常", "count": 1, "desc": "被夸/撒娇时用", "zone": payload["active_zone"]}
+        ]
         # 空串=清除，但组还在（有图在用）
         cleared = run_async(plugin.group_set_desc_entry(group="猫猫日常", desc="  "))
         assert cleared.is_ok() and cleared.value["cleared"] is True

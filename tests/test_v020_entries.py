@@ -168,9 +168,15 @@ class TestDashboardPayload:
         run_async(_add(plugin, desc="图一", group="猫猫日常"))
         payload = run_async(plugin.dashboard_context(**_ctx("K")))
         assert payload["counts"]["groups"] == 1
-        # 轮 F：groups 从名字列表升成对象（带张数与分组说明）——面板 chips 直接用它
-        assert payload["groups"] == [{"name": "猫猫日常", "count": 1, "desc": ""}]
+        # 轮 F：groups 从名字列表升成对象（带张数与分组说明）——面板 chips 直接用它；
+        # J-1 再加 zone（面板按区渲染 tab）。
+        assert payload["groups"] == [
+            {"name": "猫猫日常", "count": 1, "desc": "", "zone": payload["active_zone"]}
+        ]
         assert payload["stickers"][0]["group"] == "猫猫日常"
+        assert payload["stickers"][0]["zone"] == payload["active_zone"]
+        assert [z["id"] for z in payload["zones"]] == [payload["active_zone"]]
+        assert payload["zones"][0]["active"] is True and payload["zones"][0]["total"] == 1
         assert payload["awareness"]["status"] in {"", "injected", "waiting", "disabled", "no_target"}
         assert payload["config"]["awareness_enabled"] is True
         assert payload["config"]["awareness_interval_sec"] == 3600.0

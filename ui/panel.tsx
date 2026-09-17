@@ -4,7 +4,7 @@
 // - ui/shared.ts          类型 + 常量 + 纯函数（两处以上共用的尺）
 // - ui/preview.ts         预览缓存 / 懒加载调度 / useStickerPreview
 // - ui/library_model.ts   库卡的状态与动作闭包（无 JSX，"这张卡怎么想"）
-// - ui/components/**      格子 / 聚焦卡 / 注入卡 / 批量条 / 分类区块 / 工具条
+// - ui/components/**      区条 / 格子 / 聚焦卡 / 注入卡 / 批量条 / 分类区块 / 工具条
 // 纪律照旧：新增 t() 键必须入 i18n（契约门递归扫 ui/ 全域）；长任务走 LONG_CALL；
 // 覆盖层弹窗禁用（陷阱 20）。
 //
@@ -32,6 +32,7 @@ import { BatchBar } from "./components/batch_bar";
 import { CategorySection } from "./components/category_section";
 import { FocusCard } from "./components/focus_card";
 import { LibraryToolbar } from "./components/library_toolbar";
+import { ZoneBar } from "./components/zone_bar";
 import { useLibraryModel } from "./library_model";
 import { buildSections, callAction } from "./shared";
 import type { Surface } from "./shared";
@@ -42,9 +43,16 @@ export default function Panel(props: Surface) {
   const lib = useLibraryModel(props);
   const stickers = state.stickers || [];
   const groups = state.groups || [];
+  const zones = lib.zonesList;
+  // J-1：主人可以浏览任意区（view tab）；她只感知激活区（activeZone）——两把尺分开。
+  const view = lib.view;
+  const viewGroups = groups.filter(
+    (info: any) => String(info.zone || "") === view,
+  );
+  viewGroups.sort((a: any, b: any) => (a.count === b.count ? String(a.name).localeCompare(String(b.name)) : b.count - a.count));
 
   const term = lib.query.trim().toLowerCase();
-  const sections = buildSections(stickers, groups, term, t);
+  const sections = buildSections(stickers, groups, term, t, view);
   // 聚焦卡跟着最新库态走：被删/被筛掉就自动收起，不留幽灵卡。
   const focusRow = lib.focus
     ? stickers.filter((row) => row.id === lib.focus)[0] || null
@@ -94,6 +102,18 @@ export default function Panel(props: Surface) {
         <AwarenessCard surface={props} />
         <Card title={t("panel.card.library", { defaultValue: "管理表情包" })}>
           <Stack gap={10}>
+            <ZoneBar
+              surface={props}
+              zones={zones}
+              view={view}
+              activeZone={lib.activeZone}
+              onSwitch={lib.setViewZone}
+              onCreate={lib.createZone}
+              onRename={lib.renameZone}
+              onSetDesc={lib.setZoneDesc}
+              onActivate={lib.activateZone}
+              onRemove={lib.removeZone}
+            />
             <LibraryToolbar
               surface={props}
               query={lib.query}
@@ -132,11 +152,13 @@ export default function Panel(props: Surface) {
             />
             {sections.length > 0 ? (
               // 轮 G：分类分区视图——每块「组名 · 张数 + 一句说明 + 就地操作」，
-              // 一路滚下去就是她的收藏间目录。搜索时整块命中或逐图命中都支持。
+              // 一路滚下去就是她的收藏间目录（J-1：只是当前区这一层）。
               <Text>
                 {t("panel.section.summary", {
                   groups: sections.length,
-                  images: stickers.length,
+                  images: stickers.filter(
+                    (row: any) => String(row.zone || "") === view,
+                  ).length,
                   defaultValue: "{groups} 个分区 · 共 {images} 张",
                 })}
               </Text>
@@ -144,6 +166,7 @@ export default function Panel(props: Surface) {
             <BatchBar
               surface={props}
               selected={lib.selected}
+              zone={view}
               batchTags={lib.batchTags}
               setBatchTags={lib.setBatchTags}
               batchGroup={lib.batchGroup}
@@ -175,9 +198,9 @@ export default function Panel(props: Surface) {
                       ? t("panel.filter.empty_title", {
                           defaultValue: "当前筛选没有命中",
                         })
-                      : groups.length
+                      : viewGroups.length
                         ? t("panel.empty.title", {
-                            defaultValue: "库还是空的",
+                            defaultValue: "这个区还是空的",
                           })
                         : t("panel.cat.empty_title", {
                             defaultValue: "还没有分类",
@@ -188,7 +211,7 @@ export default function Panel(props: Surface) {
                       ? t("panel.filter.empty_hint", {
                           defaultValue: "换个词试试，或清空搜索框。",
                         })
-                      : groups.length
+                      : viewGroups.length
                         ? t("panel.empty.hint", {
                             defaultValue:
                               "点任意分类块头的「收图进这一类」，或直接用上面的套图包导入。",
@@ -199,7 +222,7 @@ export default function Panel(props: Surface) {
                           })
                   }
                 />
-                {!term && !groups.length ? (
+                {!term && !viewGroups.length ? (
                   <Button
                     tone="primary"
                     onClick={() => {

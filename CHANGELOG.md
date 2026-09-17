@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.11.0
+
+v0.11.0「区」（J-1）——三层管理面的地基：**区 → 分类 → 图**，她只感知激活区（主人拍板 Q1b/Q3/Q4/P1）：
+
+- **区是显式对象**（`catalog.json` 顶层 `zones:[{id,name,desc}]` + `active_zone` + `group_zone:{分类名:区id}`，
+  schema v2）：区用**内部 id** 引用，所以**改名白送**（`zone_rename`）——分类改名欠的债（轮 I 拍板 3A）不新埋。
+  分类名**全库唯一（跨区也算）**：她的世界按名字过活，一个名字不能有两个家。
+- **她的世界 = 激活区**（P1 一把尺）：`sticker_list`/`sticker_send`（含显式 id，点进非激活区也算没找到）/
+  query 检索/awareness 注入文案全部只从 `Library.active_pool()` 拿——非激活区的图与分类连名字都不露。
+  新防回归门 `test_zones.py::TestInactiveZoneInvisibleToHer`（切区后镜像翻转）。
+- **入口面 +5**：`zone_create`/`zone_rename`/`zone_set_desc`/`zone_activate`/`zone_remove`（连带拆区内
+  全部分类与图，服务端 timeout=120s 与 `LONG_CALL` 同尺；最后一个区不许拆 `zone_last`；拆的是激活区
+  则自动激活剩下第一个）。新码：`zone_required`/`zone_exists`/`zone_not_found`/`zone_last`。
+  `add`/`group_create`/两个导入入口的 input_schema 补 `zone` 声明（不补会被 additionalProperties 拦）。
+- **旧库宽松迁入**（v1→v2）：无 zones 键 = 建默认区（名「自制区」，这是数据不是文案）、
+  全部图与分类入籍、**load 当场补写一次盘**（失败也只是下次再迁，幂等）；手改坏 zone 由 load 兼容
+  与 `repair()` 区卫生收拾（不进体检三格计数）。
+- **面板：区 tab 条**（`ui/components/zone_bar.tsx`，八块）：tab 带张数、「她在用」徽章、就地建区/改名/改说明；
+  **拆区 3 秒防误删闸**：确认行先摊服务端张数（zone.total，陷阱 22 对偶），确认键 3 秒后才可点
+  （纯前端纪律，服务端不装慢）。所有写入（建类/收图/直传导入）落**正在看的区**；
+  收图目标区走 `viewZoneRef`（与目标分类同一条闭包坑）；聚焦卡/批量条的分类 Select 只列**图所在区**的分类。
+  视图被删自动接回激活区，不留幽灵 tab。
+- i18n +26 键（zh-CN/en 同键集，尾部纯插入）；文档三本账同步（DESIGN 能力面/陷阱区新 23/README）。
+- 测试 **242 → 250 passed**（新 `test_zones.py` 八条：迁移两条、生命周期三条、她的视角三条）。
+- 下一轮就位：J-2 官方区内置（spike：90MB 包导入 + 250KiB gif 实发），J-3 官方 190 张 GIF 分区打标。
+
 ## 0.10.3
 
 v0.10.3「导入出口只留一个」——主人拍板的面板文案/操作轮（纯视图轮，**后端零变化**）：

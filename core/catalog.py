@@ -46,6 +46,10 @@ TAGS_MAX_COUNT = 12
 # 套图分组名（v0.2.0）：一条表情最多属于一个组；空串 = 未分组。
 # 比标签宽一点——它是"套图/来源"这种成块的名字，不是散标签。
 GROUP_MAX_CHARS = 40
+# 上层区（v0.11.0 J-1）：区→分类→图三层。区名与分类名同尺。
+ZONE_MAX_CHARS = 40
+# 新建库的默认区名：这是数据（主人可改名），不是 i18n 文案。
+DEFAULT_ZONE_NAME = "自制区"
 # 分组说明（轮 F，对齐外部系统「分类描述即 prompt」）：一句给模型看的话挂在组上。
 # 比单图 desc 宽、与 caption 同量级：它要独立说清“什么时候用这一组”。
 GROUP_DESC_MAX_CHARS = 300
@@ -157,6 +161,27 @@ def normalize_group(value: Any) -> str:
     return cleaned[:GROUP_MAX_CHARS]
 
 
+def normalize_zone_name(value: Any) -> str:
+    """区名尺：与分类名同形（大小写敏感、去空白、限长），但不共用常量——
+    两者将来若要不同宽度，各自改各自的。"""
+    if not isinstance(value, str):
+        return ""
+    cleaned = value.strip()
+    if not cleaned:
+        return ""
+    return cleaned[:ZONE_MAX_CHARS]
+
+
+def new_zone_id(existing: Iterable[str]) -> str:
+    """区的内部 id（改名白送的根：显示名随便改，引用只认 id）。"""
+    taken = set(existing)
+    for _ in range(16):
+        candidate = "z" + secrets.token_hex(5)
+        if candidate not in taken:
+            return candidate
+    raise RuntimeError("zone id space collision")
+
+
 def parse_tags_field(value: Any) -> list[str]:
     """入口参数里的 tags 允许两种形状：字符串列表，或逗号/顿号分隔的单串。"""
     if isinstance(value, list):
@@ -250,6 +275,7 @@ class Sticker:
     last_used_at: float = 0.0
     sha256: str = ""
     group: str = ""
+    zone: str = ""
     caption: str = ""
     visible_text: str = ""
 
@@ -281,6 +307,7 @@ class Sticker:
             "last_used_at": self.last_used_at,
             "sha256": self.sha256,
             "group": self.group,
+            "zone": self.zone,
             "caption": self.caption,
             "visible_text": self.visible_text,
         }
@@ -313,6 +340,7 @@ class Sticker:
             last_used_at=_lenient_float(raw.get("last_used_at")),
             sha256=sha if isinstance(sha, str) else "",
             group=normalize_group(raw.get("group")),
+            zone=normalize_optional_text(raw.get("zone"), limit=40),
             caption=normalize_optional_text(raw.get("caption"), limit=CAPTION_MAX_CHARS),
             visible_text=normalize_optional_text(raw.get("visible_text"), limit=VISIBLE_TEXT_MAX_CHARS),
         )

@@ -7,7 +7,7 @@
 // - 全库共用**一个**隐藏图片输入框，目标分类走 ref 而不是 state（陷阱区轮 I 注释）；
 // - 删分类确认摊的是服务端张数 `section.total`（陷阱 22）。
 
-import { useConfirm, useRef, useState } from "@neko/plugin-ui";
+import { useConfirm, useEffect, useRef, useState } from "@neko/plugin-ui";
 import {
   callAction,
   dataUrlToBase64,
@@ -17,7 +17,7 @@ import {
   MAX_BATCH_FILES,
   MAX_STICKER_BYTES,
 } from "./shared";
-import type { Section, Surface } from "./shared";
+import type { Section, Surface, ZoneInfo } from "./shared";
 
 function readFileChunk(blob: any): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -58,6 +58,82 @@ export function useLibraryModel(surface: Surface) {
   // ref 赋值当场生效，不靠重渲染传参。
   const imgInputRef = useRef<any>(null);
   const collectTargetRef = useRef<string>("");
+  // 收图的目标区也走 ref（与目标分类同一条闭包坑：click()→onChange 三步里 state 可能是旧的）。
+  const viewZoneRef = useRef<string>("");
+  // J-1：区（分类的上层）。`viewZone` 是主人正在看的 tab；它掉了（被删/未选）就回激活区。
+  // 她只感知激活区；主人可以浏览任意区——但所有写入（建类/收图/导入）都落在正在看的区。
+  const zonesList: ZoneInfo[] = (surface.state && surface.state.zones) || [];
+  const activeZone = String((surface.state && surface.state.active_zone) || "");
+  const [viewZone, setViewZone] = useState("");
+  const zoneExists = (id: string) => {
+    for (let i = 0; i < zonesList.length; i += 1) {
+      if (zonesList[i].id === id) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const view = zoneExists(viewZone) ? viewZone : activeZone;
+  // 当场同步给 ref：收图/导入的闭包落点永远跟当前视图一致。
+  viewZoneRef.current = view;
+  useEffect(() => {
+    if (viewZone && !zoneExists(viewZone)) {
+      setViewZone("");
+    }
+  }, [surface.state]);
+
+  // 区动作一把尺：五个入口形状一样（调→报→刷），只把文案差交出去。
+  const zoneAction = async (
+    actionId: string,
+    args: Record<string, unknown>,
+    doneKey: string,
+    doneDefault: string,
+    params?: Record<string, unknown>,
+  ) => {
+    setLibraryNote("");
+    try {
+      const result = await callAction(
+        surface,
+        actionId,
+        args,
+        actionId === "zone_remove" ? LONG_CALL : undefined,
+      );
+      const extra: Record<string, unknown> = { defaultValue: doneDefault };
+      if (result) {
+        extra.count = result.removed ?? 0;
+      }
+      if (params) {
+        const keys = Object.keys(params);
+        for (let i = 0; i < keys.length; i += 1) {
+          extra[keys[i]] = params[keys[i]];
+        }
+      }
+      setLibraryNote(t(doneKey, extra));
+      setSelected([]);
+      await surface.api.refresh();
+      return true;
+    } catch (error) {
+      const raw =
+        error instanceof Error ? error.message : String(error ?? "failed");
+      setLibraryNote(
+        t("panel.toast.failed", {
+          code: extractCode(raw),
+          defaultValue: "操作失败：{code}",
+        }),
+      );
+      return false;
+    }
+  };
+  const createZone = (name: string, desc: string) =>
+    zoneAction("zone_create", { zone: name, desc }, "panel.zone.created", "区「{name}」已建好", { name });
+  const renameZone = (zoneId: string, name: string) =>
+    zoneAction("zone_rename", { zone_id: zoneId, zone: name }, "panel.zone.renamed", "已改区名");
+  const setZoneDesc = (zoneId: string, desc: string) =>
+    zoneAction("zone_set_desc", { zone_id: zoneId, desc }, "panel.zone.desc_saved", "区说明已更新");
+  const activateZone = (zoneId: string) =>
+    zoneAction("zone_activate", { zone_id: zoneId }, "panel.zone.activated", "她的世界已切到这个区");
+  const removeZone = (zoneId: string, name: string) =>
+    zoneAction("zone_remove", { zone_id: zoneId }, "panel.zone.removed", "已拆区「{name}」（连带 {count} 张图）", { name });
 
   const exportPack = async () => {
     setLibraryNote("");
@@ -344,6 +420,7 @@ export function useLibraryModel(surface: Surface) {
               data_base64: b64,
               desc: "",
               group: group,
+              zone: viewZoneRef.current,
             });
             if (result && result.note === "sticker_added") {
               ok += 1;
@@ -505,6 +582,15 @@ export function useLibraryModel(surface: Surface) {
   return {
     query,
     setQuery,
+    zonesList,
+    activeZone,
+    view,
+    setViewZone,
+    createZone,
+    renameZone,
+    setZoneDesc,
+    activateZone,
+    removeZone,
     libraryNote,
     uploading,
     collectBusy,
