@@ -246,8 +246,7 @@ class Library:
                 "stickers": [s.as_dict() for s in self._stickers.values()],
                 "groups": dict(self._groups),
                 "zones": [
-                    {"id": zone_id, "name": meta["name"], "desc": meta["desc"]}
-                    for zone_id, meta in self._zones.items()
+                    {"id": zone_id, "name": meta["name"], "desc": meta["desc"]} for zone_id, meta in self._zones.items()
                 ],
                 "active_zone": self._active_zone,
                 "group_zone": dict(self._group_zone),
@@ -829,7 +828,9 @@ class Library:
         self._log(f"pack exported: file={target.name} stickers={exported} skipped={skipped}")
         return {"file": str(target), "exported": exported, "skipped": skipped}, ""
 
-    def import_pack(self, path: Path, *, group: str = "", tags: list[str] | None = None, zone: str = "") -> dict[str, int]:
+    def import_pack(
+        self, path: Path, *, group: str = "", tags: list[str] | None = None, zone: str = ""
+    ) -> dict[str, int]:
         """导入一个套图 zip（manifest 协议见 core/pack）。返回与收件箱同款四类计数。
 
         区的尺（J-1）：整包收进 `zone` 指定的区（缺省落激活区）；包内分类就地登记到那个区。
@@ -1060,7 +1061,9 @@ class Library:
         session["at"] = time.time()
         return ""
 
-    def upload_finish(self, sid: str, *, tags: list[str] | None = None, group: str = "", zone: str = "") -> tuple[dict[str, int], str]:
+    def upload_finish(
+        self, sid: str, *, tags: list[str] | None = None, group: str = "", zone: str = ""
+    ) -> tuple[dict[str, int], str]:
         """收尾：关流→同一把尺 import_pack→删暂存体。
 
         与 inbox “成功即删/失败留原地重试”不同：直传会话没有“原地”——面板会话

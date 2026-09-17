@@ -192,5 +192,7 @@ class TestInactiveZoneInvisibleToHer:
         assert row["zone"] == zone_id
         # 不指定 zone 的 add 落激活区
         fallback = run_async(_add(plugin, desc="兜底图"))
-        zone_of_fallback = [s for s in run_async(plugin.dashboard_context(**_ctx("K")))["stickers"] if s["id"] == fallback.value["id"]][0]["zone"]
+        zone_of_fallback = [
+            s for s in run_async(plugin.dashboard_context(**_ctx("K")))["stickers"] if s["id"] == fallback.value["id"]
+        ][0]["zone"]
         assert zone_of_fallback == payload["active_zone"]

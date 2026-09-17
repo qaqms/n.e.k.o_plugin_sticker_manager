@@ -673,7 +673,10 @@ class StickerManagerPlugin(NekoPluginBase):
             "type": "object",
             "properties": {
                 "zone_id": {"type": "string", "description": tr("fields.zone_id", default="区 id")},
-                "desc": {"type": "string", "description": tr("fields.zone_desc", default="这个区是干什么的（可选，≤300字）")},
+                "desc": {
+                    "type": "string",
+                    "description": tr("fields.zone_desc", default="这个区是干什么的（可选，≤300字）"),
+                },
             },
             "required": ["zone_id"],
             "additionalProperties": False,

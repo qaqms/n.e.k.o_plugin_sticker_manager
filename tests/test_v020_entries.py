@@ -170,9 +170,7 @@ class TestDashboardPayload:
         assert payload["counts"]["groups"] == 1
         # 轮 F：groups 从名字列表升成对象（带张数与分组说明）——面板 chips 直接用它；
         # J-1 再加 zone（面板按区渲染 tab）。
-        assert payload["groups"] == [
-            {"name": "猫猫日常", "count": 1, "desc": "", "zone": payload["active_zone"]}
-        ]
+        assert payload["groups"] == [{"name": "猫猫日常", "count": 1, "desc": "", "zone": payload["active_zone"]}]
         assert payload["stickers"][0]["group"] == "猫猫日常"
         assert payload["stickers"][0]["zone"] == payload["active_zone"]
         assert [z["id"] for z in payload["zones"]] == [payload["active_zone"]]
