@@ -29,11 +29,15 @@ def _tr_keys_in_code() -> set[str]:
 
 def _t_keys_in_panel() -> set[str]:
     """扫 hosted TSX 里的静态 `t("key")`；模板字面量（动态键）不纳入，
-    它们必须有 defaultValue 兜底（契约在 panel 侧由构造保证）。"""
+    它们必须有 defaultValue 兜底（契约在 panel 侧由构造保证）。
+
+    v0.10.1 面板拆分后键分散在 ui/ 的 shared/preview/model 与 ui/components/**——
+    递归扫 ui/ 全域（tsx+ts）；只扫顶层会让新文件的键绕过这道门。"""
     pattern = re.compile(r'\bt\("([^"]+)"')
     keys: set[str] = set()
-    for path in (ROOT / "ui").glob("*.tsx"):
-        keys.update(pattern.findall(path.read_text(encoding="utf-8")))
+    for pattern_path in ("*.tsx", "*.ts"):
+        for path in (ROOT / "ui").rglob(pattern_path):
+            keys.update(pattern.findall(path.read_text(encoding="utf-8")))
     return keys
 
 

@@ -108,6 +108,14 @@
   新码：`group_exists`（重名——含名字已被图住着的情况，那种该去「编辑说明」）；`group_not_found` 复用。
   **不做**（主人拍板 3A）：分类改名 `group_rename`（牵动批量改写 + 说明迁移 + 台账语义，单独立轮；
   现阶段改名 = 新建分类 + 批量移入）
+- **面板架构（v0.10.1 拆分轮，纯架构）**：`ui/panel.tsx` 只留装配骨架（顶栏 + 三卡摆位），
+  其余落位——`ui/shared.ts`（类型/常量/纯函数：两处以上共用的尺）、
+  `ui/preview.ts`（预览缓存 + 懒加载调度 + `useStickerPreview`）、
+  `ui/library_model.ts`（库卡动作模型 `useLibraryModel`，无 JSX）、
+  `ui/components/**`（tile/focus/usage/awareness/batch/section/toolbar 七块）。
+  多文件纪律：相对导入只写 `./shared` 这类简单具名导出（链接器拒 re-export/`export list`），
+  运行时依赖账在 32 文件 / 512 KiB 内；新文件的 `t()` 键由 i18n 门的 `ui/**` 递归扫兜住；
+  带 `key={...}` 的组件 props 必须声明 `key?: string`（hosted-tsx 真跑类型检查）。
 - i18n：zh-CN + en（Python `tr()` 与 TSX `t()` 键全部入文件，有门钉着）
 
 ## Out of Scope（v0.1.0 刻意不做）

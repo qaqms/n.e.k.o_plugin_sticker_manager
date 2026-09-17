@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.10.1
+
+v0.10.1「面板拆分」——纯架构轮（主人选定方向：表情包管理类问题与面板整体管理的地基）：`ui/panel.tsx` 从 1924 行收敛为 273 行**装配骨架**，其余按 our_life v0.6.0 的拆分先例落位，**行为零变化、后端零变化、错误码零变化**：
+
+- **文件落位**（house style 对齐 our_life：shared + components/**，只用具名导出，
+  单绑定期声明形态——链接器拒 re-export/`export *`/导出列表）：
+  - `ui/shared.ts`——类型（StickerRow/Section/State/Surface…）+ 常量（MAX_BATCH_FILES /
+    MAX_STICKER_BYTES / LONG_CALL）+ 纯函数（extractCode/formatTime/readAsDataUrl/
+    dataUrlToBase64/callAction/categoryOptions/buildSections）；
+  - `ui/preview.ts`——预览缓存、并发尺限 2 的懒加载调度、IntersectionObserver 共用观察器、
+    `useStickerPreview`（格子与聚焦卡仍共用一把尺，分段协议不变——陷阱 14）；
+  - `ui/library_model.ts`——库卡动作模型 `useLibraryModel(surface)`：搜索/勾选/批量、
+    收图 ref 纪律（轮 I）、直传分块、导入导出体检、建类/删类/组说明编辑全部搬入，
+    不放任何呈现 JSX；
+  - `ui/components/`——sticker_tile / focus_card / usage_card / awareness_card /
+    batch_bar / category_section / library_toolbar 七块（awareness 的 ping 与调试反馈
+    自治进卡内——与库卡动作没有对偶，不硬并进 model）。
+- **i18n 契约门同步扩扫**：`tests/test_i18n_contract.py` 从 `ui/*.tsx` 顶层 glob 改为
+  递归扫 `ui/**` 的 tsx+ts——拆分后键分散在新文件里，不扩面等于让新文件的键绕过门
+  （our_life 同名门的 rglob 同款思路）。`categoryOptions` 的参数从 `translate` 归一为 `t`，
+  让它的 `panel.group.none` 重新进门扫描面。
+- **一处小形态修正**：`CategorySection` 的 props 声明补 `key?: string`（hosted-tsx 真跑
+  类型检查，`key={section.key}` 要有槽位——本仓 StickerTile/FocusCard 同款先例）。
+- 依赖账：运行时 11 文件 ≪ 32 文件 / 512 KiB 上限（hosted-tsx 门实测通过）；
+  发行包 payload 含全部新文件（实测列包）。
+- 验证：pytest **242 passed**（门数不变）；五门全绿
+  `check -r` `payload_hash_verified=True`。
+
 ## 0.10.0
 
 v0.10.0「分类优先」——轮 I：分类从「图的附带属性」升成**显式对象**（主人要求重设计分类系统；本轮动后端，不是纯视图轮）：
