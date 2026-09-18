@@ -59,13 +59,30 @@ export function AwarenessCard(props: { surface: Surface }) {
     }
   };
 
+  const awareness = state.awareness || {};
+  // 节奏读数：只展示、不在面板上改——旋钮在配置文件（本轮定的是"先不加旋钮"）。
+  const cadenceKey = `panel.awareness.cadence.${String(awareness.inject_mode || "interval_n")}`;
+  const cadence = t(cadenceKey, {
+    defaultValue: "每 {n} 轮 · 已攒 {since} 轮",
+  })
+    .replace("{n}", String(awareness.inject_interval_n || 1))
+    .replace(
+      "{since}",
+      String(
+        (awareness.turns_since_inject && awareness.target
+          ? awareness.turns_since_inject[awareness.target]
+          : undefined) ?? 0
+      )
+    );
+  const driverKey = `panel.awareness.driver.${String(awareness.driver || "")}`;
+
   return (
     <Card title={t("panel.awareness.title", { defaultValue: "存在感注入" })}>
       <Stack gap={8}>
         <Text>
           {t("panel.awareness.note", {
             defaultValue:
-              "低频把『你有一间表情收藏间 + 最近常用的几张』静默注进她的上下文：你看不到、她不会因此开口。",
+              "在她每开新一轮时把『你有一间表情收藏间 + 最近常用的几张』静默注进她的上下文：你看不到、她不会因此开口。",
           })}
         </Text>
         <Field
@@ -140,6 +157,20 @@ export function AwarenessCard(props: { surface: Surface }) {
                         0,
                     ),
                   ) + "s",
+              },
+              {
+                key: "cadence",
+                label: t("panel.awareness.cadenceLabel", {
+                  defaultValue: "节奏",
+                }),
+                value: cadence,
+              },
+              {
+                key: "driver",
+                label: t("panel.awareness.driverLabel", {
+                  defaultValue: "驱动",
+                }),
+                value: t(driverKey, { defaultValue: awareness.driver || "—" }),
               },
             ]}
           />

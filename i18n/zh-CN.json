@@ -134,7 +134,7 @@
   "panel.stat.total": "收藏",
   "panel.switch": "总开关（关闭后她不发图、看不到目录）",
   "panel.awareness.title": "存在感注入",
-  "panel.awareness.note": "低频把『你有一间表情收藏间 + 最近常用的几张』静默注进她的上下文：你看不到、她不会因此开口。节奏在配置 [sticker_manager.awareness]。",
+  "panel.awareness.note": "在她每开新一轮时把『你有一间表情收藏间 + 最近常用的几张』静默注进她的上下文：你看不到、她不会因此开口。节奏在配置 [sticker_manager.awareness]。",
   "panel.awareness.status": "最近一次",
   "panel.awareness.target": "注给",
   "panel.awareness.next": "下次最快",
@@ -317,5 +317,11 @@
   "panel.awareness.eagerness.help": "只管她有多想配图。冷却、最近不重复、概率闸不吃这一档——那些在下面的配置里。",
   "panel.eagerness.reserved": "矜持：没有正合适的就不发",
   "panel.eagerness.natural": "自然：贴切就发（默认）",
-  "panel.eagerness.eager": "爱发：情绪对得上就配一张"
+  "panel.eagerness.eager": "爱发：情绪对得上就配一张",
+  "panel.awareness.cadenceLabel": "节奏",
+  "panel.awareness.driverLabel": "驱动",
+  "panel.awareness.cadence.interval_n": "每 {n} 轮 · 已攒 {since} 轮",
+  "panel.awareness.cadence.every_user_message": "每轮都注 · 已攒 {since} 轮",
+  "panel.awareness.driver.bus": "轮次（她开新一轮时）",
+  "panel.awareness.driver.unavailable": "降级时钟（总线读不到轮次）"
 }

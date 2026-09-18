@@ -54,6 +54,16 @@ def _settings(*, enabled: bool = True, interval: float = 3600.0, lines: int = 5)
     )
 
 
+def _clock_bus(lanlan: str = "K", *, ts: float = 10.0) -> FakeBus:
+    """降级路径的总线桩：memory 桶读不通 → 轮次源不可用 → 退回 `interval_sec` 挂钟。
+
+    v0.16.0 起自动注入的主路径是轮次驱动（见 `tests/test_turns.py::TestTurnDrivenAwareness`）。
+    这一族测试钉的是降级时钟的闸语义（被拒不推进时钟/每卡独立/waiting 档），
+    所以显式把总线弄坏——坏得越明确，越不会哪天又变成"测的其实不是它声称在测的那条路"。
+    """
+    return FakeBus([conversation_record("c", ts, lanlan)], memory_error=True)
+
+
 class TestCoreSelection:
     def test_pick_recent_prefers_usage_then_recency(self):
         stickers = [_st("a", use=0, last=10), _st("b", use=3, last=5), _st("c", use=3, last=50)]
@@ -126,7 +136,7 @@ class TestAwarenessGates:
         host = FakeHostContext(
             config=FakeConfig(data={}),
             data_root=tmp_path,
-            bus=FakeBus([conversation_record("c", 10.0, "K")]),
+            bus=_clock_bus(),
         )
         plugin, host = build_plugin(host)
         result = run_async(plugin._awareness.maybe_run(settings=_settings(enabled=False), now=100.0))
@@ -149,7 +159,7 @@ class TestAwarenessGates:
         host = FakeHostContext(
             config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
             data_root=tmp_path,
-            bus=FakeBus([conversation_record("c", 10.0, "K")]),
+            bus=_clock_bus(),
         )
         plugin, host = build_plugin(host)
         result = run_async(plugin._awareness.maybe_run(settings=_settings(), now=100.0))
@@ -164,7 +174,7 @@ class TestAwarenessGates:
         host = FakeHostContext(
             config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
             data_root=tmp_path,
-            bus=FakeBus([conversation_record("c", 10.0, "K")]),
+            bus=_clock_bus(),
         )
         plugin, host = build_plugin(host)
         plugin._library.add(data=PNG_BYTES, desc="猫猫挥手", tags=[])
@@ -179,7 +189,7 @@ class TestAwarenessGates:
         host = FakeHostContext(
             config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
             data_root=tmp_path,
-            bus=FakeBus([conversation_record("c", 10.0, "K")]),
+            bus=_clock_bus(),
         )
         plugin, host = build_plugin(host)
         plugin._library.add(data=PNG_BYTES, desc="猫猫挥手", tags=[])
@@ -195,7 +205,7 @@ class TestAwarenessGates:
         host = FakeHostContext(
             config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
             data_root=tmp_path,
-            bus=FakeBus([conversation_record("c", 10.0, "K")]),
+            bus=_clock_bus(),
         )
         plugin, host = build_plugin(host)
         plugin._library.add(data=PNG_BYTES, desc="d", tags=[])
@@ -210,7 +220,8 @@ class TestAwarenessGates:
             [
                 conversation_record("c1", 10.0, "K"),
                 conversation_record("c2", 20.0, "M"),
-            ]
+            ],
+            memory_error=True,
         )
         host = FakeHostContext(
             config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
@@ -243,7 +254,7 @@ class TestAwarenessGates:
         host = FakeHostContext(
             config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
             data_root=tmp_path,
-            bus=FakeBus([conversation_record("c", 10.0, "K")]),
+            bus=_clock_bus(),
         )
         plugin, host = build_plugin(host)
         plugin._library.add(data=PNG_BYTES, desc="d", tags=[])
@@ -261,7 +272,7 @@ class TestInjectNow:
         host = FakeHostContext(
             config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
             data_root=tmp_path,
-            bus=FakeBus([conversation_record("c", 10.0, "K")]),
+            bus=_clock_bus(),
         )
         plugin, host = build_plugin(host)
         plugin._library.add(data=PNG_BYTES, desc="d", tags=[])
@@ -293,15 +304,17 @@ class TestSnapshot:
         host = FakeHostContext(
             config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
             data_root=tmp_path,
-            bus=FakeBus([conversation_record("c", 10.0, "K")]),
+            bus=_clock_bus(),
         )
         plugin, host = build_plugin(host)
-        before = plugin._awareness.snapshot(interval_sec=100.0, now=50.0)
+        before = plugin._awareness.snapshot(settings=_settings(interval=100.0), now=50.0)
         assert before["last_inject_at"] is None
+        assert before["driver"] == "unavailable"  # 降级路径：轮次源没读通过
         plugin._library.add(data=PNG_BYTES, desc="d", tags=[])
         run_async(plugin._awareness.maybe_run(settings=_settings(interval=100.0), now=50.0))
-        after = plugin._awareness.snapshot(interval_sec=100.0, now=60.0)
+        after = plugin._awareness.snapshot(settings=_settings(interval=100.0), now=60.0)
         assert after["status"] == "injected"
         assert after["target"] == "K"
         assert after["last_inject_at"] == 50.0
-        assert after["min_next_wait_sec"] == 90.0
+        # 快照报的是"最快多久以后"= 地板（min_interval_sec 默认 60），不是降级时钟。
+        assert after["min_next_wait_sec"] == 50.0

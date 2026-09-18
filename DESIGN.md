@@ -291,6 +291,25 @@
     否则宿主一不可达，每次面板刷新都白等一次网络超时。
     新代码碰"注入/发送目标"一律走 `services/lanlan.LanlanResolver`，别在调用点各自读 ctx。
 
+28. **存在感注入的节奏必须挂在"话轮"上，不是挂在挂钟上**（v0.16.0 实机量出来的）：
+    v0.15.0 之前按 `interval_sec`（默认 3600s）每角色卡打点。同一晚实机账本：
+    **44 轮对话 / 12 次注入 / 3 次发表情**，且 3 次发送全部紧跟在注入后 6~30 秒，
+    闸门拒绝 **0 次**——病灶不是措辞不够狠（那是 v0.15.0 改的），是**提醒没赶上话轮**：
+    一小时一次 vs 三分钟一轮，覆盖率 27%，剩下 73% 的轮次里她压根没被提醒。
+    现在换成 `services/turns.TurnWatcher` 轮询 `bus.memory` 的 `user_message`
+    （宿主 SDK **不向插件派发"助手回复完成"**：`@message` 全仓无 emitter，
+    `turn_end` 只在 main↔agent 的私有 ZeroMQ 总线上；用户开新一轮是唯一可靠的回合边界代理，
+    形态照抄同门 `forever_companion/mixins/whisper.py`）。四条纪律：
+    ① `bus.memory.get` **不可订阅只能轮询**，且必须过 `asyncio.to_thread` + awaitable 兜底
+      ——timer handler scope 里同步调会触发宿主 `Sync call invoked inside handler` 告警；
+    ② SDK 会把记录包成 `{"value": record}` 吞掉 `type`，**不解包就永远看不见用户消息**；
+      角色键是 `lanlan`、时间戳键是 `_ts`，与 conversations 桶的 `lanlan_name`/`timestamp` 不同名；
+    ③ **"桶是空的"和"总线读不通"是两回事**：前者 `available=True` → 什么都不做（没人说话就不该注）；
+      后者 `available=False` → 退回 `interval_sec` 挂钟降级路径。合起来的症状就是本轮要修的那个静默失声；
+    ④ **轮次计数只在注入成功后清零**（`min_interval_sec` 挡住的那几轮不烧配额），
+      否则"每 3 轮一次"会静默退化成"每 4、5 轮一次"。
+    总线读失败必须 `warning` 不能 `debug`——debug 不进日志文件，会造出"注入失效但零日志"的盲区。
+
 ## Read Context Plan
 
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）
@@ -364,6 +383,15 @@ push 不再触发任何云端验证，质量链只有本地五门 `tools/release
     与 `official labels refreshed: version=1 refreshed=0 unmatched=0` —— 播种与下发尺在真机跑通，
     `refreshed=0` 是因为这台机器是新装（标签随播种直接进库，无差可刷），属预期。
     **仍未回账**：实发一张贴尺 gif（spike 乙）、拆官方区→恢复按钮闭环、老装机覆盖导包看非零 refreshed。
+  - **v0.16.0 已完工（注入换轮次驱动，陷阱 28）**：主人二次实机反馈"开了爱发还是发得少"，
+    量出来是 44 轮 / 12 提醒 / 3 发送——v0.15.0 改措辞改错了地方。新增 `services/turns.py`
+    （总线轮询 + 每卡水位与计数）、`core/awareness.injection_due_for_turn`（节奏纯判定）、
+    配置三键 `inject_mode` / `inject_interval_n` / `min_interval_sec`（默认按同门
+    `forever_companion` 定案：`interval_n` + 3 + 60s），存在感注入从 60s `watch` 拍搬到
+    新的 10s `turns` 拍。面板只加两个读数（节奏 / 驱动），**主人拍板"先不加旋钮"**——
+    要改节奏编辑 `plugins/sticker_manager/config/plugin.toml`。测试 306 → 354。
+    **待实机验收**：连发 3 条消息应看到 1 次 `awareness injected: … driver=turn`；
+    面板「驱动」应显示"轮次"而不是"降级时钟"；发表情次数是否随之上来。
   - **未采纳的路线（记下来免得下轮重问）**：「插件按概率自己替发一张」技术可行（与现有投递同一条
     `push_message` 通道），但 ① 没有"她刚回复完"的挂点，时机只能靠轮询用户新话近似；
     ② 图不带她的话、不是她挑的——语义从"她配了张图"变成"插件往聊天贴图"。主人拍板走改意愿，未做。

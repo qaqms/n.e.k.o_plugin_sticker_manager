@@ -193,10 +193,19 @@ def test_fetch_exception_is_swallowed(run_async: Any) -> None:
 def test_on_watch_entry_returns_ok_offline(run_async: Any) -> None:
     # 桩基类没有 list_llm_tools 公开面 → declared 为空 → no_tools（不发网络、
     # 不推进时钟、返回 Ok）。真实宿主里工具收集齐后同一入口走完整巡检。
-    # v0.2.0：on_watch 现在回 {"tool_watch":..., "awareness":...} 双结果，两件事各兜各的。
+    # v0.16.0：on_watch 只剩工具心跳一件事——存在感注入搬到了 10s 的 on_turns 拍上，
+    # 蹭 60s 的粒度会把连发的几条用户轮并成一轮看见。
     plugin, _host = build_plugin()
     result = run_async(plugin.on_watch())
     assert result.is_ok()
     assert result.value["tool_watch"]["status"] == "no_tools"
-    # 默认配置 [sticker_manager].enabled=false（fail-closed）→ 注入器不动作。
+    assert "awareness" not in result.value
+
+
+def test_on_turns_entry_returns_ok_offline(run_async: Any) -> None:
+    # 存在感注入的新拍：默认配置 [sticker_manager].enabled=false（fail-closed）
+    # → 注入器不动作，但入口照样回 Ok（timer 无 watchdog，炸出去就是整链静默失声）。
+    plugin, _host = build_plugin()
+    result = run_async(plugin.on_turns())
+    assert result.is_ok()
     assert result.value["awareness"]["status"] == "disabled"

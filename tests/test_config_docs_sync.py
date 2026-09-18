@@ -58,6 +58,9 @@ def _dataclass_defaults() -> dict[str, object]:
         "sticker_manager.storage.catalog_limit_for_model": settings.storage.catalog_limit_for_model,
         "sticker_manager.storage.usage_history_keep": settings.storage.usage_history_keep,
         "sticker_manager.awareness.enabled": settings.awareness.enabled,
+        "sticker_manager.awareness.inject_mode": settings.awareness.inject_mode,
+        "sticker_manager.awareness.inject_interval_n": settings.awareness.inject_interval_n,
+        "sticker_manager.awareness.min_interval_sec": float(settings.awareness.min_interval_sec),
         "sticker_manager.awareness.interval_sec": float(settings.awareness.interval_sec),
         "sticker_manager.awareness.max_recent_lines": settings.awareness.max_recent_lines,
     }
@@ -91,4 +94,4 @@ def test_dataclass_section_dataclasses_have_no_undeclared_extra():
     """dataclass 加了键但没进 _dataclass_defaults —— 用字段数钉住。"""
     assert len(SendSettings.__dataclass_fields__) == 7
     assert len(StorageSettings.__dataclass_fields__) == 2
-    assert len(AwarenessSettings.__dataclass_fields__) == 3
+    assert len(AwarenessSettings.__dataclass_fields__) == 6

@@ -221,20 +221,30 @@ class StickerManagerPlugin(NekoPluginBase):
 
     @timer_interval(id="watch", seconds=60, name="sticker_manager watch")
     async def on_watch(self, **_):
-        # 每 60s 递一下心跳器与注入器，各自内部按更长间隔自节流。
+        # 每 60s 递一下工具注册心跳器，内部按更长间隔自节流。
         # timer 每拍跑在新 event loop 且无 watchdog：异常必须自己兜住（陷阱 §3）。
-        # 两件事各兜各的：心跳坏不许拖累注入，注入坏不许拖累心跳（两表都黄才是双灾）。
         try:
             watch = await self._tool_watch.maybe_run(now=time.time())
         except Exception:  # noqa: BLE001 - timer 无 watchdog，异常漏出去会停不了但也静默
             self.logger.warning("sticker_manager tool watch leaked", exc_info=True)
             watch = {"status": "leaked"}
+        return Ok({"tool_watch": watch})
+
+    @timer_interval(id="turns", seconds=10, name="sticker_manager turns")
+    async def on_turns(self, **_):
+        """存在感注入的拍（v0.16.0）：10s 问一次总线"她开新一轮了吗"。
+
+        为什么单独一拍而不蹭 60s watch：注入的触发源从挂钟换成了话轮，60s 的粒度
+        会把连发的几条用户轮并成一轮看见（同门 forever_companion 同样用 10s）。
+        为什么必须自己兜异常：这一拍是整条存在感链路唯一的驱动，炸出去就是静默失声——
+        而那正是本轮要修的症状。
+        """
         try:
             awareness = await self._awareness.maybe_run(settings=self._settings, now=time.time())
-        except Exception:  # noqa: BLE001 - 注入坏掉不许把表标黄、更不许拖累心跳
+        except Exception:  # noqa: BLE001 - 注入坏掉不许带走 timer 线程
             self.logger.warning("sticker_manager awareness leaked", exc_info=True)
             awareness = {"status": "leaked"}
-        return Ok({"tool_watch": watch, "awareness": awareness})
+        return Ok({"awareness": awareness})
 
     # ------------------------------------------------------------------
     # 管理入口（面板 + 命令面板共用）
@@ -1551,7 +1561,7 @@ class StickerManagerPlugin(NekoPluginBase):
                 "pending": len(self._library.inbox_files()),
                 "path": str(self._library.inbox_dir),
             },
-            "awareness": self._awareness.snapshot(interval_sec=settings.awareness.interval_sec, now=time.time()),
+            "awareness": self._awareness.snapshot(settings=settings, now=time.time()),
             "config": {
                 "cooldown_sec": settings.send.cooldown_sec,
                 "inline_max_bytes": settings.send.inline_max_bytes,

@@ -16,8 +16,38 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from .catalog import Sticker, format_catalog_for_model, format_group_overview
+from .configuration import INJECT_MODE_DEFAULT, INJECT_MODES
 from .eagerness import injection_guidance
+
+
+def normalize_mode(mode: Any) -> str:
+    """不在册的档位退到默认——与 eagerness 档位同一条尺：宁可退档也不炸拍。"""
+    value = str(mode or "").strip()
+    return value if value in INJECT_MODES else INJECT_MODE_DEFAULT
+
+
+def injection_due_for_turn(
+    mode: Any,
+    *,
+    turns_since_inject: int,
+    interval_n: int,
+    floor_remaining_sec: float,
+) -> bool:
+    """新一轮到了，这一轮注不注（纯判定，时钟与计数都在调用方手里）。
+
+    地板未过一律 False——`min_interval_sec` 是连珠炮防刷屏用的，两种模式都吃它。
+    计数只在注入成功后清零（见 services/turns.py 纪律），所以这里被闸拦下时
+    不消耗计数：攒够 N 轮而这轮被地板挡住时，下一轮仍然立刻命中。
+    """
+    if floor_remaining_sec > 0.0:
+        return False
+    if normalize_mode(mode) == "every_user_message":
+        return True
+    return turns_since_inject >= max(1, int(interval_n))
+
 
 # 注入文本的骨架。刻意不提"系统提示"这类元话语，也不下命令——
 # 她是自愿用表情的主人，不是被执行分支的脚本；给的是"有什么 + 在哪查 + 怎么发"。

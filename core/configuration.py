@@ -20,6 +20,12 @@ MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 EAGERNESS_LEVELS: tuple[str, ...] = ("reserved", "natural", "eager")
 EAGERNESS_DEFAULT = "natural"
 
+# 存在感注入的节奏档（v0.16.0）：由"用户开了新一轮"驱动，不再按挂钟打点。
+# every_user_message = 每轮都注；interval_n = 攒够 N 条用户轮注一次（默认）。
+# 语义与同门 forever_companion 的 tide.inject_mode 对齐；"关掉"由 awareness.enabled 承担。
+INJECT_MODES: tuple[str, ...] = ("every_user_message", "interval_n")
+INJECT_MODE_DEFAULT = "interval_n"
+
 
 def _as_choice(value: Any, allowed: tuple[str, ...], default: str) -> str:
     """枚举读入：非字符串/不在册一律回默认。
@@ -103,12 +109,22 @@ class AwarenessSettings:
     """存在感注入（v0.2.0）的行为参数。
 
     与总开关的关系是**与**：`[sticker_manager].enabled=false` 时这里全不生效。
-    节奏刻意保守——没有真机基线之前，宁可不注也不轰炸上下文。
+
+    v0.16.0 换了驱动源：注入不再按挂钟打点，而是**由用户开的新一轮触发**
+    （`services/turns.py` 轮询 `bus.memory`）。实机 44 轮只覆盖 12 次提醒、
+    3 次发表情——瓶颈从来是她没被提醒到，不是提醒得不够客气。
     """
 
     # 子开关：默认开（总开关才是那道 fail-closed 闸）。
     enabled: bool = True
-    # 同一角色卡两次存在感注入的最小间隔（秒）。默认一小时。
+    # 轮次节奏档：every_user_message（每轮都注）| interval_n（攒够 N 轮注一次）。
+    inject_mode: str = INJECT_MODE_DEFAULT
+    # interval_n 档下每 N 条用户轮注一次。<1 按 1 收（等价于每轮）。
+    inject_interval_n: int = 3
+    # 相邻两次注入的最小间隔（秒）：连珠炮对话防刷屏。两种模式都吃这把地板。
+    min_interval_sec: float = 60.0
+    # 降级节奏：总线一次都没读通过时（宿主换了桶形状/总线断开）退回按这个挂钟
+    # 打点，而不是让整条存在感链路静默死掉。默认一小时 = v0.15.0 之前的老行为。
     interval_sec: float = 3600.0
     # 注入文本里"最近常用"最多带几行。
     max_recent_lines: int = 5
@@ -204,6 +220,28 @@ class StickerManagerSettings:
             ),
             awareness=AwarenessSettings(
                 enabled=_as_bool(awareness_raw.get("enabled"), awareness_default.enabled),
+                inject_mode=_as_choice(
+                    awareness_raw.get("inject_mode"),
+                    INJECT_MODES,
+                    awareness_default.inject_mode,
+                ),
+                inject_interval_n=_clamp_int(
+                    _as_int(
+                        awareness_raw.get("inject_interval_n"),
+                        awareness_default.inject_interval_n,
+                    ),
+                    1,
+                    50,
+                ),
+                # 地板可以到 0（连珠炮也不拦），但上限不超过一小时——再长就该走降级时钟了。
+                min_interval_sec=_clamp_float(
+                    _as_number(
+                        awareness_raw.get("min_interval_sec"),
+                        awareness_default.min_interval_sec,
+                    ),
+                    0.0,
+                    3600.0,
+                ),
                 interval_sec=_clamp_float(
                     _as_number(awareness_raw.get("interval_sec"), awareness_default.interval_sec),
                     60.0,

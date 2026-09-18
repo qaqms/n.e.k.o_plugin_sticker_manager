@@ -43,10 +43,17 @@ catalog_limit_for_model = 80
 usage_history_keep = 200
 
 [sticker_manager.awareness]
-# 存在感注入：低频把「你有一间表情收藏间 + 最近常用的几张」静默注进她的上下文
+# 存在感注入：把「你有一间表情收藏间 + 最近常用的几张」静默注进她的上下文
 # （visibility=[] 用户看不见；ai_behavior="read" 不起话轮）。与总开关是「与」关系。
+# v0.16.0 起由「用户开了新一轮」触发（轮询 bus.memory），不再按挂钟打点。
 enabled = true
-# 同一角色卡两次注入的最小间隔（秒）。默认一小时。
+# every_user_message=每轮都注 | interval_n=攒够 N 条用户轮注一次。
+inject_mode = "interval_n"
+# interval_n 档下每 N 条用户轮注一次。
+inject_interval_n = 3
+# 相邻两次注入的最小间隔（秒）：连珠炮对话防刷屏。
+min_interval_sec = 60.0
+# 降级节奏（秒）：总线一次都没读通过时退回按这个挂钟打点。
 interval_sec = 3600.0
 # 注入文本里"最近常用"最多带几行。
 max_recent_lines = 5

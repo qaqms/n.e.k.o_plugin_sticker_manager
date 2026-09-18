@@ -1,0 +1,5273 @@
+{
+  "schema_version": 4,
+  "sdk_version": "0.1.0",
+  "source_sha256": "86d47b8760a651612f5bcd710375c1551fec628e739a33e2b0361340b0b5a724",
+  "source_files": [
+    "CHANGELOG.md",
+    "DESIGN.md",
+    "README.md",
+    "__init__.py",
+    "config.example.toml",
+    "core/__init__.py",
+    "core/awareness.py",
+    "core/catalog.py",
+    "core/configuration.py",
+    "core/eagerness.py",
+    "core/labeling.py",
+    "core/pack.py",
+    "i18n/en.json",
+    "i18n/zh-CN.json",
+    "official/official_pack.zip",
+    "plugin.toml",
+    "pyproject.toml",
+    "services/__init__.py",
+    "services/awareness.py",
+    "services/lanlan.py",
+    "services/library.py",
+    "services/sender.py",
+    "services/tool_watch.py",
+    "services/turns.py",
+    "ui/components/awareness_card.tsx",
+    "ui/components/batch_bar.tsx",
+    "ui/components/category_section.tsx",
+    "ui/components/focus_card.tsx",
+    "ui/components/library_toolbar.tsx",
+    "ui/components/sticker_tile.tsx",
+    "ui/components/zone_bar.tsx",
+    "ui/library_model.ts",
+    "ui/panel.tsx",
+    "ui/preview.ts",
+    "ui/shared.ts"
+  ],
+  "source_bytes": 37014980,
+  "build_env": {
+    "os": "win32",
+    "python": "3.11",
+    "arch": "AMD64"
+  },
+  "entries_config_sha256": "",
+  "entries": [
+    {
+      "id": "add",
+      "name": {
+        "$i18n": "entries.add.name",
+        "default": "收藏一张表情包"
+      },
+      "description": {
+        "$i18n": "entries.add.description",
+        "default": "把一张图片存进表情库：data_base64 是图片本体（不含 data: 前缀）。轮 F 起逐图文本全部可选——不写也能收，她靠分组说明选图；caption（梗义）仍是选图最准的一把尺，顺手就写"
+      },
+      "event_key": "sticker_manager.add",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "data_base64": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.data_base64",
+              "default": "图片 base64（png/jpg/gif/webp，≤8MiB）"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.desc",
+              "default": "一句话描述图里在干什么（可选，≤200字）"
+            }
+          },
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "标签，逗号分隔（可选）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，如：猫猫日常）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          },
+          "caption": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.caption",
+              "default": "梗义：这张图在回复什么、什么上一句会触发发它（可选，≤300字）"
+            }
+          },
+          "visible_text": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.visible_text",
+              "default": "图里清晰可见的原文字（可选，≤200字）"
+            }
+          }
+        },
+        "required": [
+          "data_base64"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 30.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {},
+          "desc": {}
+        },
+        "required": [
+          "note",
+          "id",
+          "desc"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "id",
+        "desc"
+      ]
+    },
+    {
+      "id": "awareness_now",
+      "name": {
+        "$i18n": "entries.awareness_now.name",
+        "default": "立刻注一条存在感"
+      },
+      "description": {
+        "$i18n": "entries.awareness_now.description",
+        "default": "调试用：绕过间隔闸，立刻给当前角色卡注一条'你有表情包'的静默提示（用户看不见）"
+      },
+      "event_key": "sticker_manager.awareness_now",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 15.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "status": {}
+        },
+        "required": [
+          "note",
+          "status"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "status"
+      ]
+    },
+    {
+      "id": "batch_remove",
+      "name": {
+        "$i18n": "entries.batch_remove.name",
+        "default": "批量删除表情包"
+      },
+      "description": {
+        "$i18n": "entries.batch_remove.description",
+        "default": "按 id 列表逐张删除（图与记录，不可恢复）；面板侧负责先把精确张数摊在确认里"
+      },
+      "event_key": "sticker_manager.batch_remove",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": {
+              "$i18n": "fields.ids",
+              "default": "表情 id 列表（≤200）"
+            }
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "removed": {}
+        },
+        "required": [
+          "note",
+          "removed"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "removed"
+      ]
+    },
+    {
+      "id": "batch_update",
+      "name": {
+        "$i18n": "entries.batch_update.name",
+        "default": "批量编辑一批表情包"
+      },
+      "description": {
+        "$i18n": "entries.batch_update.description",
+        "default": "对一批 id 统一：加标签/删标签/移到分组/启停。只改传来的项，缺席不改；逐张走同一把 update 尺"
+      },
+      "event_key": "sticker_manager.batch_update",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": {
+              "$i18n": "fields.ids",
+              "default": "表情 id 列表（≤200）"
+            }
+          },
+          "tags_add": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags_add",
+              "default": "要加的标签，逗号分隔"
+            }
+          },
+          "tags_remove": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags_remove",
+              "default": "要删的标签，逗号分隔"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，整批共用；包里自带的优先）"
+            }
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.disabled",
+              "default": "禁用/启用"
+            }
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "updated": {}
+        },
+        "required": [
+          "note",
+          "updated"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "updated"
+      ]
+    },
+    {
+      "id": "export_pack",
+      "name": {
+        "$i18n": "entries.export_pack.name",
+        "default": "导出套图包"
+      },
+      "description": {
+        "$i18n": "entries.export_pack.description",
+        "default": "把整本表情库打成一个套图 zip（图 + manifest）写到 exports 目录，返回文件路径；导入方放回收件箱即可整套收进"
+      },
+      "event_key": "sticker_manager.export_pack",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 120.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "exported": {},
+          "skipped": {},
+          "file": {}
+        },
+        "required": [
+          "note",
+          "exported",
+          "skipped",
+          "file"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "exported",
+        "skipped",
+        "file"
+      ]
+    },
+    {
+      "id": "group_create",
+      "name": {
+        "$i18n": "entries.group_create.name",
+        "default": "新建一个表情分类"
+      },
+      "description": {
+        "$i18n": "entries.group_create.description",
+        "default": "先立分类再收图：名字必填，说明可留空（她选图时看到的分类正文就是这句话）。空分类对她是不可见的：不进目录、不能被选去发"
+      },
+      "event_key": "sticker_manager.group_create",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_name_new",
+              "default": "分类名字"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_desc",
+              "default": "什么时候用这一组（≤300字）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "group": {}
+        },
+        "required": [
+          "note",
+          "group"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "group"
+      ]
+    },
+    {
+      "id": "group_remove",
+      "name": {
+        "$i18n": "entries.group_remove.name",
+        "default": "删掉一个分类（连带删它里的图）"
+      },
+      "description": {
+        "$i18n": "entries.group_remove.description",
+        "default": "拆掉整个分区：这个分类下的每一张图与它们的文件一起删，不可恢复（面板先把精确张数摊开再问）"
+      },
+      "event_key": "sticker_manager.group_remove",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_name",
+              "default": "分类名（须已在册：建过分类或有图在用）"
+            }
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 120.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "group": {},
+          "removed": {}
+        },
+        "required": [
+          "note",
+          "group",
+          "removed"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "group",
+        "removed"
+      ]
+    },
+    {
+      "id": "group_set_desc",
+      "name": {
+        "$i18n": "entries.group_set_desc.name",
+        "default": "给套图分类写一句说明"
+      },
+      "description": {
+        "$i18n": "entries.group_set_desc.description",
+        "default": "分类说明是她选图时看到的“分类目录”正文（一句“什么时候用这一组”，≤300字）；空串=清掉这句话（分类本身不删，删分类用 group_remove）"
+      },
+      "event_key": "sticker_manager.group_set_desc",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_name",
+              "default": "分类名（须已在册：建过分类或有图在用）"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_desc",
+              "default": "什么时候用这一组（≤300字）"
+            }
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "group": {}
+        },
+        "required": [
+          "note",
+          "group"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "group"
+      ]
+    },
+    {
+      "id": "history",
+      "name": {
+        "$i18n": "entries.history.name",
+        "default": "最近的表情包使用记录"
+      },
+      "description": {
+        "$i18n": "entries.history.description",
+        "default": "返回发送台账尾部若干条（时刻/用了哪张/谁/成败），不含对话原文"
+      },
+      "event_key": "sticker_manager.history",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.limit",
+              "default": "取几条"
+            }
+          }
+        }
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "count": {}
+        },
+        "required": [
+          "note",
+          "count"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "count"
+      ]
+    },
+    {
+      "id": "import_inbox",
+      "name": {
+        "$i18n": "entries.import_inbox.name",
+        "default": "导入收件箱里的图片"
+      },
+      "description": {
+        "$i18n": "entries.import_inbox.description",
+        "default": "把收件箱目录里的图片逐张收进库（描述取自文件名，重复自动跳过）；成功与重复的源文件会被删掉，超限/坏图保留原地可重试"
+      },
+      "event_key": "sticker_manager.import_inbox",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "标签，逗号分隔（可选，整批共用）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，整批共用；包里自带的优先）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          }
+        }
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 120.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "imported": {},
+          "duplicates": {},
+          "rejected": {},
+          "failed": {}
+        },
+        "required": [
+          "note",
+          "imported",
+          "duplicates",
+          "rejected",
+          "failed"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "imported",
+        "duplicates",
+        "rejected",
+        "failed"
+      ]
+    },
+    {
+      "id": "import_upload_chunk",
+      "name": {
+        "$i18n": "entries.import_upload_chunk.name",
+        "default": "上传一个分块"
+      },
+      "description": {
+        "$i18n": "entries.import_upload_chunk.description",
+        "default": "把文件切块 base64 后按 seq 从 0 连续追加到上传会话；乱序/超限/会话已死会如实报错并作废会话"
+      },
+      "event_key": "sticker_manager.import_upload_chunk",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_session",
+              "default": "上传会话 id"
+            }
+          },
+          "seq": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.upload_seq",
+              "default": "分块序号（从 0 连续）"
+            }
+          },
+          "data_base64": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_chunk_base64",
+              "default": "本块 base64（原始体≤chunk_bytes）"
+            }
+          }
+        },
+        "required": [
+          "session",
+          "seq",
+          "data_base64"
+        ]
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 30.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "received": {}
+        },
+        "required": [
+          "note",
+          "received"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "received"
+      ]
+    },
+    {
+      "id": "import_upload_finish",
+      "name": {
+        "$i18n": "entries.import_upload_finish.name",
+        "default": "完成上传并导入套图包"
+      },
+      "description": {
+        "$i18n": "entries.import_upload_finish.description",
+        "default": "关闭上传会话，把暂存的 zip 按收件箱认包同一把尺整批收进库（manifest v2 协议同款），返回四类计数；会话随即作废、暂存体删除"
+      },
+      "event_key": "sticker_manager.import_upload_finish",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_session",
+              "default": "上传会话 id"
+            }
+          },
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "标签，逗号分隔（可选，整批共用）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，整批共用；包里自带的优先）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          }
+        },
+        "required": [
+          "session"
+        ]
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 120.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "imported": {},
+          "duplicates": {},
+          "rejected": {},
+          "failed": {}
+        },
+        "required": [
+          "note",
+          "imported",
+          "duplicates",
+          "rejected",
+          "failed"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "imported",
+        "duplicates",
+        "rejected",
+        "failed"
+      ]
+    },
+    {
+      "id": "import_upload_start",
+      "name": {
+        "$i18n": "entries.import_upload_start.name",
+        "default": "开始上传套图包"
+      },
+      "description": {
+        "$i18n": "entries.import_upload_start.description",
+        "default": "面板选择文件直传第一步：开一个 .zip 上传会话，返回 session 与每块原始字节上限；面板专用通道，模型不需要调"
+      },
+      "event_key": "sticker_manager.import_upload_start",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_name",
+              "default": "文件名（须以 .zip 结尾）"
+            }
+          },
+          "size": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.upload_size",
+              "default": "总字节数（仅用于提前拒绝明显超限）"
+            }
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 30.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "session": {},
+          "chunk_bytes": {}
+        },
+        "required": [
+          "note",
+          "session",
+          "chunk_bytes"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "session",
+        "chunk_bytes"
+      ]
+    },
+    {
+      "id": "list",
+      "name": {
+        "$i18n": "entries.list.name",
+        "default": "搜索表情包"
+      },
+      "description": {
+        "$i18n": "entries.list.description",
+        "default": "按关键词在库里搜（描述/标签/id 子串匹配），返回条目列表"
+      },
+      "event_key": "sticker_manager.list",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.query",
+              "default": "关键词，留空=全部"
+            }
+          },
+          "include_disabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.include_disabled",
+              "default": "是否包含被禁用的"
+            }
+          }
+        }
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "count": {}
+        },
+        "required": [
+          "note",
+          "count"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "count"
+      ]
+    },
+    {
+      "id": "preview",
+      "name": {
+        "$i18n": "entries.preview.name",
+        "default": "取一张表情包的预览"
+      },
+      "description": {
+        "$i18n": "entries.preview.description",
+        "default": "按段返回图片字节（base64）：面板逐段拉取拼回 dataUrl。分段是为了躲宿主控制通道单帧上限（实测 3.95MB 图整张回包会被拒发导致超时）"
+      },
+      "event_key": "sticker_manager.preview",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          },
+          "offset": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.offset",
+              "default": "从第几字节取（0 = 从头）"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 15.0,
+      "model_validate": true,
+      "llm_result_schema": {},
+      "metadata": {}
+    },
+    {
+      "id": "remove",
+      "name": {
+        "$i18n": "entries.remove.name",
+        "default": "删除表情包"
+      },
+      "description": {
+        "$i18n": "entries.remove.description",
+        "default": "从库里删掉这张图和它的记录（不可恢复）"
+      },
+      "event_key": "sticker_manager.remove",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {}
+        },
+        "required": [
+          "note",
+          "id"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "id"
+      ]
+    },
+    {
+      "id": "repair",
+      "name": {
+        "$i18n": "entries.repair.name",
+        "default": "库体检与自修复"
+      },
+      "description": {
+        "$i18n": "entries.repair.description",
+        "default": "清掉图片文件已丢失的条目、删掉没人引用的孤儿文件、补齐旧条目的内容指纹；返回各项计数"
+      },
+      "event_key": "sticker_manager.repair",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 30.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "removed_entries": {},
+          "purged_files": {},
+          "backfilled_hashes": {}
+        },
+        "required": [
+          "note",
+          "removed_entries",
+          "purged_files",
+          "backfilled_hashes"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "removed_entries",
+        "purged_files",
+        "backfilled_hashes"
+      ]
+    },
+    {
+      "id": "send",
+      "name": {
+        "$i18n": "entries.send.name",
+        "default": "把这张表情发到聊天"
+      },
+      "description": {
+        "$i18n": "entries.send.description",
+        "default": "面板上的试发按钮：以当前角色卡的名义发出这张图"
+      },
+      "event_key": "sticker_manager.send",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 30.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {}
+        },
+        "required": [
+          "note",
+          "id"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "id"
+      ]
+    },
+    {
+      "id": "set_eagerness",
+      "name": {
+        "$i18n": "entries.set_eagerness.name",
+        "default": "设置配表情积极度"
+      },
+      "description": {
+        "$i18n": "entries.set_eagerness.description",
+        "default": "三档（矜持/自然/爱发）只管她有多想配图；冷却、最近不重复、概率闸一律不动"
+      },
+      "event_key": "sticker_manager.set_eagerness",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "eagerness": {
+            "type": "string",
+            "enum": [
+              "reserved",
+              "natural",
+              "eager"
+            ],
+            "description": {
+              "$i18n": "fields.eagerness",
+              "default": "档位"
+            }
+          }
+        },
+        "required": [
+          "eagerness"
+        ]
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "eagerness": {}
+        },
+        "required": [
+          "note",
+          "eagerness"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "eagerness"
+      ]
+    },
+    {
+      "id": "switch",
+      "name": {
+        "$i18n": "entries.switch.name",
+        "default": "开关表情包管理"
+      },
+      "description": {
+        "$i18n": "entries.switch.description",
+        "default": "fail-closed 总开关：关闭后她不发图、看不到目录；库本身的增删改仍可用"
+      },
+      "event_key": "sticker_manager.switch",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.enabled",
+              "default": "是否开启"
+            }
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "enabled": {}
+        },
+        "required": [
+          "note",
+          "enabled"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "enabled"
+      ]
+    },
+    {
+      "id": "update",
+      "name": {
+        "$i18n": "entries.update.name",
+        "default": "修改表情包"
+      },
+      "description": {
+        "$i18n": "entries.update.description",
+        "default": "改描述/梗义/图内文字/标签/禁用状态。梗义决定她会不会选中这张图（空串=清除标注），禁用=从她的可选面里摘掉"
+      },
+      "event_key": "sticker_manager.update",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.desc",
+              "default": "新描述（留空=不改）"
+            }
+          },
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "新标签（留空=不改）"
+            }
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.disabled",
+              "default": "是否禁用（缺省=不改）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，如：猫猫日常）"
+            }
+          },
+          "caption": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.caption",
+              "default": "梗义：这张图在回复什么、什么上一句会触发发它（可选，≤300字）"
+            }
+          },
+          "visible_text": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.visible_text",
+              "default": "图里清晰可见的原文字（可选，≤200字）"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {}
+        },
+        "required": [
+          "note",
+          "id"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "id"
+      ]
+    },
+    {
+      "id": "zone_activate",
+      "name": {
+        "$i18n": "entries.zone_activate.name",
+        "default": "激活一个区"
+      },
+      "description": {
+        "$i18n": "entries.zone_activate.description",
+        "default": "切她的世界：只有激活区的分类与图对她可见可选；其余区整体隐形"
+      },
+      "event_key": "sticker_manager.zone_activate",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          }
+        },
+        "required": [
+          "zone_id"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ]
+    },
+    {
+      "id": "zone_create",
+      "name": {
+        "$i18n": "entries.zone_create.name",
+        "default": "新建一个上层区"
+      },
+      "description": {
+        "$i18n": "entries.zone_create.description",
+        "default": "区是分类的上层（比如官方自带/自己的主题收藏）：名字必填，说明可留空。新区不自动激活"
+      },
+      "event_key": "sticker_manager.zone_create",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_name_new",
+              "default": "区名字"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_desc",
+              "default": "这个区是干什么的（可选，≤300字）"
+            }
+          }
+        },
+        "required": [
+          "zone"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ]
+    },
+    {
+      "id": "zone_remove",
+      "name": {
+        "$i18n": "entries.zone_remove.name",
+        "default": "拆掉一个区（连带拆它全部分类与图）"
+      },
+      "description": {
+        "$i18n": "entries.zone_remove.description",
+        "default": "拆区是删分类的放大版：区内每一张图、每一个分类连同文件一起消失，不可恢复；最后一个区不许拆。面板先把精确张数摊开再等 3 秒确认"
+      },
+      "event_key": "sticker_manager.zone_remove",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          }
+        },
+        "required": [
+          "zone_id"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 120.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {},
+          "removed": {}
+        },
+        "required": [
+          "note",
+          "zone_id",
+          "removed"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "zone_id",
+        "removed"
+      ]
+    },
+    {
+      "id": "zone_rename",
+      "name": {
+        "$i18n": "entries.zone_rename.name",
+        "default": "改区名"
+      },
+      "description": {
+        "$i18n": "entries.zone_rename.description",
+        "default": "区用内部 id 引用，改名不扯动任何归属——想改就改（分类改名仍是另一回事）"
+      },
+      "event_key": "sticker_manager.zone_rename",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_name_new",
+              "default": "新名字"
+            }
+          }
+        },
+        "required": [
+          "zone_id",
+          "zone"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ]
+    },
+    {
+      "id": "zone_restore_official",
+      "name": {
+        "$i18n": "entries.zone_restore_official.name",
+        "default": "恢复官方收藏区"
+      },
+      "description": {
+        "$i18n": "entries.zone_restore_official.description",
+        "default": "官方区被拆掉后的补救入口：把随包的官方收藏重新收进「官方」区（内容指纹查重，不会重入重图）；不会抢走她当前正在用的区，除非库本来就是空的"
+      },
+      "event_key": "sticker_manager.zone_restore_official",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": 120.0,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone": {},
+          "imported": {},
+          "duplicates": {}
+        },
+        "required": [
+          "note",
+          "zone",
+          "imported",
+          "duplicates"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "zone",
+        "imported",
+        "duplicates"
+      ]
+    },
+    {
+      "id": "zone_set_desc",
+      "name": {
+        "$i18n": "entries.zone_set_desc.name",
+        "default": "给区写一句说明"
+      },
+      "description": {
+        "$i18n": "entries.zone_set_desc.description",
+        "default": "区的说明只给主人看（面板 tab 下的提示语），不进她的目录；空串=清空"
+      },
+      "event_key": "sticker_manager.zone_set_desc",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_desc",
+              "default": "这个区是干什么的（可选，≤300字）"
+            }
+          }
+        },
+        "required": [
+          "zone_id"
+        ],
+        "additionalProperties": false
+      },
+      "return_message": "",
+      "event_type": "plugin_entry",
+      "kind": "action",
+      "auto_start": false,
+      "timeout": null,
+      "model_validate": true,
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ]
+    }
+  ],
+  "handlers": {
+    "sticker_manager.add": {
+      "event_type": "plugin_entry",
+      "id": "add",
+      "name": {
+        "$i18n": "entries.add.name",
+        "default": "收藏一张表情包"
+      },
+      "description": {
+        "$i18n": "entries.add.description",
+        "default": "把一张图片存进表情库：data_base64 是图片本体（不含 data: 前缀）。轮 F 起逐图文本全部可选——不写也能收，她靠分组说明选图；caption（梗义）仍是选图最准的一把尺，顺手就写"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "data_base64": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.data_base64",
+              "default": "图片 base64（png/jpg/gif/webp，≤8MiB）"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.desc",
+              "default": "一句话描述图里在干什么（可选，≤200字）"
+            }
+          },
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "标签，逗号分隔（可选）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，如：猫猫日常）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          },
+          "caption": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.caption",
+              "default": "梗义：这张图在回复什么、什么上一句会触发发它（可选，≤300字）"
+            }
+          },
+          "visible_text": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.visible_text",
+              "default": "图里清晰可见的原文字（可选，≤200字）"
+            }
+          }
+        },
+        "required": [
+          "data_base64"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 30.0,
+      "llm_result_fields": [
+        "note",
+        "id",
+        "desc"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {},
+          "desc": {}
+        },
+        "required": [
+          "note",
+          "id",
+          "desc"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:add": {
+      "event_type": "plugin_entry",
+      "id": "add",
+      "name": {
+        "$i18n": "entries.add.name",
+        "default": "收藏一张表情包"
+      },
+      "description": {
+        "$i18n": "entries.add.description",
+        "default": "把一张图片存进表情库：data_base64 是图片本体（不含 data: 前缀）。轮 F 起逐图文本全部可选——不写也能收，她靠分组说明选图；caption（梗义）仍是选图最准的一把尺，顺手就写"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "data_base64": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.data_base64",
+              "default": "图片 base64（png/jpg/gif/webp，≤8MiB）"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.desc",
+              "default": "一句话描述图里在干什么（可选，≤200字）"
+            }
+          },
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "标签，逗号分隔（可选）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，如：猫猫日常）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          },
+          "caption": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.caption",
+              "default": "梗义：这张图在回复什么、什么上一句会触发发它（可选，≤300字）"
+            }
+          },
+          "visible_text": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.visible_text",
+              "default": "图里清晰可见的原文字（可选，≤200字）"
+            }
+          }
+        },
+        "required": [
+          "data_base64"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 30.0,
+      "llm_result_fields": [
+        "note",
+        "id",
+        "desc"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {},
+          "desc": {}
+        },
+        "required": [
+          "note",
+          "id",
+          "desc"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.awareness_now": {
+      "event_type": "plugin_entry",
+      "id": "awareness_now",
+      "name": {
+        "$i18n": "entries.awareness_now.name",
+        "default": "立刻注一条存在感"
+      },
+      "description": {
+        "$i18n": "entries.awareness_now.description",
+        "default": "调试用：绕过间隔闸，立刻给当前角色卡注一条'你有表情包'的静默提示（用户看不见）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 15.0,
+      "llm_result_fields": [
+        "note",
+        "status"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "status": {}
+        },
+        "required": [
+          "note",
+          "status"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:awareness_now": {
+      "event_type": "plugin_entry",
+      "id": "awareness_now",
+      "name": {
+        "$i18n": "entries.awareness_now.name",
+        "default": "立刻注一条存在感"
+      },
+      "description": {
+        "$i18n": "entries.awareness_now.description",
+        "default": "调试用：绕过间隔闸，立刻给当前角色卡注一条'你有表情包'的静默提示（用户看不见）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 15.0,
+      "llm_result_fields": [
+        "note",
+        "status"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "status": {}
+        },
+        "required": [
+          "note",
+          "status"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.batch_remove": {
+      "event_type": "plugin_entry",
+      "id": "batch_remove",
+      "name": {
+        "$i18n": "entries.batch_remove.name",
+        "default": "批量删除表情包"
+      },
+      "description": {
+        "$i18n": "entries.batch_remove.description",
+        "default": "按 id 列表逐张删除（图与记录，不可恢复）；面板侧负责先把精确张数摊在确认里"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": {
+              "$i18n": "fields.ids",
+              "default": "表情 id 列表（≤200）"
+            }
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "removed"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "removed": {}
+        },
+        "required": [
+          "note",
+          "removed"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:batch_remove": {
+      "event_type": "plugin_entry",
+      "id": "batch_remove",
+      "name": {
+        "$i18n": "entries.batch_remove.name",
+        "default": "批量删除表情包"
+      },
+      "description": {
+        "$i18n": "entries.batch_remove.description",
+        "default": "按 id 列表逐张删除（图与记录，不可恢复）；面板侧负责先把精确张数摊在确认里"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": {
+              "$i18n": "fields.ids",
+              "default": "表情 id 列表（≤200）"
+            }
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "removed"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "removed": {}
+        },
+        "required": [
+          "note",
+          "removed"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.batch_update": {
+      "event_type": "plugin_entry",
+      "id": "batch_update",
+      "name": {
+        "$i18n": "entries.batch_update.name",
+        "default": "批量编辑一批表情包"
+      },
+      "description": {
+        "$i18n": "entries.batch_update.description",
+        "default": "对一批 id 统一：加标签/删标签/移到分组/启停。只改传来的项，缺席不改；逐张走同一把 update 尺"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": {
+              "$i18n": "fields.ids",
+              "default": "表情 id 列表（≤200）"
+            }
+          },
+          "tags_add": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags_add",
+              "default": "要加的标签，逗号分隔"
+            }
+          },
+          "tags_remove": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags_remove",
+              "default": "要删的标签，逗号分隔"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，整批共用；包里自带的优先）"
+            }
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.disabled",
+              "default": "禁用/启用"
+            }
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "updated"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "updated": {}
+        },
+        "required": [
+          "note",
+          "updated"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:batch_update": {
+      "event_type": "plugin_entry",
+      "id": "batch_update",
+      "name": {
+        "$i18n": "entries.batch_update.name",
+        "default": "批量编辑一批表情包"
+      },
+      "description": {
+        "$i18n": "entries.batch_update.description",
+        "default": "对一批 id 统一：加标签/删标签/移到分组/启停。只改传来的项，缺席不改；逐张走同一把 update 尺"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": {
+              "$i18n": "fields.ids",
+              "default": "表情 id 列表（≤200）"
+            }
+          },
+          "tags_add": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags_add",
+              "default": "要加的标签，逗号分隔"
+            }
+          },
+          "tags_remove": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags_remove",
+              "default": "要删的标签，逗号分隔"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，整批共用；包里自带的优先）"
+            }
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.disabled",
+              "default": "禁用/启用"
+            }
+          }
+        },
+        "required": [
+          "ids"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "updated"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "updated": {}
+        },
+        "required": [
+          "note",
+          "updated"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.export_pack": {
+      "event_type": "plugin_entry",
+      "id": "export_pack",
+      "name": {
+        "$i18n": "entries.export_pack.name",
+        "default": "导出套图包"
+      },
+      "description": {
+        "$i18n": "entries.export_pack.description",
+        "default": "把整本表情库打成一个套图 zip（图 + manifest）写到 exports 目录，返回文件路径；导入方放回收件箱即可整套收进"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "exported",
+        "skipped",
+        "file"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "exported": {},
+          "skipped": {},
+          "file": {}
+        },
+        "required": [
+          "note",
+          "exported",
+          "skipped",
+          "file"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:export_pack": {
+      "event_type": "plugin_entry",
+      "id": "export_pack",
+      "name": {
+        "$i18n": "entries.export_pack.name",
+        "default": "导出套图包"
+      },
+      "description": {
+        "$i18n": "entries.export_pack.description",
+        "default": "把整本表情库打成一个套图 zip（图 + manifest）写到 exports 目录，返回文件路径；导入方放回收件箱即可整套收进"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "exported",
+        "skipped",
+        "file"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "exported": {},
+          "skipped": {},
+          "file": {}
+        },
+        "required": [
+          "note",
+          "exported",
+          "skipped",
+          "file"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.group_create": {
+      "event_type": "plugin_entry",
+      "id": "group_create",
+      "name": {
+        "$i18n": "entries.group_create.name",
+        "default": "新建一个表情分类"
+      },
+      "description": {
+        "$i18n": "entries.group_create.description",
+        "default": "先立分类再收图：名字必填，说明可留空（她选图时看到的分类正文就是这句话）。空分类对她是不可见的：不进目录、不能被选去发"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_name_new",
+              "default": "分类名字"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_desc",
+              "default": "什么时候用这一组（≤300字）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "group"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "group": {}
+        },
+        "required": [
+          "note",
+          "group"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:group_create": {
+      "event_type": "plugin_entry",
+      "id": "group_create",
+      "name": {
+        "$i18n": "entries.group_create.name",
+        "default": "新建一个表情分类"
+      },
+      "description": {
+        "$i18n": "entries.group_create.description",
+        "default": "先立分类再收图：名字必填，说明可留空（她选图时看到的分类正文就是这句话）。空分类对她是不可见的：不进目录、不能被选去发"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_name_new",
+              "default": "分类名字"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_desc",
+              "default": "什么时候用这一组（≤300字）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "group"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "group": {}
+        },
+        "required": [
+          "note",
+          "group"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.group_remove": {
+      "event_type": "plugin_entry",
+      "id": "group_remove",
+      "name": {
+        "$i18n": "entries.group_remove.name",
+        "default": "删掉一个分类（连带删它里的图）"
+      },
+      "description": {
+        "$i18n": "entries.group_remove.description",
+        "default": "拆掉整个分区：这个分类下的每一张图与它们的文件一起删，不可恢复（面板先把精确张数摊开再问）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_name",
+              "default": "分类名（须已在册：建过分类或有图在用）"
+            }
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "group",
+        "removed"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "group": {},
+          "removed": {}
+        },
+        "required": [
+          "note",
+          "group",
+          "removed"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:group_remove": {
+      "event_type": "plugin_entry",
+      "id": "group_remove",
+      "name": {
+        "$i18n": "entries.group_remove.name",
+        "default": "删掉一个分类（连带删它里的图）"
+      },
+      "description": {
+        "$i18n": "entries.group_remove.description",
+        "default": "拆掉整个分区：这个分类下的每一张图与它们的文件一起删，不可恢复（面板先把精确张数摊开再问）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_name",
+              "default": "分类名（须已在册：建过分类或有图在用）"
+            }
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "group",
+        "removed"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "group": {},
+          "removed": {}
+        },
+        "required": [
+          "note",
+          "group",
+          "removed"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.group_set_desc": {
+      "event_type": "plugin_entry",
+      "id": "group_set_desc",
+      "name": {
+        "$i18n": "entries.group_set_desc.name",
+        "default": "给套图分类写一句说明"
+      },
+      "description": {
+        "$i18n": "entries.group_set_desc.description",
+        "default": "分类说明是她选图时看到的“分类目录”正文（一句“什么时候用这一组”，≤300字）；空串=清掉这句话（分类本身不删，删分类用 group_remove）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_name",
+              "default": "分类名（须已在册：建过分类或有图在用）"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_desc",
+              "default": "什么时候用这一组（≤300字）"
+            }
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "group"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "group": {}
+        },
+        "required": [
+          "note",
+          "group"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:group_set_desc": {
+      "event_type": "plugin_entry",
+      "id": "group_set_desc",
+      "name": {
+        "$i18n": "entries.group_set_desc.name",
+        "default": "给套图分类写一句说明"
+      },
+      "description": {
+        "$i18n": "entries.group_set_desc.description",
+        "default": "分类说明是她选图时看到的“分类目录”正文（一句“什么时候用这一组”，≤300字）；空串=清掉这句话（分类本身不删，删分类用 group_remove）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_name",
+              "default": "分类名（须已在册：建过分类或有图在用）"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group_desc",
+              "default": "什么时候用这一组（≤300字）"
+            }
+          }
+        },
+        "required": [
+          "group"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "group"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "group": {}
+        },
+        "required": [
+          "note",
+          "group"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.history": {
+      "event_type": "plugin_entry",
+      "id": "history",
+      "name": {
+        "$i18n": "entries.history.name",
+        "default": "最近的表情包使用记录"
+      },
+      "description": {
+        "$i18n": "entries.history.description",
+        "default": "返回发送台账尾部若干条（时刻/用了哪张/谁/成败），不含对话原文"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.limit",
+              "default": "取几条"
+            }
+          }
+        }
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "count"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "count": {}
+        },
+        "required": [
+          "note",
+          "count"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:history": {
+      "event_type": "plugin_entry",
+      "id": "history",
+      "name": {
+        "$i18n": "entries.history.name",
+        "default": "最近的表情包使用记录"
+      },
+      "description": {
+        "$i18n": "entries.history.description",
+        "default": "返回发送台账尾部若干条（时刻/用了哪张/谁/成败），不含对话原文"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.limit",
+              "default": "取几条"
+            }
+          }
+        }
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "count"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "count": {}
+        },
+        "required": [
+          "note",
+          "count"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.import_inbox": {
+      "event_type": "plugin_entry",
+      "id": "import_inbox",
+      "name": {
+        "$i18n": "entries.import_inbox.name",
+        "default": "导入收件箱里的图片"
+      },
+      "description": {
+        "$i18n": "entries.import_inbox.description",
+        "default": "把收件箱目录里的图片逐张收进库（描述取自文件名，重复自动跳过）；成功与重复的源文件会被删掉，超限/坏图保留原地可重试"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "标签，逗号分隔（可选，整批共用）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，整批共用；包里自带的优先）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          }
+        }
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "imported",
+        "duplicates",
+        "rejected",
+        "failed"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "imported": {},
+          "duplicates": {},
+          "rejected": {},
+          "failed": {}
+        },
+        "required": [
+          "note",
+          "imported",
+          "duplicates",
+          "rejected",
+          "failed"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:import_inbox": {
+      "event_type": "plugin_entry",
+      "id": "import_inbox",
+      "name": {
+        "$i18n": "entries.import_inbox.name",
+        "default": "导入收件箱里的图片"
+      },
+      "description": {
+        "$i18n": "entries.import_inbox.description",
+        "default": "把收件箱目录里的图片逐张收进库（描述取自文件名，重复自动跳过）；成功与重复的源文件会被删掉，超限/坏图保留原地可重试"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "标签，逗号分隔（可选，整批共用）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，整批共用；包里自带的优先）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          }
+        }
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "imported",
+        "duplicates",
+        "rejected",
+        "failed"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "imported": {},
+          "duplicates": {},
+          "rejected": {},
+          "failed": {}
+        },
+        "required": [
+          "note",
+          "imported",
+          "duplicates",
+          "rejected",
+          "failed"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.import_upload_chunk": {
+      "event_type": "plugin_entry",
+      "id": "import_upload_chunk",
+      "name": {
+        "$i18n": "entries.import_upload_chunk.name",
+        "default": "上传一个分块"
+      },
+      "description": {
+        "$i18n": "entries.import_upload_chunk.description",
+        "default": "把文件切块 base64 后按 seq 从 0 连续追加到上传会话；乱序/超限/会话已死会如实报错并作废会话"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_session",
+              "default": "上传会话 id"
+            }
+          },
+          "seq": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.upload_seq",
+              "default": "分块序号（从 0 连续）"
+            }
+          },
+          "data_base64": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_chunk_base64",
+              "default": "本块 base64（原始体≤chunk_bytes）"
+            }
+          }
+        },
+        "required": [
+          "session",
+          "seq",
+          "data_base64"
+        ]
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 30.0,
+      "llm_result_fields": [
+        "note",
+        "received"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "received": {}
+        },
+        "required": [
+          "note",
+          "received"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:import_upload_chunk": {
+      "event_type": "plugin_entry",
+      "id": "import_upload_chunk",
+      "name": {
+        "$i18n": "entries.import_upload_chunk.name",
+        "default": "上传一个分块"
+      },
+      "description": {
+        "$i18n": "entries.import_upload_chunk.description",
+        "default": "把文件切块 base64 后按 seq 从 0 连续追加到上传会话；乱序/超限/会话已死会如实报错并作废会话"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_session",
+              "default": "上传会话 id"
+            }
+          },
+          "seq": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.upload_seq",
+              "default": "分块序号（从 0 连续）"
+            }
+          },
+          "data_base64": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_chunk_base64",
+              "default": "本块 base64（原始体≤chunk_bytes）"
+            }
+          }
+        },
+        "required": [
+          "session",
+          "seq",
+          "data_base64"
+        ]
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 30.0,
+      "llm_result_fields": [
+        "note",
+        "received"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "received": {}
+        },
+        "required": [
+          "note",
+          "received"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.import_upload_finish": {
+      "event_type": "plugin_entry",
+      "id": "import_upload_finish",
+      "name": {
+        "$i18n": "entries.import_upload_finish.name",
+        "default": "完成上传并导入套图包"
+      },
+      "description": {
+        "$i18n": "entries.import_upload_finish.description",
+        "default": "关闭上传会话，把暂存的 zip 按收件箱认包同一把尺整批收进库（manifest v2 协议同款），返回四类计数；会话随即作废、暂存体删除"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_session",
+              "default": "上传会话 id"
+            }
+          },
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "标签，逗号分隔（可选，整批共用）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，整批共用；包里自带的优先）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          }
+        },
+        "required": [
+          "session"
+        ]
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "imported",
+        "duplicates",
+        "rejected",
+        "failed"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "imported": {},
+          "duplicates": {},
+          "rejected": {},
+          "failed": {}
+        },
+        "required": [
+          "note",
+          "imported",
+          "duplicates",
+          "rejected",
+          "failed"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:import_upload_finish": {
+      "event_type": "plugin_entry",
+      "id": "import_upload_finish",
+      "name": {
+        "$i18n": "entries.import_upload_finish.name",
+        "default": "完成上传并导入套图包"
+      },
+      "description": {
+        "$i18n": "entries.import_upload_finish.description",
+        "default": "关闭上传会话，把暂存的 zip 按收件箱认包同一把尺整批收进库（manifest v2 协议同款），返回四类计数；会话随即作废、暂存体删除"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_session",
+              "default": "上传会话 id"
+            }
+          },
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "标签，逗号分隔（可选，整批共用）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，整批共用；包里自带的优先）"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_target",
+              "default": "目标区 id（留空=落在分类所在的区/激活区）"
+            }
+          }
+        },
+        "required": [
+          "session"
+        ]
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "imported",
+        "duplicates",
+        "rejected",
+        "failed"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "imported": {},
+          "duplicates": {},
+          "rejected": {},
+          "failed": {}
+        },
+        "required": [
+          "note",
+          "imported",
+          "duplicates",
+          "rejected",
+          "failed"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.import_upload_start": {
+      "event_type": "plugin_entry",
+      "id": "import_upload_start",
+      "name": {
+        "$i18n": "entries.import_upload_start.name",
+        "default": "开始上传套图包"
+      },
+      "description": {
+        "$i18n": "entries.import_upload_start.description",
+        "default": "面板选择文件直传第一步：开一个 .zip 上传会话，返回 session 与每块原始字节上限；面板专用通道，模型不需要调"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_name",
+              "default": "文件名（须以 .zip 结尾）"
+            }
+          },
+          "size": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.upload_size",
+              "default": "总字节数（仅用于提前拒绝明显超限）"
+            }
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 30.0,
+      "llm_result_fields": [
+        "note",
+        "session",
+        "chunk_bytes"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "session": {},
+          "chunk_bytes": {}
+        },
+        "required": [
+          "note",
+          "session",
+          "chunk_bytes"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:import_upload_start": {
+      "event_type": "plugin_entry",
+      "id": "import_upload_start",
+      "name": {
+        "$i18n": "entries.import_upload_start.name",
+        "default": "开始上传套图包"
+      },
+      "description": {
+        "$i18n": "entries.import_upload_start.description",
+        "default": "面板选择文件直传第一步：开一个 .zip 上传会话，返回 session 与每块原始字节上限；面板专用通道，模型不需要调"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.upload_name",
+              "default": "文件名（须以 .zip 结尾）"
+            }
+          },
+          "size": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.upload_size",
+              "default": "总字节数（仅用于提前拒绝明显超限）"
+            }
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 30.0,
+      "llm_result_fields": [
+        "note",
+        "session",
+        "chunk_bytes"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "session": {},
+          "chunk_bytes": {}
+        },
+        "required": [
+          "note",
+          "session",
+          "chunk_bytes"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.list": {
+      "event_type": "plugin_entry",
+      "id": "list",
+      "name": {
+        "$i18n": "entries.list.name",
+        "default": "搜索表情包"
+      },
+      "description": {
+        "$i18n": "entries.list.description",
+        "default": "按关键词在库里搜（描述/标签/id 子串匹配），返回条目列表"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.query",
+              "default": "关键词，留空=全部"
+            }
+          },
+          "include_disabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.include_disabled",
+              "default": "是否包含被禁用的"
+            }
+          }
+        }
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "count"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "count": {}
+        },
+        "required": [
+          "note",
+          "count"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:list": {
+      "event_type": "plugin_entry",
+      "id": "list",
+      "name": {
+        "$i18n": "entries.list.name",
+        "default": "搜索表情包"
+      },
+      "description": {
+        "$i18n": "entries.list.description",
+        "default": "按关键词在库里搜（描述/标签/id 子串匹配），返回条目列表"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.query",
+              "default": "关键词，留空=全部"
+            }
+          },
+          "include_disabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.include_disabled",
+              "default": "是否包含被禁用的"
+            }
+          }
+        }
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "count"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "count": {}
+        },
+        "required": [
+          "note",
+          "count"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:lifecycle:config_change": {
+      "event_type": "lifecycle",
+      "id": "config_change",
+      "name": "config_change",
+      "description": "",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "lifecycle",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": null,
+      "llm_result_schema": null,
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:lifecycle:shutdown": {
+      "event_type": "lifecycle",
+      "id": "shutdown",
+      "name": "shutdown",
+      "description": "",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "lifecycle",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": null,
+      "llm_result_schema": null,
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:lifecycle:startup": {
+      "event_type": "lifecycle",
+      "id": "startup",
+      "name": "startup",
+      "description": "",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "lifecycle",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": null,
+      "llm_result_schema": null,
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:timer:turns": {
+      "event_type": "timer",
+      "id": "turns",
+      "name": "sticker_manager turns",
+      "description": "",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "timer",
+      "auto_start": true,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": null,
+      "llm_result_schema": null,
+      "metadata": {
+        "seconds": 10
+      },
+      "extra": {
+        "mode": "interval",
+        "seconds": 10
+      },
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:timer:watch": {
+      "event_type": "timer",
+      "id": "watch",
+      "name": "sticker_manager watch",
+      "description": "",
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "timer",
+      "auto_start": true,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": null,
+      "llm_result_schema": null,
+      "metadata": {
+        "seconds": 60
+      },
+      "extra": {
+        "mode": "interval",
+        "seconds": 60
+      },
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.preview": {
+      "event_type": "plugin_entry",
+      "id": "preview",
+      "name": {
+        "$i18n": "entries.preview.name",
+        "default": "取一张表情包的预览"
+      },
+      "description": {
+        "$i18n": "entries.preview.description",
+        "default": "按段返回图片字节（base64）：面板逐段拉取拼回 dataUrl。分段是为了躲宿主控制通道单帧上限（实测 3.95MB 图整张回包会被拒发导致超时）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          },
+          "offset": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.offset",
+              "default": "从第几字节取（0 = 从头）"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 15.0,
+      "llm_result_fields": null,
+      "llm_result_schema": null,
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:preview": {
+      "event_type": "plugin_entry",
+      "id": "preview",
+      "name": {
+        "$i18n": "entries.preview.name",
+        "default": "取一张表情包的预览"
+      },
+      "description": {
+        "$i18n": "entries.preview.description",
+        "default": "按段返回图片字节（base64）：面板逐段拉取拼回 dataUrl。分段是为了躲宿主控制通道单帧上限（实测 3.95MB 图整张回包会被拒发导致超时）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          },
+          "offset": {
+            "type": "integer",
+            "description": {
+              "$i18n": "fields.offset",
+              "default": "从第几字节取（0 = 从头）"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 15.0,
+      "llm_result_fields": null,
+      "llm_result_schema": null,
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.remove": {
+      "event_type": "plugin_entry",
+      "id": "remove",
+      "name": {
+        "$i18n": "entries.remove.name",
+        "default": "删除表情包"
+      },
+      "description": {
+        "$i18n": "entries.remove.description",
+        "default": "从库里删掉这张图和它的记录（不可恢复）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {}
+        },
+        "required": [
+          "note",
+          "id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:remove": {
+      "event_type": "plugin_entry",
+      "id": "remove",
+      "name": {
+        "$i18n": "entries.remove.name",
+        "default": "删除表情包"
+      },
+      "description": {
+        "$i18n": "entries.remove.description",
+        "default": "从库里删掉这张图和它的记录（不可恢复）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {}
+        },
+        "required": [
+          "note",
+          "id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.repair": {
+      "event_type": "plugin_entry",
+      "id": "repair",
+      "name": {
+        "$i18n": "entries.repair.name",
+        "default": "库体检与自修复"
+      },
+      "description": {
+        "$i18n": "entries.repair.description",
+        "default": "清掉图片文件已丢失的条目、删掉没人引用的孤儿文件、补齐旧条目的内容指纹；返回各项计数"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 30.0,
+      "llm_result_fields": [
+        "note",
+        "removed_entries",
+        "purged_files",
+        "backfilled_hashes"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "removed_entries": {},
+          "purged_files": {},
+          "backfilled_hashes": {}
+        },
+        "required": [
+          "note",
+          "removed_entries",
+          "purged_files",
+          "backfilled_hashes"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:repair": {
+      "event_type": "plugin_entry",
+      "id": "repair",
+      "name": {
+        "$i18n": "entries.repair.name",
+        "default": "库体检与自修复"
+      },
+      "description": {
+        "$i18n": "entries.repair.description",
+        "default": "清掉图片文件已丢失的条目、删掉没人引用的孤儿文件、补齐旧条目的内容指纹；返回各项计数"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 30.0,
+      "llm_result_fields": [
+        "note",
+        "removed_entries",
+        "purged_files",
+        "backfilled_hashes"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "removed_entries": {},
+          "purged_files": {},
+          "backfilled_hashes": {}
+        },
+        "required": [
+          "note",
+          "removed_entries",
+          "purged_files",
+          "backfilled_hashes"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.send": {
+      "event_type": "plugin_entry",
+      "id": "send",
+      "name": {
+        "$i18n": "entries.send.name",
+        "default": "把这张表情发到聊天"
+      },
+      "description": {
+        "$i18n": "entries.send.description",
+        "default": "面板上的试发按钮：以当前角色卡的名义发出这张图"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 30.0,
+      "llm_result_fields": [
+        "note",
+        "id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {}
+        },
+        "required": [
+          "note",
+          "id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:send": {
+      "event_type": "plugin_entry",
+      "id": "send",
+      "name": {
+        "$i18n": "entries.send.name",
+        "default": "把这张表情发到聊天"
+      },
+      "description": {
+        "$i18n": "entries.send.description",
+        "default": "面板上的试发按钮：以当前角色卡的名义发出这张图"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 30.0,
+      "llm_result_fields": [
+        "note",
+        "id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {}
+        },
+        "required": [
+          "note",
+          "id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.set_eagerness": {
+      "event_type": "plugin_entry",
+      "id": "set_eagerness",
+      "name": {
+        "$i18n": "entries.set_eagerness.name",
+        "default": "设置配表情积极度"
+      },
+      "description": {
+        "$i18n": "entries.set_eagerness.description",
+        "default": "三档（矜持/自然/爱发）只管她有多想配图；冷却、最近不重复、概率闸一律不动"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "eagerness": {
+            "type": "string",
+            "enum": [
+              "reserved",
+              "natural",
+              "eager"
+            ],
+            "description": {
+              "$i18n": "fields.eagerness",
+              "default": "档位"
+            }
+          }
+        },
+        "required": [
+          "eagerness"
+        ]
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "eagerness"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "eagerness": {}
+        },
+        "required": [
+          "note",
+          "eagerness"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:set_eagerness": {
+      "event_type": "plugin_entry",
+      "id": "set_eagerness",
+      "name": {
+        "$i18n": "entries.set_eagerness.name",
+        "default": "设置配表情积极度"
+      },
+      "description": {
+        "$i18n": "entries.set_eagerness.description",
+        "default": "三档（矜持/自然/爱发）只管她有多想配图；冷却、最近不重复、概率闸一律不动"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "eagerness": {
+            "type": "string",
+            "enum": [
+              "reserved",
+              "natural",
+              "eager"
+            ],
+            "description": {
+              "$i18n": "fields.eagerness",
+              "default": "档位"
+            }
+          }
+        },
+        "required": [
+          "eagerness"
+        ]
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "eagerness"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "eagerness": {}
+        },
+        "required": [
+          "note",
+          "eagerness"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.switch": {
+      "event_type": "plugin_entry",
+      "id": "switch",
+      "name": {
+        "$i18n": "entries.switch.name",
+        "default": "开关表情包管理"
+      },
+      "description": {
+        "$i18n": "entries.switch.description",
+        "default": "fail-closed 总开关：关闭后她不发图、看不到目录；库本身的增删改仍可用"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.enabled",
+              "default": "是否开启"
+            }
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "enabled"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "enabled": {}
+        },
+        "required": [
+          "note",
+          "enabled"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:switch": {
+      "event_type": "plugin_entry",
+      "id": "switch",
+      "name": {
+        "$i18n": "entries.switch.name",
+        "default": "开关表情包管理"
+      },
+      "description": {
+        "$i18n": "entries.switch.description",
+        "default": "fail-closed 总开关：关闭后她不发图、看不到目录；库本身的增删改仍可用"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.enabled",
+              "default": "是否开启"
+            }
+          }
+        },
+        "required": [
+          "enabled"
+        ]
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "enabled"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "enabled": {}
+        },
+        "required": [
+          "note",
+          "enabled"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.update": {
+      "event_type": "plugin_entry",
+      "id": "update",
+      "name": {
+        "$i18n": "entries.update.name",
+        "default": "修改表情包"
+      },
+      "description": {
+        "$i18n": "entries.update.description",
+        "default": "改描述/梗义/图内文字/标签/禁用状态。梗义决定她会不会选中这张图（空串=清除标注），禁用=从她的可选面里摘掉"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.desc",
+              "default": "新描述（留空=不改）"
+            }
+          },
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "新标签（留空=不改）"
+            }
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.disabled",
+              "default": "是否禁用（缺省=不改）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，如：猫猫日常）"
+            }
+          },
+          "caption": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.caption",
+              "default": "梗义：这张图在回复什么、什么上一句会触发发它（可选，≤300字）"
+            }
+          },
+          "visible_text": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.visible_text",
+              "default": "图里清晰可见的原文字（可选，≤200字）"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {}
+        },
+        "required": [
+          "note",
+          "id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:update": {
+      "event_type": "plugin_entry",
+      "id": "update",
+      "name": {
+        "$i18n": "entries.update.name",
+        "default": "修改表情包"
+      },
+      "description": {
+        "$i18n": "entries.update.description",
+        "default": "改描述/梗义/图内文字/标签/禁用状态。梗义决定她会不会选中这张图（空串=清除标注），禁用=从她的可选面里摘掉"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.id",
+              "default": "表情包 id"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.desc",
+              "default": "新描述（留空=不改）"
+            }
+          },
+          "tags": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.tags",
+              "default": "新标签（留空=不改）"
+            }
+          },
+          "disabled": {
+            "type": "boolean",
+            "description": {
+              "$i18n": "fields.disabled",
+              "default": "是否禁用（缺省=不改）"
+            }
+          },
+          "group": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.group",
+              "default": "套图分组（可选，如：猫猫日常）"
+            }
+          },
+          "caption": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.caption",
+              "default": "梗义：这张图在回复什么、什么上一句会触发发它（可选，≤300字）"
+            }
+          },
+          "visible_text": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.visible_text",
+              "default": "图里清晰可见的原文字（可选，≤200字）"
+            }
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "id": {}
+        },
+        "required": [
+          "note",
+          "id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.zone_activate": {
+      "event_type": "plugin_entry",
+      "id": "zone_activate",
+      "name": {
+        "$i18n": "entries.zone_activate.name",
+        "default": "激活一个区"
+      },
+      "description": {
+        "$i18n": "entries.zone_activate.description",
+        "default": "切她的世界：只有激活区的分类与图对她可见可选；其余区整体隐形"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          }
+        },
+        "required": [
+          "zone_id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:zone_activate": {
+      "event_type": "plugin_entry",
+      "id": "zone_activate",
+      "name": {
+        "$i18n": "entries.zone_activate.name",
+        "default": "激活一个区"
+      },
+      "description": {
+        "$i18n": "entries.zone_activate.description",
+        "default": "切她的世界：只有激活区的分类与图对她可见可选；其余区整体隐形"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          }
+        },
+        "required": [
+          "zone_id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.zone_create": {
+      "event_type": "plugin_entry",
+      "id": "zone_create",
+      "name": {
+        "$i18n": "entries.zone_create.name",
+        "default": "新建一个上层区"
+      },
+      "description": {
+        "$i18n": "entries.zone_create.description",
+        "default": "区是分类的上层（比如官方自带/自己的主题收藏）：名字必填，说明可留空。新区不自动激活"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_name_new",
+              "default": "区名字"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_desc",
+              "default": "这个区是干什么的（可选，≤300字）"
+            }
+          }
+        },
+        "required": [
+          "zone"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:zone_create": {
+      "event_type": "plugin_entry",
+      "id": "zone_create",
+      "name": {
+        "$i18n": "entries.zone_create.name",
+        "default": "新建一个上层区"
+      },
+      "description": {
+        "$i18n": "entries.zone_create.description",
+        "default": "区是分类的上层（比如官方自带/自己的主题收藏）：名字必填，说明可留空。新区不自动激活"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_name_new",
+              "default": "区名字"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_desc",
+              "default": "这个区是干什么的（可选，≤300字）"
+            }
+          }
+        },
+        "required": [
+          "zone"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.zone_remove": {
+      "event_type": "plugin_entry",
+      "id": "zone_remove",
+      "name": {
+        "$i18n": "entries.zone_remove.name",
+        "default": "拆掉一个区（连带拆它全部分类与图）"
+      },
+      "description": {
+        "$i18n": "entries.zone_remove.description",
+        "default": "拆区是删分类的放大版：区内每一张图、每一个分类连同文件一起消失，不可恢复；最后一个区不许拆。面板先把精确张数摊开再等 3 秒确认"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          }
+        },
+        "required": [
+          "zone_id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "zone_id",
+        "removed"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {},
+          "removed": {}
+        },
+        "required": [
+          "note",
+          "zone_id",
+          "removed"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:zone_remove": {
+      "event_type": "plugin_entry",
+      "id": "zone_remove",
+      "name": {
+        "$i18n": "entries.zone_remove.name",
+        "default": "拆掉一个区（连带拆它全部分类与图）"
+      },
+      "description": {
+        "$i18n": "entries.zone_remove.description",
+        "default": "拆区是删分类的放大版：区内每一张图、每一个分类连同文件一起消失，不可恢复；最后一个区不许拆。面板先把精确张数摊开再等 3 秒确认"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          }
+        },
+        "required": [
+          "zone_id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "zone_id",
+        "removed"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {},
+          "removed": {}
+        },
+        "required": [
+          "note",
+          "zone_id",
+          "removed"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.zone_rename": {
+      "event_type": "plugin_entry",
+      "id": "zone_rename",
+      "name": {
+        "$i18n": "entries.zone_rename.name",
+        "default": "改区名"
+      },
+      "description": {
+        "$i18n": "entries.zone_rename.description",
+        "default": "区用内部 id 引用，改名不扯动任何归属——想改就改（分类改名仍是另一回事）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_name_new",
+              "default": "新名字"
+            }
+          }
+        },
+        "required": [
+          "zone_id",
+          "zone"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:zone_rename": {
+      "event_type": "plugin_entry",
+      "id": "zone_rename",
+      "name": {
+        "$i18n": "entries.zone_rename.name",
+        "default": "改区名"
+      },
+      "description": {
+        "$i18n": "entries.zone_rename.description",
+        "default": "区用内部 id 引用，改名不扯动任何归属——想改就改（分类改名仍是另一回事）"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          },
+          "zone": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_name_new",
+              "default": "新名字"
+            }
+          }
+        },
+        "required": [
+          "zone_id",
+          "zone"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.zone_restore_official": {
+      "event_type": "plugin_entry",
+      "id": "zone_restore_official",
+      "name": {
+        "$i18n": "entries.zone_restore_official.name",
+        "default": "恢复官方收藏区"
+      },
+      "description": {
+        "$i18n": "entries.zone_restore_official.description",
+        "default": "官方区被拆掉后的补救入口：把随包的官方收藏重新收进「官方」区（内容指纹查重，不会重入重图）；不会抢走她当前正在用的区，除非库本来就是空的"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "zone",
+        "imported",
+        "duplicates"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone": {},
+          "imported": {},
+          "duplicates": {}
+        },
+        "required": [
+          "note",
+          "zone",
+          "imported",
+          "duplicates"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:zone_restore_official": {
+      "event_type": "plugin_entry",
+      "id": "zone_restore_official",
+      "name": {
+        "$i18n": "entries.zone_restore_official.name",
+        "default": "恢复官方收藏区"
+      },
+      "description": {
+        "$i18n": "entries.zone_restore_official.description",
+        "default": "官方区被拆掉后的补救入口：把随包的官方收藏重新收进「官方」区（内容指纹查重，不会重入重图）；不会抢走她当前正在用的区，除非库本来就是空的"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": 120.0,
+      "llm_result_fields": [
+        "note",
+        "zone",
+        "imported",
+        "duplicates"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone": {},
+          "imported": {},
+          "duplicates": {}
+        },
+        "required": [
+          "note",
+          "zone",
+          "imported",
+          "duplicates"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager.zone_set_desc": {
+      "event_type": "plugin_entry",
+      "id": "zone_set_desc",
+      "name": {
+        "$i18n": "entries.zone_set_desc.name",
+        "default": "给区写一句说明"
+      },
+      "description": {
+        "$i18n": "entries.zone_set_desc.description",
+        "default": "区的说明只给主人看（面板 tab 下的提示语），不进她的目录；空串=清空"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_desc",
+              "default": "这个区是干什么的（可选，≤300字）"
+            }
+          }
+        },
+        "required": [
+          "zone_id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    },
+    "sticker_manager:plugin_entry:zone_set_desc": {
+      "event_type": "plugin_entry",
+      "id": "zone_set_desc",
+      "name": {
+        "$i18n": "entries.zone_set_desc.name",
+        "default": "给区写一句说明"
+      },
+      "description": {
+        "$i18n": "entries.zone_set_desc.description",
+        "default": "区的说明只给主人看（面板 tab 下的提示语），不进她的目录；空串=清空"
+      },
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "zone_id": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_id",
+              "default": "区 id"
+            }
+          },
+          "desc": {
+            "type": "string",
+            "description": {
+              "$i18n": "fields.zone_desc",
+              "default": "这个区是干什么的（可选，≤300字）"
+            }
+          }
+        },
+        "required": [
+          "zone_id"
+        ],
+        "additionalProperties": false
+      },
+      "enabled": true,
+      "dynamic": false,
+      "kind": "action",
+      "auto_start": false,
+      "persist": null,
+      "model_validate": true,
+      "timeout": null,
+      "llm_result_fields": [
+        "note",
+        "zone_id"
+      ],
+      "llm_result_schema": {
+        "type": "object",
+        "properties": {
+          "note": {},
+          "zone_id": {}
+        },
+        "required": [
+          "note",
+          "zone_id"
+        ]
+      },
+      "metadata": {},
+      "extra": {},
+      "quick_action": false,
+      "quick_action_config": {
+        "icon": null,
+        "priority": 0
+      }
+    }
+  },
+  "entry_methods": {
+    "add": "add_entry",
+    "awareness_now": "awareness_now_entry",
+    "batch_remove": "batch_remove_entry",
+    "batch_update": "batch_update_entry",
+    "export_pack": "export_pack_entry",
+    "group_create": "group_create_entry",
+    "group_remove": "group_remove_entry",
+    "group_set_desc": "group_set_desc_entry",
+    "history": "history_entry",
+    "import_inbox": "import_inbox_entry",
+    "import_upload_chunk": "import_upload_chunk_entry",
+    "import_upload_finish": "import_upload_finish_entry",
+    "import_upload_start": "import_upload_start_entry",
+    "list": "list_entry",
+    "preview": "preview_entry",
+    "remove": "remove_entry",
+    "repair": "repair_entry",
+    "send": "send_entry",
+    "set_eagerness": "set_eagerness_entry",
+    "switch": "switch_entry",
+    "update": "update_entry",
+    "zone_activate": "zone_activate_entry",
+    "zone_create": "zone_create_entry",
+    "zone_remove": "zone_remove_entry",
+    "zone_rename": "zone_rename_entry",
+    "zone_restore_official": "zone_restore_official_entry",
+    "zone_set_desc": "zone_set_desc_entry"
+  }
+}

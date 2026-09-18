@@ -33,6 +33,12 @@ export type AwarenessState = {
   target?: string;
   last_inject_at?: number | null;
   min_next_wait_sec?: number;
+  // v0.16.0：注入改由用户轮次驱动。driver = "bus"（轮次源活着）| "unavailable"
+  // （总线读不通，已退回挂钟）——面板只读展示，旋钮在配置文件里。
+  driver?: string;
+  inject_mode?: string;
+  inject_interval_n?: number;
+  turns_since_inject?: Record<string, number>;
 };
 
 export type GroupInfo = {

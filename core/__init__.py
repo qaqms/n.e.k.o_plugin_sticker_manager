@@ -6,7 +6,12 @@
 - `awareness`：存在感注入的选内容与拼文案（v0.2.0）。
 """
 
-from .awareness import build_awareness_text, pick_recent
+from .awareness import (
+    build_awareness_text,
+    injection_due_for_turn,
+    normalize_mode,
+    pick_recent,
+)
 from .catalog import (
     CAPTION_MAX_CHARS,
     DEFAULT_ZONE_NAME,
@@ -45,6 +50,8 @@ from .catalog import (
 from .configuration import (
     EAGERNESS_DEFAULT,
     EAGERNESS_LEVELS,
+    INJECT_MODE_DEFAULT,
+    INJECT_MODES,
     AwarenessSettings,
     SendSettings,
     StickerManagerSettings,
@@ -87,6 +94,8 @@ __all__ = [
     "DEFAULT_ZONE_NAME",
     "EAGERNESS_DEFAULT",
     "EAGERNESS_LEVELS",
+    "INJECT_MODES",
+    "INJECT_MODE_DEFAULT",
     "OFFICIAL_PACK_RELPATH",
     "OFFICIAL_ZONE_NAME",
     "AwarenessSettings",
@@ -103,11 +112,13 @@ __all__ = [
     "detect_image_format",
     "format_catalog_for_model",
     "format_group_overview",
+    "injection_due_for_turn",
     "injection_guidance",
     "index_by_digest",
     "new_sticker_id",
     "new_zone_id",
     "normalize_group",
+    "normalize_mode",
     "normalize_tier",
     "normalize_zone_name",
     "normalize_optional_text",

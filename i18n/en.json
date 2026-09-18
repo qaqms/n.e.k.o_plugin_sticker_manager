@@ -134,7 +134,7 @@
   "panel.stat.total": "Saved",
   "panel.switch": "Master switch (off = she sends no stickers and sees no catalog)",
   "panel.awareness.title": "Awareness injection",
-  "panel.awareness.note": "Low-frequency silent hints telling her the sticker room exists and what she uses most. You never see them; they never start a turn. Cadence lives in [sticker_manager.awareness].",
+  "panel.awareness.note": "Silent hints placed in her context when she starts a new turn: the sticker room exists, and here is what she uses most. You never see them; they never start a turn. Cadence lives in [sticker_manager.awareness].",
   "panel.awareness.status": "Last run",
   "panel.awareness.target": "Injected to",
   "panel.awareness.next": "Next in >= ",
@@ -317,5 +317,11 @@
   "panel.awareness.eagerness.help": "Only changes how keen she is to attach a sticker. Cooldown, recent-dedup and the probability gate ignore this tier - they live in the settings below.",
   "panel.eagerness.reserved": "Reserved: only when it fits perfectly",
   "panel.eagerness.natural": "Natural: send when it fits (default)",
-  "panel.eagerness.eager": "Eager: attach one whenever the mood matches"
+  "panel.eagerness.eager": "Eager: attach one whenever the mood matches",
+  "panel.awareness.cadenceLabel": "Cadence",
+  "panel.awareness.driverLabel": "Driver",
+  "panel.awareness.cadence.interval_n": "every {n} turns · {since} banked",
+  "panel.awareness.cadence.every_user_message": "every turn · {since} banked",
+  "panel.awareness.driver.bus": "turns (when she starts a new one)",
+  "panel.awareness.driver.unavailable": "fallback clock (bus turns unreadable)"
 }

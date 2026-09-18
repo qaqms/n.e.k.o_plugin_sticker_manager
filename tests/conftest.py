@@ -313,8 +313,25 @@ class FakeBusNamespace:
 
 
 class FakeBus:
-    def __init__(self, records: list[dict[str, Any]] | None = None, *, error: bool = False):
+    """宿主总线桩：两个命名空间分开喂。
+
+    `memory` 必须存在且默认空列表——真实宿主永远有这个桶。默认给空而不是缺省，
+    是为了让 v0.16.0 的轮次驱动走主路径（"桶里没有用户消息"≠"总线读不到"）；
+    要演"总线断了/形状变了"的降级路径，显式传 `memory_error=True`。
+    """
+
+    def __init__(
+        self,
+        records: list[dict[str, Any]] | None = None,
+        *,
+        memory_records: list[dict[str, Any]] | None = None,
+        error: bool = False,
+        memory_error: bool = False,
+    ):
         self.conversations = FakeBusNamespace(records, error=error)
+        self.memory = FakeBusNamespace(
+            memory_records if memory_records is not None else [], error=memory_error
+        )
 
 
 def conversation_record(conversation_id: str, timestamp: float, lanlan: str, turn_type: str = "user") -> dict[str, Any]:
@@ -324,6 +341,25 @@ def conversation_record(conversation_id: str, timestamp: float, lanlan: str, tur
         "timestamp": timestamp,
         "metadata": {"lanlan_name": lanlan, "turn_type": turn_type},
     }
+
+
+def user_message_record(
+    timestamp: float, content: str = "在吗", lanlan: str = "", *, is_voice: bool = False
+) -> dict[str, Any]:
+    """构造一条 `bus.memory` 的用户轮记录（宿主 turn.py 写入的原始形状）。
+
+    时间戳字段是 `_ts` 不是 `timestamp`，角色归属字段是 `lanlan` 不是 `lanlan_name`
+    ——两处键名差异是 services/turns.py 与 services/lanlan.py 各自要吃下的现实。
+    """
+    record: dict[str, Any] = {
+        "type": "user_message",
+        "content": content,
+        "_ts": timestamp,
+        "is_voice": is_voice,
+    }
+    if lanlan:
+        record["lanlan"] = lanlan
+    return record
 
 
 @dataclass
