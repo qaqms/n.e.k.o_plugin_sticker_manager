@@ -23,16 +23,51 @@ class _List:
 
 
 class _Namespace:
+    """两个桶的公共部分：**签名严格照 SDK**——宽容的 `**kwargs` 桩曾把真 bug 遮了三轮
+    （v0.14.1 起 `_from_bus` 给两个桶都塞了 `{max_count, limit, bucket_id}`，
+    真机上两边各抛 TypeError，整级静默失效，全靠 HTTP 兜住）。
+    """
+
     def __init__(self, records=None, *, error=None):
         self._records = records
         self._error = error
         self.calls = 0
+        self.last_kwargs: dict | None = None
 
-    def get(self, **_kwargs):
+    def _run(self, kwargs):
         self.calls += 1
+        self.last_kwargs = kwargs
         if self._error is not None:
             raise self._error
         return _List(self._records or [])
+
+
+class _ConvNamespace(_Namespace):
+    """`SdkConversationsBus.get(*, conversation_id, max_count, since_ts, timeout)`。"""
+
+    def get(
+        self,
+        *,
+        conversation_id: str | None = None,
+        max_count: int = 50,
+        since_ts: float | None = None,
+        timeout: float = 5.0,
+    ):
+        return self._run(
+            {
+                "conversation_id": conversation_id,
+                "max_count": max_count,
+                "since_ts": since_ts,
+                "timeout": timeout,
+            }
+        )
+
+
+class _MemNamespace(_Namespace):
+    """`SdkMemoryBus.get(*, bucket_id, limit, timeout)`——没有 max_count，bucket_id 必填。"""
+
+    def get(self, *, bucket_id: str, limit: int = 20, timeout: float = 5.0):
+        return self._run({"bucket_id": bucket_id, "limit": limit, "timeout": timeout})
 
 
 class _Bus:
@@ -71,23 +106,23 @@ def enable_http():
 
 class TestChain:
     def test_hint_short_circuits_bus_and_http(self, run_async):
-        conv = _Namespace([_conv(1.0, "M")])
+        conv = _ConvNamespace([_conv(1.0, "M")])
         resolver = LanlanResolver(_Plugin(bus=_Bus(conversations=conv)))
         resolver._fetch_blocking = lambda: (_ for _ in ()).throw(AssertionError("不该问 HTTP"))
         assert run_async(resolver.resolve("K")) == "K"
         assert conv.calls == 0
 
     def test_conversation_record_target(self, run_async):
-        plugin = _Plugin(bus=_Bus(conversations=_Namespace([_conv(1.0, "M"), _conv(9.0, "K")])))
+        plugin = _Plugin(bus=_Bus(conversations=_ConvNamespace([_conv(1.0, "M"), _conv(9.0, "K")])))
         assert run_async(LanlanResolver(plugin).resolve()) == "K"
 
     def test_memory_bucket_uses_the_lanlan_key(self, run_async):
         # memory 桶的角色键叫 `lanlan`（不是 lanlan_name）——旧实现因此永远读不到它。
-        plugin = _Plugin(bus=_Bus(memory=_Namespace([{"timestamp": 3.0, "lanlan": "小春"}])))
+        plugin = _Plugin(bus=_Bus(memory=_MemNamespace([{"_ts": 3.0, "lanlan": "小春"}])))
         assert run_async(LanlanResolver(plugin).resolve()) == "小春"
 
     def test_target_drifts_instead_of_being_pinned(self, run_async):
-        conv = _Namespace([_conv(1.0, "M")])
+        conv = _ConvNamespace([_conv(1.0, "M")])
         resolver = LanlanResolver(_Plugin(bus=_Bus(conversations=conv)))
         assert run_async(resolver.resolve()) == "M"
         conv._records = [_conv(99.0, "K")]
@@ -116,8 +151,35 @@ class TestChain:
         assert run_async(resolver.resolve()) == "粘滞卡", "HTTP 不通要退到 ctx 粘滞值"
         assert run_async(resolver.resolve()) == "粘滞卡"
 
+    def test_both_buckets_get_only_their_own_kwargs(self, run_async):
+        # 真机踩过：两个桶都塞 {max_count, limit, bucket_id} → 各抛 TypeError → 整级静默。
+        conv = _ConvNamespace([_conv(9.0, "K")])
+        mem = _MemNamespace([{"_ts": 3.0, "lanlan": "小春"}])
+        plugin = _Plugin(bus=_Bus(conversations=conv, memory=mem))
+        assert run_async(LanlanResolver(plugin).resolve()) == "K"
+        assert set(conv.last_kwargs) == {"conversation_id", "max_count", "since_ts", "timeout"}
+        assert conv.calls == 1 and mem.calls == 0  # 上一级给了名字就不往下读
+
+    def test_memory_bucket_is_read_with_its_own_signature(self, run_async):
+        mem = _MemNamespace([{"_ts": 3.0, "lanlan": "小春"}])
+        plugin = _Plugin(bus=_Bus(conversations=_ConvNamespace([]), memory=mem))
+        assert run_async(LanlanResolver(plugin).resolve()) == "小春"
+        assert set(mem.last_kwargs) == {"bucket_id", "limit", "timeout"}
+        assert mem.last_kwargs["bucket_id"] == "default"  # 必填：不给就是 TypeError
+
+    def test_wrapped_sdk_records_are_unwrapped_before_reading(self, run_async):
+        # dump_records() 给对象序列时，不 unwrap 就全数丢掉——症状与传错 kwargs 一样静默。
+        class _Rec:
+            def __init__(self, payload):
+                self.payload = payload
+
+        mem = _MemNamespace([])
+        mem._records = [_Rec({"_ts": 5.0, "lanlan": "包装卡"})]
+        plugin = _Plugin(bus=_Bus(conversations=_ConvNamespace([]), memory=mem))
+        assert run_async(LanlanResolver(plugin).resolve()) == "包装卡"
+
     def test_bus_read_failure_degrades_not_raises(self, run_async):
-        plugin = _Plugin(bus=_Bus(conversations=_Namespace(error=RuntimeError("bus down"))))
+        plugin = _Plugin(bus=_Bus(conversations=_ConvNamespace(error=RuntimeError("bus down"))))
         resolver = LanlanResolver(plugin)
         resolver._fetch_blocking = lambda: ""
         assert run_async(resolver.resolve()) == ""

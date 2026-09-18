@@ -1,7 +1,7 @@
 {
   "schema_version": 4,
   "sdk_version": "0.1.0",
-  "source_sha256": "86d47b8760a651612f5bcd710375c1551fec628e739a33e2b0361340b0b5a724",
+  "source_sha256": "fb6807bf712ff784b6843bd11511e10bcd6585f83563590bef53c910cba4669f",
   "source_files": [
     "CHANGELOG.md",
     "DESIGN.md",
@@ -39,7 +39,7 @@
     "ui/preview.ts",
     "ui/shared.ts"
   ],
-  "source_bytes": 37014980,
+  "source_bytes": 37021284,
   "build_env": {
     "os": "win32",
     "python": "3.11",

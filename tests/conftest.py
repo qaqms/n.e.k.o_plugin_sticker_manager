@@ -297,16 +297,56 @@ class FakePush:
         return {"submitted": True}
 
 
-class FakeBusNamespace:
-    """`bus.conversations` 的桩：our_life 的 sampler 同款形状（get 可同步可 await）。"""
+class FakeConversationsNamespace:
+    """`bus.conversations` 的桩：**参数签名与 SDK 逐字对齐**。
+
+    宿主 `SdkConversationsBus.get(*, conversation_id, max_count, since_ts, timeout)`
+    不吃 `bucket_id`。做成严格签名是有原因的：v0.14.1~v0.16.0 期间的宽 `**kwargs` 桩
+    把"传错参数名"这件事遮了整整三轮——真机上每次读都抛 TypeError，被 except 吞成
+    "总线里没有目标"，测试却全绿。桩宽容=盲区。
+    """
 
     def __init__(self, records: list[dict[str, Any]] | None = None, *, error: bool = False):
         self.records = list(records or [])
         self.error = error
         self.calls: list[dict[str, Any]] = []
 
-    async def get(self, **kwargs: Any) -> list[dict[str, Any]]:
-        self.calls.append(dict(kwargs))
+    async def get(
+        self,
+        *,
+        conversation_id: str | None = None,
+        max_count: int = 50,
+        since_ts: float | None = None,
+        timeout: float = 5.0,
+    ) -> list[dict[str, Any]]:
+        self.calls.append(
+            {
+                "conversation_id": conversation_id,
+                "max_count": max_count,
+                "since_ts": since_ts,
+                "timeout": timeout,
+            }
+        )
+        if self.error:
+            raise RuntimeError("bus unavailable")
+        return list(self.records)
+
+
+class FakeMemoryNamespace:
+    """`bus.memory` 的桩：同样严格对齐 `SdkMemoryBus.get(*, bucket_id, limit, timeout)`。
+
+    注意 `bucket_id` 是**必填**的——漏传在真机上是 TypeError，不是默认值。
+    """
+
+    def __init__(self, records: list[dict[str, Any]] | None = None, *, error: bool = False):
+        self.records = list(records or [])
+        self.error = error
+        self.calls: list[dict[str, Any]] = []
+
+    async def get(
+        self, *, bucket_id: str, limit: int = 20, timeout: float = 5.0
+    ) -> list[dict[str, Any]]:
+        self.calls.append({"bucket_id": bucket_id, "limit": limit, "timeout": timeout})
         if self.error:
             raise RuntimeError("bus unavailable")
         return list(self.records)
@@ -328,8 +368,8 @@ class FakeBus:
         error: bool = False,
         memory_error: bool = False,
     ):
-        self.conversations = FakeBusNamespace(records, error=error)
-        self.memory = FakeBusNamespace(
+        self.conversations = FakeConversationsNamespace(records, error=error)
+        self.memory = FakeMemoryNamespace(
             memory_records if memory_records is not None else [], error=memory_error
         )
 

@@ -32,6 +32,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .lanlan import unwrap_record
+
 logger = logging.getLogger("sticker_manager.turns")
 
 # 只翻最近这一小截：找"最新一条用户消息"，不是重建历史。
@@ -61,21 +63,6 @@ class UserTurn:
     is_voice: bool = False
 
 
-def _unwrap_record(record: Any) -> Any:
-    """取回 bus 记录的原始 payload dict。
-
-    SDK 包装层契约不一致（同门实机症状）：宿主 `MemoryList.dump_records()` 给的是
-    对象序列而非 dict，`SdkBusMemoryRecord.from_raw` 对非 Mapping 会包成
-    `{"value": <record>}`，把 `type` 字段吞掉——不解包则用户消息永远被过滤。
-    三层形态（宿主 MemoryRecord.raw / SDK .payload / 裸 dict）都要兼容。
-    """
-    raw = getattr(record, "payload", None) or getattr(record, "raw", record)
-    if isinstance(raw, Mapping) and set(raw) == {"value"}:
-        inner = raw.get("value")
-        raw = getattr(inner, "raw", None) or getattr(inner, "payload", None) or inner
-    return raw
-
-
 def _float_of(value: Any) -> float:
     # 与 core._lenient_float 同纪律：isinstance 先拦字符串（时间戳是数字，不是"123"），
     # 但拦不住巨整数——float(10**400) 抬 OverflowError，坏值当 0 垫底，不许炸掉整拍。
@@ -93,7 +80,7 @@ def user_turn_of(record: Any) -> UserTurn | None:
     时间戳先取 payload 的 `_ts`（宿主写入的原始字段），再退到 SDK 记录的
     `timestamp`——两处都坏时回 0.0，让这条永远垫底而不是插队成"最新一轮"。
     """
-    raw = _unwrap_record(record)
+    raw = unwrap_record(record)
     if not isinstance(raw, Mapping) or str(raw.get("type") or "") != _USER_MESSAGE_TYPE:
         return None
     ts = _float_of(raw.get("_ts"))
@@ -197,10 +184,13 @@ class TurnWatcher:
             self._log_error("bus.memory.get unavailable; turn polling disabled")
             return None
         try:
+            # kwargs 必须逐字对齐 `SdkMemoryBus.get(*, bucket_id, limit, timeout)`：
+            # 多一个参数（实机踩过：顺手抄了 conversations 的 `max_count`）就是每次读
+            # 都 TypeError，被下面的 except 吞成"总线没信号"，症状是注入退回挂钟。
+            # `bucket_id` 还是必填的，不能省。
             result = await asyncio.to_thread(
                 getter,
                 bucket_id=_BUCKET_ID,
-                max_count=_SCAN_RECORDS,
                 limit=_SCAN_RECORDS,
                 timeout=_BUS_TIMEOUT_SEC,
             )
@@ -239,7 +229,7 @@ class TurnWatcher:
         if not records:
             self._emit("info", "turns: bucket empty (no user message within TTL)")
             return
-        raw = _unwrap_record(records[-1])
+        raw = unwrap_record(records[-1])
         latest_type = str(raw.get("type") or "?") if isinstance(raw, Mapping) else "?"
         self._emit(
             "info",

@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.16.1
+
+v0.16.1「轮次源在真机上根本没读到过」——主人装完 0.16.0 发现面板恒显示「每 3 轮 · 已攒 0 轮」，日志一句就定位了：
+
+- **`SdkMemoryBus.get() got an unexpected keyword argument 'max_count'`**（WARNING，5 分钟节流一次）。
+  我抄同门调用形状时顺手把 conversations 桶的 `max_count` 也塞给了 memory 桶。真机上**每一拍都抛**，
+  被 `except` 吞成"总线没信号" → 降级时钟接管 → 提醒照旧每小时一次、计数永远 0。
+  降级路径按设计接住了，所以表面看"插件还在正常工作"——这正是它最难发现的原因。
+- **顺藤摸出一个更老的静默失效**：两个桶的入参**名字没有交集**
+  （`SdkMemoryBus.get(*, bucket_id, limit, timeout)` vs `ConversationClient.get(*, conversation_id, max_count, since_ts, timeout)`，
+  后者**根本不认 `bucket_id`**），而 v0.14.1 的 `LanlanResolver._from_bus` 给两边都塞了
+  `{max_count, limit, bucket_id}` —— 也就是**目标解析的总线那一级从写下起就没通过**，
+  全靠第 3 级宿主 HTTP 兜住。现在两个桶各按各的签名读，且过 `asyncio.to_thread` + 0.8s 超时
+  （SDK 默认 5s 会吃满面板 context 的 5s 预算）。
+- **测试桩是共犯**：`FakeBusNamespace.get(**kwargs)` 什么都收，所以 354 条测试全绿也看不见。
+  换成按 SDK 逐字对齐的两个严格桩（`FakeConversationsNamespace` / `FakeMemoryNamespace`），
+  传错参数名立刻红；`tests/test_lanlan.py` 补三条钉"各按各的签名""包装记录要 unwrap"。
+- **`records_of` 不再丢对象序列**：宿主 `dump_records()` 给的是对象而非 dict 时，原来的
+  `isinstance(Mapping)` 过滤会把它们全数丢掉（症状与传错 kwargs 一模一样）。改成统一过
+  `unwrap_record`（与 `services/turns.py` 同一把尺，那个私有实现已并到 `lanlan.py` 导出）。
+  memory 桶的时间戳键 `_ts` 也补进了 `_timestamp_of`（原来只认 `timestamp`）。
+- **面板"已攒 N 轮"口径修好**：后端补一个标量 `turns_since`（优先最近注入的那张卡，
+  没注过就取攒得最多的）。原来只回 dict，第一次注入之前 `target` 是空串 → 恒显示 0。
+- 三处调用点已拿**真宿主/SDK 的签名**用 `inspect` 对过一遍（参数集合与必填项都核）。
+- 测试 354 → 357。
+
 ## 0.16.0
 
 v0.16.0「注入换轮次驱动」（主人拍板：只做这一层，面板先不加旋钮）——v0.15.0 那轮改错了地方：

@@ -38,6 +38,8 @@ export type AwarenessState = {
   driver?: string;
   inject_mode?: string;
   inject_interval_n?: number;
+  // 攒了几轮（后端挑好的单值：最近注入的那张卡，没注过就取攒得最多的）。
+  turns_since?: number;
   turns_since_inject?: Record<string, number>;
 };
 

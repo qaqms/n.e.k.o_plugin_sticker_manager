@@ -66,14 +66,7 @@ export function AwarenessCard(props: { surface: Surface }) {
     defaultValue: "每 {n} 轮 · 已攒 {since} 轮",
   })
     .replace("{n}", String(awareness.inject_interval_n || 1))
-    .replace(
-      "{since}",
-      String(
-        (awareness.turns_since_inject && awareness.target
-          ? awareness.turns_since_inject[awareness.target]
-          : undefined) ?? 0
-      )
-    );
+    .replace("{since}", String(awareness.turns_since ?? 0));
   const driverKey = `panel.awareness.driver.${String(awareness.driver || "")}`;
 
   return (

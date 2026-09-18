@@ -310,6 +310,17 @@
       否则"每 3 轮一次"会静默退化成"每 4、5 轮一次"。
     总线读失败必须 `warning` 不能 `debug`——debug 不进日志文件，会造出"注入失效但零日志"的盲区。
 
+    **v0.16.1 追加（真机把这条打了一遍）**：`bus.memory` 与 `bus.conversations` 的 `get()`
+    入参**名字没有交集**——memory 是 `(*, bucket_id, limit, timeout)`（`bucket_id` 必填），
+    conversations 是 `(*, conversation_id, max_count, since_ts, timeout)`（**不认 `bucket_id`**）。
+    给两个桶统一塞 `{max_count, limit, bucket_id}` 的后果不是报错而是**两级同时静默失效**：
+    每次都 TypeError → 被 except 吞 → 轮次源退回挂钟、目标解析退回 HTTP，
+    表面上一切正常。同门的调用形状可以抄，**参数表不能抄**——碰宿主 API 就用
+    `inspect.signature` 拿真签名核一遍（本轮三处调用点都这么过）。
+    配套纪律：测试桩的 `get()` **必须逐字对齐 SDK 签名**，宽 `**kwargs` 桩等于把这类 bug
+    直接豁免（354 条全绿挡了一次）。同理 `records_of` 必须过 `unwrap_record`：
+    宿主给对象序列时，`isinstance(Mapping)` 过滤会全数丢掉，症状与传错 kwargs 完全一样。
+
 ## Read Context Plan
 
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）

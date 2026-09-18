@@ -80,14 +80,22 @@ class Awareness:
     def snapshot(self, *, settings: Any, now: float) -> dict[str, Any]:
         """给面板的状态行：驱动源活着没、按什么节奏注、下次最快多久以后。"""
         awareness = settings.awareness
+        turn_snap = self._turns.snapshot()
+        counts = turn_snap["turns_since_inject"]
+        # 单个标量给面板：优先最近注入过的那张卡，没注过（target 为空）就看攒得最多的
+        # 那张——只回 dict 会让第一次注入之前恒显示 0，看着像"轮次源没工作"。
+        turns_since = counts.get(self.last_target) if self.last_target else None
+        if turns_since is None:
+            turns_since = max(counts.values(), default=0)
         return {
             "status": self.last_status,
             "target": self.last_target,
             "last_inject_at": self.last_inject_at or None,
-            "driver": self._turns.snapshot()["source"],
+            "driver": turn_snap["source"],
             "inject_mode": awareness.inject_mode,
             "inject_interval_n": awareness.inject_interval_n,
-            "turns_since_inject": self._turns.snapshot()["turns_since_inject"],
+            "turns_since": turns_since,
+            "turns_since_inject": counts,
             "min_next_wait_sec": min(
                 (
                     self.remaining_for(
