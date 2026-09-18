@@ -32,6 +32,9 @@ recent_dedup_count = 5
 probability = 1.0
 # 同一角色卡一次掷骰的复用窗口（秒）：同一轮里二次定夺不重掷（防 p²）。
 probability_reuse_sec = 60.0
+# 配表情积极度：reserved（矜持）/ natural（自然，默认）/ eager（爱发）。
+# 只管她有多想配图（存在感注入里的许可强度），不动冷却、去重与概率闸。
+eagerness = "natural"
 
 [sticker_manager.storage]
 # 给模型看的目录最多列几条（按最近使用排序）。

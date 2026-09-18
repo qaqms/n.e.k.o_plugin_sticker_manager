@@ -13,7 +13,7 @@ keywords = [
     "meme",
     "gallery",
 ]
-version = "0.13.0"
+version = "0.15.0"
 type = "plugin"
 entry = "plugin.plugins.sticker_manager:StickerManagerPlugin"
 
@@ -75,6 +75,11 @@ recent_dedup_count = 5
 probability = 1.0
 # 同一角色卡一次掷骰的复用窗口（秒）：同一轮里二次定夺不重掷（防 p²）。
 probability_reuse_sec = 60.0
+# 配表情积极度（v0.14.0）：三档 reserved / natural / eager，只管**她有多想配图**
+# （存在感注入里的许可强度）。与上面三把尺各管各的：cooldown 是节奏、
+# recent_dedup_count 是"最近不重复"、probability 是她决定发了之后的放行闸。
+# 默认 natural = 老行为一字不变；想让她更常配图选 eager，想安静选 reserved。
+eagerness = "natural"
 
 [sticker_manager.storage]
 # 给模型看的目录最多列几条（按最近使用排序）。

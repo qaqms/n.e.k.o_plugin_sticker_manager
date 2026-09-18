@@ -52,6 +52,8 @@ from plugin.sdk.plugin import (  # pyright: ignore[reportMissingImports] — 独
 
 from .core import (
     CAPTION_MAX_CHARS,
+    EAGERNESS_DEFAULT,
+    EAGERNESS_LEVELS,
     GROUP_DESC_MAX_CHARS,
     MAX_STICKER_BYTES,
     OFFICIAL_PACK_RELPATH,
@@ -68,11 +70,12 @@ from .core import (
     parse_tags_field,
     resolve_send_target,
     search_stickers,
+    send_tool_description,
     validate_desc,
     validate_desc_optional,
     validate_optional_text,
 )
-from .services import Awareness, Library, Sender, ToolWatch
+from .services import Awareness, LanlanResolver, Library, Sender, ToolWatch
 
 __all__ = ["StickerManagerPlugin"]
 
@@ -81,6 +84,19 @@ _MAX_BASE64_CHARS = 12 * 1024 * 1024
 # 直传单块的 base64 尺寸上限：3 MiB 原始恰好多不出 4 MiB 字符；给 JSON 封套留余量，
 # 超过就是故意的帧溢出尝试，在解码前拦下（同预览方向的 4,784,128 字节尺）。
 _UPLOAD_B64_MAX_CHARS = 4 * 1024 * 1024
+
+# sticker_send 的工具描述正文（v0.15.0）：档位的许可句由 `core/eagerness.py` 追加。
+# 为什么工具描述也要吃档位：注入文案会随对话沉底（实机 6 次注入只换来 2 次发图，
+# 且两次都紧跟在注入后一分钟内），而工具列表每一轮都在场——那才是常驻的杠杆。
+_SEND_TOOL_NAME = "sticker_send"
+_SEND_TOOL_BASE = (
+    "发一张表情包到聊天里。给 id 最准；给 group：从那个套图分组里帮你选一张（组内随机，"
+    "刚发过的会自动排除）；给关键词：筛得只剩一张就直接发，候选不止一张会把清单回给你——"
+    "看一眼再用 id 发第二刀。什么都没给会拒。发不出去会告诉你原因，别连试；"
+    "刚发过的会被'最近不重复'挡下，只有主人点名要再看某张时才带 force=true 绕行。"
+)
+# 装饰器用的是默认档形状：万一重注册不可用，她看到的至少是与默认行为一致的那句。
+_SEND_TOOL_DESCRIPTION_DEFAULT = send_tool_description(_SEND_TOOL_BASE, EAGERNESS_DEFAULT)
 
 
 # 工具层拒发的二段指引（面向模型，同 multi_candidates 的 hint 一样走硬编码中文：
@@ -136,9 +152,12 @@ class StickerManagerPlugin(NekoPluginBase):
         # 或重启后她的两个工具会静默缺席（见 services/tool_watch.py 模块 docstring）。
         # 与总开关无关：注册韧性是宿主层面的在场性，不随业务冻结而应冻结。
         self._tool_watch = ToolWatch(self, logger=self.logger)
+        # 目标解析（v0.14.1）：她在跟谁说话。面板动作派发的 `_ctx` 里只有 run_id，
+        # 普通话轮又不写 conversations 存储——只读 ctx/总线会让面板按钮全报 no_target。
+        self._lanlan = LanlanResolver(self, logger=self.logger)
         # 存在感注入（v0.2.0）：与 tool_watch 共用 60s 拍，内部按角色卡时钟自节流。
         # 与总开关是「与」关系——[sticker_manager].enabled=false 时不注。
-        self._awareness = Awareness(self, self._library, logger=self.logger)
+        self._awareness = Awareness(self, self._library, logger=self.logger, resolver=self._lanlan)
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -160,6 +179,8 @@ class StickerManagerPlugin(NekoPluginBase):
         except Exception:  # noqa: BLE001 - 播种异常只进日志，不拖死启动
             self.logger.warning("sticker_manager official seed leaked", exc_info=True)
             seed_note = "leaked"
+        # v0.15.0：把她配图的意愿写进常驻面（工具描述），不只在会沉底的注入里。
+        self._apply_send_tool_tier(self._settings.send.eagerness)
         self.logger.info(
             "sticker_manager ready: enabled={} stickers={} io_ok={} official_seed={}",
             self._settings.enabled,
@@ -179,6 +200,7 @@ class StickerManagerPlugin(NekoPluginBase):
     @lifecycle(id="config_change")
     async def on_config_change(self, **_):
         await self._reload_settings()
+        self._apply_send_tool_tier(self._settings.send.eagerness)
         return Ok({"status": "config_updated", "enabled": self._settings.enabled})
 
     @lifecycle(id="shutdown")
@@ -938,6 +960,67 @@ class StickerManagerPlugin(NekoPluginBase):
                 removed += 1
         return Ok({"note": "library_batch_removed", "removed": removed, "missing": missing})
 
+    async def _resolve_lanlan(self, kwargs: dict[str, Any]) -> str:
+        """她在跟谁说话：入口 `_ctx` 带了就用，没带走解析链（见 services/lanlan.py）。
+
+        四个调用点（面板试发 / 面板注入 / 面板快照 / 她的工具）都过这里——只读 `_ctx`
+        是 v0.14.0 实机「awareness_no_target」的根因：宿主给面板动作的 `_ctx` 只有 run_id
+        （`ui_query_service.py:1757-1762`），普通话轮又不写 conversations 存储。
+        """
+        return await self._lanlan.resolve(_lanlan_from_kwargs(kwargs))
+
+    def _apply_send_tool_tier(self, tier: str) -> bool:
+        """把「配表情积极度」写进 `sticker_send` 的工具描述（v0.15.0）。
+
+        注入文案会随对话沉底，工具列表却每轮都在场——想让她更想配图，这根才是常驻杠杆。
+        SDK 的 `register_llm_tool` 明写就是给"描述随配置变"用的；名字已在册时重注册会撞
+        EntryConflictError，所以先 unregister 再 register。
+
+        三条底线：注册面缺席（桩/宿主改名）只记日志不动手；描述没变就不折腾 IPC；
+        重注册失败**先把原描述装回去**——宁可她读到旧档位的句子，也不能因为换档没了工具。
+        """
+        unregister = getattr(self, "unregister_llm_tool", None)
+        register = getattr(self, "register_llm_tool", None)
+        lister = getattr(self, "list_llm_tools", None)
+        if not (callable(unregister) and callable(register) and callable(lister)):
+            self.logger.info("sticker_send tier skipped: SDK 注册面不可用")
+            return False
+        try:
+            metas = {str(meta.get("name")): meta for meta in lister()}
+        except Exception:  # noqa: BLE001 - 读不到自己的工具表就什么都不做
+            self.logger.warning("sticker_send tier skipped: list_llm_tools 失败", exc_info=True)
+            return False
+        previous = metas.get(_SEND_TOOL_NAME)
+        if not isinstance(previous, dict):
+            self.logger.warning("sticker_send tier skipped: 工具不在册")
+            return False
+        description = send_tool_description(_SEND_TOOL_BASE, tier)
+        if str(previous.get("description") or "") == description:
+            return True
+        params = {
+            "name": _SEND_TOOL_NAME,
+            "description": description,
+            "parameters": previous.get("parameters"),
+            "handler": self.tool_sticker_send,
+            "timeout": float(previous.get("timeout_seconds") or 20.0),
+            "role": previous.get("role"),
+        }
+        try:
+            unregister(_SEND_TOOL_NAME)
+            return bool(register(**params))
+        except Exception:  # noqa: BLE001 - 换档失败不许带走她的工具
+            self.logger.warning("sticker_send tier re-register failed", exc_info=True)
+            try:
+                register(
+                    **{
+                        **params,
+                        "description": str(previous.get("description") or _SEND_TOOL_DESCRIPTION_DEFAULT),
+                    }
+                )
+            except Exception:  # noqa: BLE001 - 回滚也失败：等下一次工具心跳前她没有这个工具
+                self.logger.error("sticker_send 回滚注册也失败，等工具心跳补挂", exc_info=True)
+            return False
+
     @ui.action(
         id="send",
         label=tr("actions.send.label", default="Send"),
@@ -960,7 +1043,7 @@ class StickerManagerPlugin(NekoPluginBase):
         timeout=30.0,
     )
     async def send_entry(self, id: str = "", **kwargs):  # noqa: A002
-        lanlan = _lanlan_from_kwargs(kwargs)
+        lanlan = await self._resolve_lanlan(kwargs)
         sticker, failure = self._pick_for_send(id, lanlan)
         if failure is not None or sticker is None:
             return failure if failure is not None else Err(SdkError("sticker_not_found"))
@@ -1114,6 +1197,46 @@ class StickerManagerPlugin(NekoPluginBase):
             return Err(SdkError("config_unavailable"))
         await self._reload_settings()
         return Ok({"note": "enabled" if enabled else "disabled", "enabled": self._settings.enabled})
+
+    @ui.action(
+        id="set_eagerness",
+        label=tr("actions.set_eagerness.label", default="Set eagerness"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="set_eagerness",
+        name=tr("entries.set_eagerness.name", default="设置配表情积极度"),
+        description=tr(
+            "entries.set_eagerness.description",
+            default="三档（矜持/自然/爱发）只管她有多想配图；冷却、最近不重复、概率闸一律不动",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "eagerness": {
+                    "type": "string",
+                    "enum": list(EAGERNESS_LEVELS),
+                    "description": tr("fields.eagerness", default="档位"),
+                },
+            },
+            "required": ["eagerness"],
+        },
+        llm_result_fields=["note", "eagerness"],
+    )
+    async def set_eagerness_entry(self, eagerness: str = "", **_):
+        # 只认在册档位：写错值不当"顺手兑成默认档"处理——那是主人的决定被静默改掉。
+        if eagerness not in EAGERNESS_LEVELS:
+            return Err(SdkError("invalid_value"))
+        try:
+            await self.config.set("sticker_manager.send.eagerness", str(eagerness))
+        except Exception:
+            self.logger.warning("failed to persist [sticker_manager.send].eagerness", exc_info=True)
+            return Err(SdkError("config_unavailable"))
+        await self._reload_settings()
+        # 换档当场把工具描述也换掉：那才是每轮都在场的那句话（v0.15.0）。
+        self._apply_send_tool_tier(self._settings.send.eagerness)
+        return Ok({"note": "eagerness_set", "eagerness": self._settings.send.eagerness})
 
     @ui.action(
         id="repair",
@@ -1366,7 +1489,7 @@ class StickerManagerPlugin(NekoPluginBase):
         timeout=15.0,
     )
     async def awareness_now_entry(self, **kwargs):
-        lanlan = _lanlan_from_kwargs(kwargs)
+        lanlan = await self._resolve_lanlan(kwargs)
         result = await self._awareness.inject_now(settings=self._settings, lanlan=lanlan, now=time.time())
         status = str(result.get("status", ""))
         if status in {"disabled", "no_target", "empty_library"}:
@@ -1381,7 +1504,7 @@ class StickerManagerPlugin(NekoPluginBase):
     async def dashboard_context(self, **kwargs: Any) -> dict[str, Any]:
         loaded = self._library.load()
         settings = self._settings
-        lanlan = _lanlan_from_kwargs(kwargs)
+        lanlan = await self._resolve_lanlan(kwargs)
         stickers = self._library.all()
         group_descs = self._library.group_descs()
         group_counts: dict[str, int] = {}
@@ -1399,6 +1522,8 @@ class StickerManagerPlugin(NekoPluginBase):
         ]
         payload: dict[str, Any] = {
             "enabled": settings.enabled,
+            # v0.14.0：面板的「配表情积极度」Select 读这一键，写走 set_eagerness 入口。
+            "eagerness": settings.send.eagerness,
             "lanlan": lanlan,
             "counts": {
                 "total": len(stickers),
@@ -1514,12 +1639,7 @@ class StickerManagerPlugin(NekoPluginBase):
 
     @llm_tool(
         name="sticker_send",
-        description=(
-            "发一张表情包到聊天里。给 id 最准；给 group：从那个套图分组里帮你选一张（组内随机，"
-            "刚发过的会自动排除）；给关键词：筛得只剩一张就直接发，候选不止一张会把清单回给你——"
-            "看一眼再用 id 发第二刀。什么都没给会拒。发不出去会告诉你原因，别连试；"
-            "刚发过的会被'最近不重复'挡下，只有主人点名要再看某张时才带 force=true 绕行。"
-        ),
+        description=_SEND_TOOL_DESCRIPTION_DEFAULT,
         parameters={
             "type": "object",
             "properties": {
@@ -1543,7 +1663,7 @@ class StickerManagerPlugin(NekoPluginBase):
     ) -> dict[str, Any]:
         if not self._settings.enabled:
             return {"ok": False, "reason": "not_enabled"}
-        lanlan = _lanlan_from_kwargs(kwargs)
+        lanlan = await self._resolve_lanlan(kwargs)
         self._library.load()
         settings = self._settings
         bypass = bool(force)

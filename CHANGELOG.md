@@ -1,5 +1,88 @@
 # Changelog
 
+## 0.15.0
+
+v0.15.0「积极度进工具描述」（主人拍板：只做这一件，闸门类的一律不动）——实机日志把病灶指清楚了：
+
+- **证据**（`%LOCALAPPDATA%/N.E.K.O/logs/plugin/N.E.K.O_Plugin_sticker_manager_20260918.log`）：
+  装机 0.14.0、`set_eagerness` 写入成功（注入字数 1431→1445）、`awareness injected` 6 次、
+  `sticker sent` 2 次且**两次都紧跟在注入后 30~60 秒内**、`cooldown/probability/not_enabled` 拒绝 **0 次**。
+  → 不是被闸拦的，是**提醒沉底了**：注入默认 3600s/每角色卡一次，聊十几轮后那句话早就不在注意力里。
+- **常驻面才是杠杆**：`sticker_send` 的**工具描述**每轮都随工具列表喂给模型。
+  新增 `Library`-无关的 `_apply_send_tool_tier()`：先 `unregister_llm_tool` 再
+  `register_llm_tool`（名字已在册时重注册会撞 EntryConflictError），把档位许可句拼在静态正文后面；
+  三个调用点接上：`on_startup`、`on_config_change`（主人手改 toml 也算）、`set_eagerness`（面板切档当场生效）。
+- **档位语义收进新模块 `core/eagerness.py`**：一个档位两个受众——`injection_guidance(tier)`（注入意愿段，
+  可长）与 `send_tool_description(base, tier)`（工具描述追加句，必须短）。两处许可强度同向、不许各抄一份。
+- **拆掉 eager 的自授退路**：v0.14.0 那句结尾写着"…或干脆不发"，等于给她一个合法的"那算了"；
+  现在换成"拿不准用 group 让组内帮你选一张"。有门钉着：三档文案里都不许再出现"干脆不发"。
+- **三条底线**：SDK 注册面缺席只记日志不动手；描述没变不折腾 IPC；**重注册失败先把旧描述装回去**
+  （宁可她读到旧档位的句子，也不能因为换档没了工具），连回滚都失败也只是日志一条、交给 5 分钟工具心跳。
+- **测试隔离补一处真漏洞**：解析链的 HTTP 兜底会打 `127.0.0.1:48911`——宿主与测试同机并存时，
+  "没有目标"的用例竟然问到运行中的宿主拿到 `YUI` 而**误判通过**。新增 `lanlan.HTTP_ENABLED`
+  与 conftest 的 autouse 夹具默认关掉，要验这一级的用例自己开并打桩。
+- 入口面 ±0、配置 ±0、i18n ±0、盘形 ±0；测试 **297 → 306 passed**
+  （新 `tests/test_eagerness_tool.py` 八条 + `test_eagerness.py` 三条挪过去 + 隔离夹具）。
+
+## 0.14.1
+
+v0.14.1「注入目标解析链」（实机回账修 bug：主人切完档位点「现在注一条」报 `awareness_no_target`）：
+
+- **根因两条，都钉死在代码事实上**：① 宿主给面板动作派发的 `_ctx` 里**只有 `run_id`**
+  （`plugin/server/application/plugins/ui_query_service.py:1757-1762`），所以面板上的
+  「现在注一条」与「发到聊天」拿不到角色卡；② 旧实现退而读 `bus.conversations`，而
+  **普通聊天话轮不写 conversations 存储**（只有主动离线轮次 publish，
+  `main_logic/omni_offline_client/_lifecycle.py:94`），且只认 `lanlan_name` 这个键
+  ——memory 桶里的角色键叫 `lanlan`。两条叠起来 = 面板按钮必然 no_target。
+- **新增 `services/lanlan.py`**：四级解析链 `入口 _ctx` → `总线记录`（conversations 的
+  `lanlan_name` + memory 的 `lanlan`，取时间戳最新）→ 宿主 `GET /api/characters/current_catgirl`
+  → `ctx._current_lanlan` 粘滞值。整链 best-effort，任何一级炸只丢那一级。
+- **两条刻意的不对称**：总线结果**每拍现读不缓存**（目标随对话漂，缓存它等于把她钉在上一张卡上，
+  有门钉着）；HTTP 结果 15s TTL 且**失败也缓存**（宿主不可达时不该让每次面板刷新白等超时），
+  超时 0.6s——面板 context 总预算 5s，兜底必须比它短。
+- 四个调用点统一走 `_resolve_lanlan`：面板试发 `send`、面板注入 `awareness_now`、
+  dashboard 快照的 `lanlan`（现在能显示"她在跟谁说话"了）、她的工具 `sticker_send`。
+- `Awareness` 新增可选 `resolver=` 注入（不传则自建，老构造形状兼容）；
+  `latest_lanlan`/`lanlan_of`/记录规范化从 `services/awareness.py` 搬进新模块（awareness 只管节奏与投递）。
+- 测试 **286 → 297 passed**（新 `tests/test_lanlan.py` 十一条：链序、目标漂移、HTTP 缓存与失败缓存、
+  总线读失败降级、纯函数三形状）。入口面 ±0、配置 ±0、i18n ±0、盘形 ±0。
+
+## 0.14.0
+
+v0.14.0「配表情积极度」（主人拍板：走档位而不是裸概率、控件用 Select）——回答的是"怎么让她真的开始配图"，不是"怎么拦她"：
+
+- **调研结论先记账**：宿主今天**没有**"她刚回复完"这个插件可见时刻——普通聊天话轮只走 WS 帧 +
+  `sync_message_queue`（`main_logic/core/turn.py:1449/1544/1568`），`lifecycle_bus` 明写无 main→plugin 通道；
+  `@message` 注册了但没有派发点（`plugin/core/communication.py:496-506` 路由表不含它），
+  `@hook/before_entry/after_entry/around_entry/replace_entry` 只挂元数据、`hook_executor` 是
+  `NotImplementedError`。所以"跟着她的回复自动附带一张"在插件侧做不成确定事件——
+  **不做替发，改她的意愿**。（图本来就是独立气泡：`services/sender.py:234` 走
+  `visibility=["chat"]` 的 push，不是并进她那条。）
+- **新配置一键**：`[sticker_manager.send].eagerness = "natural"`，三档 `reserved / natural / eager`。
+  三处同源同步（dataclass / plugin.toml / config.example.toml），`SendSettings` 字段数 6 → 7。
+  读入尺 `_as_choice`：非字符串/不在册/空白一律回默认档——配置写错不许让她的行为变野。
+- **档位只管一件事**：存在感注入里的**意愿段**文案（`core/awareness.py` 的 `_WILL`）。
+  默认 `natural` 的意愿段与 v0.13.0 那句**一字不差**（零静默行为变更，有门钉着）；
+  `reserved` 加"多数时候纯文字就够了"；`eager` 换成"情绪对得上就配一张，别在心里过三遍才发"。
+  **发送层的四把尺一律不吃档位**：`cooldown_sec` / `recent_dedup_count` / `probability` /
+  `probability_reuse_sec` 各自独立——节奏段文案（"被拒了就正常用文字回，别重试"）三档共用，
+  免得调档把闸门的说明也一起漂了（陷阱 26）。
+- **入口面 +1**：`set_eagerness`（`@ui.action` + `@plugin_entry`，`input_schema` 带 `enum`）——
+  与 `switch` 同模式：写配置走 `config.set`，面板**不声明 `config:write`**；
+  非法值直接 `invalid_value` 拒（不许顺手兑成默认档，那是主人的决定被静默改掉），
+  盘写不进去如实回 `config_unavailable`。
+- **面板**：存在感卡里加 `Field` 包 `Select` 三档（选项文案是人话："矜持：没有正合适的就不发" /
+  "自然：贴切就发（默认）" / "爱发：情绪对得上就配一张"），help 明写"冷却、最近不重复、
+  概率闸不吃这一档"；当前档由 dashboard 快照新键 `eagerness` 回填（写完 `refresh()` 取服务端真值，
+  不拿本地乐观值）。
+- i18n +10 键（zh-CN/en 同键集，尾部纯插入）；测试 **275 → 286 passed**
+  （新 `tests/test_eagerness.py` 十一条：读入收敛三门 + 注入文案四门 + 入口/快照四门）。
+- **测试桩修一处真错**：`FakeConfig.set` 过去把点分路径写成平键（`sticker_manager.enabled` 只有一层
+  所以看不出来），两层路径 `sticker_manager.send.eagerness` 就读不回来——改成与真宿主
+  `_set_by_path` 同形的逐层嵌套。
+- 实机验收追加一项：面板切到「爱发」→ 立刻点一次「现在注一条（调试）」→ 随便聊两句，
+  她配图的频率应当肉眼可感地上去；切回「矜持」再点一次注入，应当明显收住。
+
 ## 0.13.0
 
 v0.13.0「官方包打标 + 标签下发尺」（J-3，主人拍板：走内容轮、粒度"改开"、拿不准的按大致意思即可）——官方区从"190 个文件名"变成她看得懂的收藏：

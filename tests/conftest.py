@@ -247,11 +247,24 @@ class FakeConfig:
         if self.set_error is not None:
             raise self.set_error
         self.writes.append((path, value))
-        section = path.split(".", 1)[0]
-        key = path.split(".", 1)[-1]
+        # 与真宿主 PluginConfig.set 同形：点分路径**逐层嵌套**（`_set_by_path`），
+        # 不是把整串当平键塞进第一段——`sticker_manager.enabled` 只有一层所以看不出来，
+        # 但 `sticker_manager.send.eagerness` 这类两层路径必须嵌，否则 from_config 读不到。
+        parts = path.split(".")
+        section, keys = parts[0], parts[1:]
         target = self.data.setdefault(section, {})
-        if isinstance(target, dict):
-            target[key] = value
+        if not isinstance(target, dict):
+            target = self.data[section] = {}
+        for key in keys[:-1]:
+            nxt = target.get(key)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                target[key] = nxt
+            target = nxt
+        if keys:
+            target[keys[-1]] = value
+        else:
+            self.data[section] = value
 
 
 class FakeImages:
@@ -411,3 +424,23 @@ def run_async() -> Any:
         return asyncio.run(coro)
 
     return _run
+
+
+@pytest.fixture(autouse=True)
+def no_host_http() -> Any:
+    """全局关掉注入目标解析的宿主 HTTP 级（v0.15.0 实机踩的隔离坑）。
+
+    宿主与测试可以同机并存：不关掉时，"没有目标"的用例会真问到运行中的宿主、
+    拿到角色名而**误判通过**。要验这一级的用例自己把它打开并打桩 `_fetch_blocking`
+    （见 tests/test_lanlan.py 的 `enable_http`）。
+    """
+    module = sys.modules.get("sticker_manager.services.lanlan")
+    if module is None:
+        yield
+        return
+    previous = module.HTTP_ENABLED
+    module.HTTP_ENABLED = False
+    try:
+        yield
+    finally:
+        module.HTTP_ENABLED = previous

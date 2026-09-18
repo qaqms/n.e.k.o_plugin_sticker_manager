@@ -308,5 +308,14 @@
   "panel.error.zone_required": "Zone name is missing - write one first.",
   "panel.error.zone_exists": "A zone with that name already exists (names are unique).",
   "panel.error.zone_not_found": "That zone is gone - just deleted? Refresh to see.",
-  "panel.error.zone_last": "Only one zone left, it cannot be deleted - she would have no stickers."
+  "panel.error.zone_last": "Only one zone left, it cannot be deleted - she would have no stickers.",
+  "entries.set_eagerness.name": "Set sticker eagerness",
+  "entries.set_eagerness.description": "Three tiers (reserved/natural/eager) only change how willing she is to attach a sticker; cooldown, recent-dedup and the probability gate stay untouched",
+  "actions.set_eagerness.label": "Set eagerness",
+  "fields.eagerness": "Tier (reserved/natural/eager)",
+  "panel.awareness.eagerness": "Sticker eagerness",
+  "panel.awareness.eagerness.help": "Only changes how keen she is to attach a sticker. Cooldown, recent-dedup and the probability gate ignore this tier - they live in the settings below.",
+  "panel.eagerness.reserved": "Reserved: only when it fits perfectly",
+  "panel.eagerness.natural": "Natural: send when it fits (default)",
+  "panel.eagerness.eager": "Eager: attach one whenever the mood matches"
 }

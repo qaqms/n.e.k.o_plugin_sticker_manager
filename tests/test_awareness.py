@@ -30,7 +30,7 @@ from sticker_manager.core.configuration import (  # pyright: ignore[reportMissin
     StickerManagerSettings,
     StorageSettings,
 )
-from sticker_manager.services.awareness import latest_lanlan  # pyright: ignore[reportMissingImports] — 同上
+from sticker_manager.services.lanlan import latest_lanlan  # pyright: ignore[reportMissingImports] — 同上
 
 
 def _st(sid: str, *, desc: str = "", use: int = 0, last: float = 0.0, disabled: bool = False) -> Sticker:

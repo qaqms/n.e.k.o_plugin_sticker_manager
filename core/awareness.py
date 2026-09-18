@@ -17,18 +17,15 @@
 from __future__ import annotations
 
 from .catalog import Sticker, format_catalog_for_model, format_group_overview
+from .eagerness import injection_guidance
 
 # 注入文本的骨架。刻意不提"系统提示"这类元话语，也不下命令——
 # 她是自愿用表情的主人，不是被执行分支的脚本；给的是"有什么 + 在哪查 + 怎么发"。
 # 轮 C 起中段多一条**使用规则**（学习外部系统 提示词里"区分安慰与自述、不贴切就不发"
 # 与数量软提示）：硬闸在发送层的冷却，软提示进这段文案——两层分离，各管各的。
 _HEADER = "【表情包】你的收藏间里有 {count} 张表情包。"
-_GUIDANCE = (
-    "发之前先想清楚这张图在回复什么：分清你是在安慰对方还是在说自己，"
-    "拿不准、不贴切就不发；一条回复配一张就够，宁缺毋滥。"
-    "刚发过的会被'最近不重复'挡下，换一张就好；也有轮次会被节奏闸判定'这轮不配图'——"
-    "被拒了就正常用文字回，别重试、也别换一张接着试。"
-)
+# 意愿段与节奏段都在 `core/eagerness.py`（v0.15.0 收口）：那里同时管"注入怎么说"和
+# "工具描述怎么说"，两处许可强度必须同向，所以不许在这边再抄一份。
 _RECENT = "最近常用的：\n{lines}"
 _GROUPS = "你的套图（挑组再挑图，也可直接用 sticker_send 带 group 让组内帮你选）：\n{overview}"
 _FOOTER = (
@@ -48,16 +45,23 @@ def pick_recent(stickers: list[Sticker], limit: int) -> list[Sticker]:
     return ranked[: max(0, limit)]
 
 
-def build_awareness_text(stickers: list[Sticker], *, max_lines: int, groups: dict[str, str] | None = None) -> str:
+def build_awareness_text(
+    stickers: list[Sticker],
+    *,
+    max_lines: int,
+    groups: dict[str, str] | None = None,
+    eagerness: str = "natural",
+) -> str:
     """拼一条注入文本。空库回空串——调用方拿空串当"这拍不该注"。
 
     轮 F：分组概览插在指南之后、常货之前——她的"有什么"心智先从逐图清单升一层到
     分类目录（对齐外部系统每轮喂分类行的体验，只是我们靠低频静默注入）。
+    v0.14.0：意愿段按「配表情积极度」选档，不在册的档位退到 natural（与配置读入同一条尺）。
     """
     total = sum(1 for s in stickers if not s.disabled)
     if total <= 0:
         return ""
-    parts = [_HEADER.format(count=total), _GUIDANCE]
+    parts = [_HEADER.format(count=total), injection_guidance(eagerness)]
     overview = format_group_overview(stickers, groups or {})
     if overview:
         parts.append(_GROUPS.format(overview=overview))

@@ -43,11 +43,14 @@ from .catalog import (
     validate_optional_text,
 )
 from .configuration import (
+    EAGERNESS_DEFAULT,
+    EAGERNESS_LEVELS,
     AwarenessSettings,
     SendSettings,
     StickerManagerSettings,
     StorageSettings,
 )
+from .eagerness import injection_guidance, normalize_tier, send_tool_description
 from .labeling import LabelRefresh, index_by_digest, plan_label_refresh
 from .pack import (
     PACK_DIR_PREFIX,
@@ -82,6 +85,8 @@ __all__ = [
     "VISIBLE_TEXT_MAX_CHARS",
     "ZONE_MAX_CHARS",
     "DEFAULT_ZONE_NAME",
+    "EAGERNESS_DEFAULT",
+    "EAGERNESS_LEVELS",
     "OFFICIAL_PACK_RELPATH",
     "OFFICIAL_ZONE_NAME",
     "AwarenessSettings",
@@ -98,10 +103,12 @@ __all__ = [
     "detect_image_format",
     "format_catalog_for_model",
     "format_group_overview",
+    "injection_guidance",
     "index_by_digest",
     "new_sticker_id",
     "new_zone_id",
     "normalize_group",
+    "normalize_tier",
     "normalize_zone_name",
     "normalize_optional_text",
     "normalize_tags",
@@ -114,6 +121,7 @@ __all__ = [
     "plan_label_refresh",
     "resolve_send_target",
     "safe_member_name",
+    "send_tool_description",
     "search_stickers",
     "search_with_scores",
     "sticker_to_manifest_entry",

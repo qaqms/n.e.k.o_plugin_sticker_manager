@@ -71,6 +71,8 @@ export type Section = {
 
 export type State = {
   enabled?: boolean;
+  // v0.14.0：配表情积极度当前档（面板 Select 的回填源）。
+  eagerness?: string;
   lanlan?: string;
   counts?: {
     total?: number;

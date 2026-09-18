@@ -15,6 +15,22 @@ from typing import Any
 # 归一后上限是 8 MiB，表情包比它更严是合理的（表情包不该是相册）。
 MAX_UPLOAD_BYTES = 8 * 1024 * 1024
 
+# 配表情积极度（v0.14.0，主人拍板"档位而不是裸概率"）：三档，改的是**她有多想发**
+# （存在感注入里的许可强度），不改发送层的任何闸。
+EAGERNESS_LEVELS: tuple[str, ...] = ("reserved", "natural", "eager")
+EAGERNESS_DEFAULT = "natural"
+
+
+def _as_choice(value: Any, allowed: tuple[str, ...], default: str) -> str:
+    """枚举读入：非字符串/不在册一律回默认。
+
+    配置里写错档位不该让她的行为变野（也不该崩 startup）——这与 `_as_int`/`_as_number`
+    同一纪律：读入层负责把垃圾收敛成合法值，下游永远只看到在册值。
+    """
+    if isinstance(value, str) and value.strip() in allowed:
+        return value.strip()
+    return default
+
 
 def _as_int(value: Any, default: int) -> int:
     """整数读入的总 sanitiser：类型不对/非有限值/巨整数一律回默认。
@@ -66,6 +82,10 @@ class SendSettings:
     # 同一角色卡一次掷骰的复用窗口（秒）：multi_candidates→拿 id 二次定夺是同一次
     # 意愿的延续，不许掷第二次骰（外部系统 p² 教训——判定环节只掷一次并缓存复用）。
     probability_reuse_sec: float = 60.0
+    # 配表情积极度（v0.14.0）：只管**她想不想发**（存在感注入里的许可强度），
+    # 与 probability（她决定发了之后放不放行）、cooldown（节奏）、去重是四把独立的尺——
+    # 别拿档位去动闸门，也别拿闸门当档位用。默认 natural = 老行为一字不变。
+    eagerness: str = EAGERNESS_DEFAULT
 
 
 @dataclass(frozen=True)
@@ -159,6 +179,9 @@ class StickerManagerSettings:
                     ),
                     5.0,
                     3600.0,
+                ),
+                eagerness=_as_choice(
+                    send_raw.get("eagerness"), EAGERNESS_LEVELS, send_default.eagerness
                 ),
             ),
             storage=StorageSettings(

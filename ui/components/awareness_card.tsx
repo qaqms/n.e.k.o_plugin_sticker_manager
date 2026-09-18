@@ -5,7 +5,17 @@
 // 联动纪律（陷阱 16）：注入必须随总开关冻结；心跳相反不冻结。这里只是读数与按钮，
 // 尺在 Python 侧（services/awareness.py）。
 
-import { Button, Card, Inline, KeyValue, Stack, Text, useState } from "@neko/plugin-ui";
+import {
+  Button,
+  Card,
+  Field,
+  Inline,
+  KeyValue,
+  Select,
+  Stack,
+  Text,
+  useState,
+} from "@neko/plugin-ui";
 import { callAction, extractCode } from "../shared";
 import type { Surface } from "../shared";
 
@@ -35,6 +45,20 @@ export function AwarenessCard(props: { surface: Surface }) {
     }
   };
 
+  const setEagerness = async (next: string) => {
+    setAwarenessNote("");
+    try {
+      await callAction(surface, "set_eagerness", { eagerness: next });
+      // 档位是配置：写成功后 refresh 让 Select 回填服务端真值（不拿本地乐观值）。
+      await surface.api.refresh();
+    } catch (error) {
+      const raw =
+        error instanceof Error ? error.message : String(error ?? "failed");
+      const code = extractCode(raw);
+      setAwarenessNote(t(`panel.error.${code}`, { defaultValue: code }));
+    }
+  };
+
   return (
     <Card title={t("panel.awareness.title", { defaultValue: "存在感注入" })}>
       <Stack gap={8}>
@@ -44,6 +68,42 @@ export function AwarenessCard(props: { surface: Surface }) {
               "低频把『你有一间表情收藏间 + 最近常用的几张』静默注进她的上下文：你看不到、她不会因此开口。",
           })}
         </Text>
+        <Field
+          label={t("panel.awareness.eagerness", {
+            defaultValue: "配表情积极度",
+          })}
+          help={t("panel.awareness.eagerness.help", {
+            defaultValue:
+              "只管她有多想配图。冷却、最近不重复、概率闸不吃这一档——那些在下面的配置里。",
+          })}
+        >
+          <Select
+            value={String(state.eagerness || "natural")}
+            options={[
+              {
+                value: "reserved",
+                label: t("panel.eagerness.reserved", {
+                  defaultValue: "矜持：没有正合适的就不发",
+                }),
+              },
+              {
+                value: "natural",
+                label: t("panel.eagerness.natural", {
+                  defaultValue: "自然：贴切就发（默认）",
+                }),
+              },
+              {
+                value: "eager",
+                label: t("panel.eagerness.eager", {
+                  defaultValue: "爱发：情绪对得上就配一张",
+                }),
+              },
+            ]}
+            onChange={(next: any) => {
+              setEagerness(String(next || "natural"));
+            }}
+          />
+        </Field>
         <Inline gap={16} align="center" wrap>
           <KeyValue
             items={[

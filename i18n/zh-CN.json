@@ -308,5 +308,14 @@
   "panel.error.zone_required": "区名字没给——先把名字写上。",
   "panel.error.zone_exists": "已经有同名区了（区名全库唯一）。",
   "panel.error.zone_not_found": "这个区不在了——刚被拆掉？刷新看看。",
-  "panel.error.zone_last": "只剩这一个区，不能拆——拆了她就没表情可发了。"
+  "panel.error.zone_last": "只剩这一个区，不能拆——拆了她就没表情可发了。",
+  "entries.set_eagerness.name": "设置配表情积极度",
+  "entries.set_eagerness.description": "三档（矜持/自然/爱发）只管她有多想配图；冷却、最近不重复、概率闸一律不动",
+  "actions.set_eagerness.label": "Set eagerness",
+  "fields.eagerness": "档位（reserved/natural/eager）",
+  "panel.awareness.eagerness": "配表情积极度",
+  "panel.awareness.eagerness.help": "只管她有多想配图。冷却、最近不重复、概率闸不吃这一档——那些在下面的配置里。",
+  "panel.eagerness.reserved": "矜持：没有正合适的就不发",
+  "panel.eagerness.natural": "自然：贴切就发（默认）",
+  "panel.eagerness.eager": "爱发：情绪对得上就配一张"
 }
