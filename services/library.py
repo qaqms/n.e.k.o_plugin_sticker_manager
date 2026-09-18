@@ -34,6 +34,7 @@ from ..core.catalog import (
     normalize_group,
     normalize_zone_name,
 )
+from ..core.labeling import plan_label_refresh
 from ..core.pack import (
     PACK_DIR_PREFIX,
     PACK_MANIFEST_FILENAME,
@@ -41,12 +42,16 @@ from ..core.pack import (
     build_manifest,
     parse_manifest,
     parse_manifest_groups,
+    parse_pack_version,
     safe_member_name,
 )
 
 # v2（v0.11.0 J-1）：顶层新增 zones / active_zone / group_zone 三键（区→分类→图）。
 # 读侧宽松兼容 v1（无这三键 = 旧平铺库，load() 里一次性迁进默认区）；写侧永远按 v2 写。
-CATALOG_VERSION = 2
+# v3（v0.13.0 J-3）：顶层新增 `official_pack_version`（已应用的官方包内容版本），
+# 条目新增 `owner_edited`（主人改过文本的位）。两键都是**纯插入**：缺席即 0/False，
+# 旧库读得动、盘形不变；写侧从此按 v3 写。
+CATALOG_VERSION = 3
 CATALOG_FILENAME = "catalog.json"
 USAGE_FILENAME = "usage.json"
 STICKER_DIRNAME = "stickers"
@@ -98,6 +103,8 @@ class Library:
         self._active_zone: str = ""
         # 官方播种台账（J-2 P2A，拍板 P3：只播一次 + 恢复按钮）：catalog 顶层 `official_seeded`。
         self._official_seeded = False
+        # 已应用的官方包内容版本（v0.13.0 J-3）：0 = 从没刷过标签。
+        self._official_pack_version = 0
         self._loaded = False
         self._io_dirty = False
         # zip 直传会话（仅本进程，sid -> {h, path, seq, size, name, at}）：
@@ -157,6 +164,7 @@ class Library:
         self._group_zone = {}
         self._active_zone = ""
         self._official_seeded = False
+        self._official_pack_version = 0
         legacy_shape = True
         try:
             raw = json.loads(self.catalog_path.read_text(encoding="utf-8"))
@@ -219,6 +227,11 @@ class Library:
         # 播种台账宽松读（J-2）：只认布尔真（非布尔一律当未播——宁可下拍重试，不可假装封过）。
         seeded_raw = raw.get("official_seeded") if isinstance(raw, dict) else None
         self._official_seeded = isinstance(seeded_raw, bool) and seeded_raw
+        # 已应用的官方包版本宽松读（J-3）：只认正整数，其余（缺键/坏值/负数）一律当 0 = 没刷过。
+        version_raw = raw.get("official_pack_version") if isinstance(raw, dict) else None
+        self._official_pack_version = (
+            version_raw if isinstance(version_raw, int) and not isinstance(version_raw, bool) and version_raw > 0 else 0
+        )
         self._ensure_zone_invariant(migrated=legacy_shape)
         self._loaded = True
         self._io_dirty = False
@@ -272,6 +285,9 @@ class Library:
             # J-2：播种台账只在真时写键（纯插入，旧库/未播种库的盘形一字不变）。
             if self._official_seeded:
                 payload["official_seeded"] = True
+            # J-3：已应用的官方包版本只在非零时写键，同一条纯插入纪律。
+            if self._official_pack_version:
+                payload["official_pack_version"] = self._official_pack_version
             tmp = self.catalog_path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self.catalog_path)
@@ -455,11 +471,12 @@ class Library:
         return ""
 
     def seed_official(self, pack_path: Path, *, force: bool = False) -> dict[str, Any]:
-        """把内置官方包收进官方区；回 {status, zone?, imported/duplicates/rejected/failed}。
+        """把内置官方包收进官方区；回 {status, zone?, imported/duplicates/rejected/failed, refresh}。
 
         尺（拍板 P2A/P3，全部可重放）：
-        - 只播一次：`official_seeded` 在册且非 force → status=already，不碰包；
-          force（恢复按钮）跳台账但照样吃指纹查重，不会重入重图；
+        - 只播一次：`official_seeded` 在册且非 force → status=already，**不再进图**；
+          但仍然走一次标签刷新（J-3）——包更新的是"这张图是什么"，不是"图进没进来"；
+        - force（恢复按钮）跳台账但照样吃指纹查重，不会重入重图；
         - 同名收编：有同名区就直接收编它（补打 builtin 位）而不是造重名区；
         - 不抢台：播种前全库有图 → 激活区不动；只有空库（新装态）才默认激活官方区；
         - 台账只在包干净（rejected+failed=0）时盖：半截/坏包下拍重试，幂等不重入；
@@ -469,7 +486,7 @@ class Library:
         if not loaded.ok:
             return {"status": "io", "error": loaded.code or ERR_IO}
         if self._official_seeded and not force:
-            return {"status": "already"}
+            return {"status": "already", "refresh": self.refresh_official_labels(pack_path)}
         zone_id = self.official_zone()
         created = False
         if zone_id:
@@ -497,7 +514,77 @@ class Library:
                 status, zone_id, summary["imported"], summary["duplicates"], summary["rejected"], summary["failed"]
             )
         )
-        return {"status": status, "zone": zone_id, "created": created, **summary}
+        return {
+            "status": status,
+            "zone": zone_id,
+            "created": created,
+            "refresh": self.refresh_official_labels(pack_path),
+            **summary,
+        }
+
+    def official_pack_version(self) -> int:
+        """已应用的官方包内容版本（catalog 顶层 `official_pack_version`）；0 = 从没刷过。"""
+        return self._official_pack_version
+
+    def refresh_official_labels(self, pack_path: Path) -> dict[str, Any]:
+        """官方包标签下发尺（v0.13.0 J-3）：包比库新时，按内容指纹把**官方区条目**的文本刷成包里的。
+
+        补的是 J-2 留的洞：`import_pack` 对同指纹只计 duplicates 就跳过，`official_seeded`
+        又是一次性台账——所以重打的官方包带着新分类/新梗义进来时，老装机一张也不会变。
+        判断全在 `core/labeling.py`（纯函数，逐条钉死），这里只管 IO。
+
+        四条不动主人的东西：只碰 builtin 位的条目（陷阱 24）、`owner_edited` 整条跳过、
+        分类说明只补缺、只写 catalog.json（图片文件/id/启停/使用台账一律不碰）。
+        status：no_pack（没有官方区）/ unreadable（包读不出）/ no_version（包不带版本尺，
+        主人自打的包与 export_pack 产物都算）/ current（不比库里新，什么都不做）/
+        refreshed / io（写盘失败：版本不盖章，下次启动自然重试）。
+        """
+        zone_id = self.official_zone()
+        if not zone_id:
+            return {"status": "no_pack"}
+        try:
+            with zipfile.ZipFile(pack_path) as pack:
+                raw = json.loads(pack.read(PACK_MANIFEST_FILENAME).decode("utf-8"))
+        except Exception:
+            return {"status": "unreadable"}
+        version = parse_pack_version(raw)
+        if version <= 0:
+            return {"status": "no_version"}
+        if version <= self._official_pack_version:
+            return {"status": "current", "version": version}
+        plan = plan_label_refresh(
+            [s for s in self._stickers.values() if self.zone_of_sticker(s) == zone_id],
+            parse_manifest(raw),
+            self._groups,
+            parse_manifest_groups(raw),
+        )
+        for sticker_id, patch in plan.patches:
+            self._stickers[sticker_id] = replace(self._stickers[sticker_id], **patch)
+        for group_name in plan.new_groups:
+            # 包里的新分类登记进官方区（陷阱 23：分类不跨区搬家，已有归属的不改）。
+            self._group_zone.setdefault(group_name, zone_id)
+        self._groups.update(plan.group_descs)
+        previous = self._official_pack_version
+        self._official_pack_version = version
+        saved = self.save()
+        if not saved.ok:
+            self._official_pack_version = previous
+            for group_name in plan.new_groups:
+                self._group_zone.pop(group_name, None)
+            return {"status": "io", "error": saved.code}
+        self._log(
+            "official labels refreshed: version={} refreshed={} skipped_edited={} unmatched={} groups={}".format(
+                version, plan.refreshed, plan.skipped_edited, plan.unmatched, len(plan.group_descs)
+            )
+        )
+        return {
+            "status": "refreshed",
+            "version": version,
+            "refreshed": plan.refreshed,
+            "skipped_edited": plan.skipped_edited,
+            "unmatched": plan.unmatched,
+            "groups": len(plan.group_descs),
+        }
 
     # ------------------------------------------------------------------
     # 分组说明（v0.7.0 轮 F）
@@ -751,6 +838,10 @@ class Library:
             patch["caption"] = caption
         if visible_text is not None:
             patch["visible_text"] = visible_text
+        touched = {"desc", "tags", "group", "caption", "visible_text"} & set(patch)
+        if touched:
+            # J-3：记下主人亲手改过哪些字段（只改启停不算）——官方包刷标签时按字段让位。
+            patch["owner_edited"] = sorted(set(sticker.owner_edited) | touched)
         if "group" in patch and patch["group"]:
             # J-1：换分类 = 换住户；图跟着分类搬区（隐式新名字就地登记到目标区）。
             mapped = self._group_zone.get(patch["group"]) or sticker.zone or self._active_zone

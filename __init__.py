@@ -1414,10 +1414,12 @@ class StickerManagerPlugin(NekoPluginBase):
             "active_zone": self._library.active_zone(),
             # J-2：官方区的脸面——pack=随包官方装在不在（恢复按钮的前提），zone=它在哪个区
             # （空串=不在册，面板 tab 尾出「恢复官方收藏」），seeded=播种台账。
+            # J-3：pack_version=已应用的官方包内容版本（0=从没刷过标签）——排障用，面板不读。
             "official": {
                 "pack": self._official_pack_path().is_file(),
                 "zone": self._library.official_zone(),
                 "seeded": self._library.official_seeded(),
+                "pack_version": self._library.official_pack_version(),
             },
             "usage": self._library.read_usage(limit=12),
             "inbox": {

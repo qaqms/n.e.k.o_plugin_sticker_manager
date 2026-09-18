@@ -159,7 +159,7 @@
   "panel.usage.source": "Source",
   "plugin.name": "Sticker Manager",
   "plugin.short_description": "Collect and send stickers: an official pack ships inside, you manage the library in the panel, she picks one and sends it herself",
-  "plugin.description": "Give her a sticker collection of her own: an official pack is seeded into the 官方 zone on first launch (restorable from the panel if removed), and you can also create your own categories to collect into. In chat she picks one herself from the category and the context. png/jpg/gif/webp with animations preserved; every send is logged for cross-turn dedup and recent-favorite ranking.",
+  "plugin.description": "Give her a sticker collection of her own: a labeled official pack ships inside (190 stickers sorted into 22 categories, each with its own gag line; seeded into the 官方 zone on first launch and restorable from the panel, and labels are delivered when the pack is updated), and you can also create your own categories to collect into. In chat she picks one herself from the category and the context. png/jpg/gif/webp with animations preserved; every send is logged for cross-turn dedup and recent-favorite ranking.",
   "actions.import_upload_start.label": "Upload start",
   "actions.import_upload_chunk.label": "Upload chunk",
   "actions.import_upload_finish.label": "Finish import",

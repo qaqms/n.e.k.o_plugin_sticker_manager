@@ -250,6 +250,18 @@
     台账盖章只在包干净时（半截包下拍重试），播种走 `import_pack` 同一把尺——**别开第二条入库路**；
     空库才默认激活官方区，旧库升级绝不抓台（主人的激活位是他的决定）。
 
+25. **包的措辞与主人的措辞撞车时，让位要按字段、但"措辞"是一个整体**（v0.13.0 J-3）：
+    官方包重打后要把标签下发到老装机，靠的是包带 `pack_version`、库记 `official_pack_version`、
+    `Library.refresh_official_labels()` 按**内容指纹**（不是文件名，库里文件名早就是 `<id>.<ext>`）配对。
+    两条容易做错的尺：① **别整条跳过**——主人改过 desc 就整条不刷，这张就永远拿不到包里的新分类；
+    ② **别只保 desc**——目录正文走 `caption > desc` 的回落尺，保了 desc 却刷上 caption，
+    她的话没被覆盖但**永远不露面**，等于消音。所以 `owner_edited` 记的是**字段名列表**，
+    碰过 desc/caption 任一 → 两者都归主人，分类与标签照刷。判断全在 `core/labeling.py`
+    （纯函数，逐条钉死），`library.py` 只管 IO；写盘失败**不盖版本**，下次启动自然重试。
+    另记一条已知约束（未改）：`catalog_limit_for_model=80` 而官方区有 190 张，她平铺目录只露
+    最后导入的 80 张（实测「打招呼与冒泡」「呆住与宕机」平铺零露出）——**分类概览就是她的地图**，
+    这也是 J-3 把粒度放开的理由；真要让她扫得到全库，得动那把尺或按分类配额轮换。
+
 ## Read Context Plan
 
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）
@@ -291,8 +303,23 @@ push 不再触发任何云端验证，质量链只有本地五门 `tools/release
     - 历史弹药仍在 `sticker_pack_lab/out/spike/`（含 `boundary_pack.zip` 三张贴尺样张，可单独实发）。
     - 注：验收操作细案在 `sticker_pack_lab/out/spike/验收卡_J2spike.md`（乙那张卡按本条更新后的顺序用：
       先真包再谈样张包，样张包若单独导会在官方区外多住三张同指纹——查重尺会拒，不算脏数据但别奇怪）。
-  - **J-3 待开工（内容轮，可与 J-2 并行）**：190 张 GIF 的分区与打标在 `sticker_pack_lab` 做；
-    文件名已带草稿线索（`007_生气`、`012~015_吐舌`、`001~006_通知_提示`）；现有测试库主人已拍板全清。
+  - **J-3 已完工（v0.13.0，2026-09-18）**：官方 190 张**分好 22 类 + 逐张打标**，并补上"标签怎么下发到老装机"
+    这把尺（陷阱 25）。打标与打包的**唯一源在 `sticker_pack_lab`**：标签表 `tools/j3_labels_rows_a/b.py`
+    + 分类学 `tools/j3_labels_taxonomy.py` → `tools/j3_labels.py` 出草案（`out/j3_draft/labels_draft.json`
+    + 人读 `审阅表.md`）→ `tools/j3_build_official_pack.py` 打真包覆盖本仓 `official/official_pack.zip`
+    （**改标签必须涨 `PACK_VERSION`，不涨号老装机不动**）→ 对账两把：`tools/j3_verify_draft.py`
+    （草案能否导入）+ `tools/j3_verify_upgrade.py`（旧包→新包升级路径，旧包从本仓 git HEAD 取）。
+    主人已拍板的口径：粒度"改开"（22 类、宁窄不兜底）、拿不准的按大致意思即可不追求补齐
+    （图内原文只填看得清的）。**待实机验收**：见下一条清单（J-2 那份一起跑）。
+  - **v0.13.0 实机验收清单（含 J-2 未回账项，待主人跑）**：导 v0.13.0 真包 → 首启 `official_seed=seeded`
+    且日志/快照 `pack_version=1` → 官方区 190 张、面板分类墙按 22 类分区、目录正文是梗义不是文件名 →
+    实发一张贴尺 gif（= spike 乙补票）→ 拆官方区 → 「恢复官方收藏」闭环 →（老装机态另测：
+    先装 0.12.0 播过种，再覆盖导 0.13.0，看日志 `official labels refreshed: refreshed=190`）。
+    全绿 → J-2/J-3 一并销账；任一红 → 按拍板评估转 B。
+  - **大文件拆分轮（未开工，另立）**：`services/library.py`（1250 行）/ `core/catalog.py`（524 行）/
+    `__init__.py`（2007 行）都超本工作区 200 行/文件的纪律线。J-3 的新判断已经另起 `core/labeling.py`
+    不再让大文件长肉，但**存量拆分没做**——它要动播种/查重/区三套已封板的尺（陷阱 22/23/24），
+    得单独一轮配"零行为变更"门再做，别夹在内容轮里顺手改。
   - **分类改名（轮 I 欠账）**仍未做：主人拍板 3A 单独立轮；区的改名已因内部 id 设计在 J-1 顺手解决。
 - **轮 B（VLM 自动标注）挂起（2026-09-15 拍板）**：库改由**预制表情包**供给——主人自己做包，
   每张图的梗义在做包时写进 manifest（轮 A 的 v2 已支持 caption/visible_text 随包迁移，

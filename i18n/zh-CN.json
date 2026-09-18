@@ -159,7 +159,7 @@
   "panel.usage.source": "来源",
   "plugin.name": "表情包管理",
   "plugin.short_description": "表情包收藏与发送：内置官方收藏 + 面板管理库，猫娘自主挑图发到聊天",
-  "plugin.description": "给她一个自己的表情包收藏间：内置官方收藏（首启自动收进「官方」区，拆掉后可恢复），也可自建分类收图；她在对话里按分类和情境自己挑一张发出去。支持 png/jpg/gif/webp，动图保留动画；每次发送都记台账，供跨轮去重与最近爱用排序。",
+  "plugin.description": "给她一个自己的表情包收藏间：内置官方收藏（190 张已分好 22 类、逐张标了梗义，首启自动收进「官方」区，拆掉后可恢复；包更新时标签会自动下发），也可自建分类收图；她在对话里按分类和情境自己挑一张发出去。支持 png/jpg/gif/webp，动图保留动画；每次发送都记台账，供跨轮去重与最近爱用排序。",
   "actions.import_upload_start.label": "开始上传",
   "actions.import_upload_chunk.label": "上传分块",
   "actions.import_upload_finish.label": "完成导入",

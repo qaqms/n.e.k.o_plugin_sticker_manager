@@ -39,6 +39,9 @@ PACK_MANIFEST_VERSION = 3
 PACK_MANIFEST_FILENAME = "manifest.json"
 # zip 内图片条目的目录前缀。导入时剥掉；导出时必须用同一个。
 PACK_DIR_PREFIX = "stickers/"
+# 官方包的内容版本键（v0.13.0 J-3）：随包携带，库记已应用值，包更新时刷官方区标签。
+# 只有官方包写它——`export_pack` 的产物不带（带了就等于拿主人的库当官方库覆写）。
+PACK_VERSION_KEY = "pack_version"
 
 # 单个套图包最多收多少张（防一个"手滑打了整盘截图"的 zip 把库淹了；
 # 与面板批量通道 MAX_BATCH_FILES 同量级但更宽——包里带描述，逐张确认成本低）。
@@ -121,6 +124,20 @@ def parse_manifest(raw: Any) -> list[PackEntry]:
         if len(out) >= PACK_MAX_ENTRIES:
             break
     return out
+
+
+def parse_pack_version(raw: Any) -> int:
+    """宽松读顶层 `pack_version`（v0.13.0 J-3 官方包标签下发尺）：非正整数一律 0。
+
+    0 的含义是"这包不带版本尺"——旧包、主人自打的包、`export_pack` 的产物都是 0，
+    刷标签的尺据此**什么都不做**，不会把主人的库当成官方库来覆写。
+    """
+    if not isinstance(raw, Mapping):
+        return 0
+    value = raw.get(PACK_VERSION_KEY)
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        return 0
+    return value
 
 
 def parse_manifest_groups(raw: Any) -> dict[str, str]:

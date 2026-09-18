@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.13.0
+
+v0.13.0「官方包打标 + 标签下发尺」（J-3，主人拍板：走内容轮、粒度"改开"、拿不准的按大致意思即可）——官方区从"190 个文件名"变成她看得懂的收藏：
+
+- **官方包重打**：190 张全部**分好 22 类 + 逐张标了梗义(caption)/检索短词(desc)/同义词(tags)**，
+  包带 `pack_version: 1`（34.8MiB，包 sha256 前缀 `23fc5cb0e82f`）。目录行正文实测从
+  「173_一切都好 4」变成「一切都好（冒烟版）」这类人话；`sticker_list` 无词时的分类概览
+  从 0 行变 22 行（每行都是"什么时候用这一类"）。
+- **标签下发尺（本轮的真改动）**：J-2 留的洞——`import_pack` 对同指纹只计 duplicates 就跳过、
+  `official_seeded` 又是一次性台账，所以**重打的官方包对老装机一张也不会变**。新尺三件：
+  包带 `pack_version`、库记 `official_pack_version`（catalog 顶层）、
+  `Library.refresh_official_labels()` 按**内容指纹**把官方区条目的文本刷成包里的版本。
+  `seed_official` 的 `already` 分支照样走一次刷新（"只播一次"管的是进图，不管措辞）。
+- **让位尺是字段级的**（`Sticker.owner_edited: [字段名]`，`Library.update` 顺手记账）：
+  主人碰过 desc/caption 任一，**两者都归主人**（回落尺 caption>desc，只保一个等于没保），
+  但分类与标签照刷——整条跳过会让这张永远拿不到新分类。分类说明仍只补缺不覆盖。
+- **只动文本**：图片文件、id、启停、使用台账、区归属一律不碰；写盘失败不盖版本（下次启动自然重试）。
+- **判断与 IO 分层**：新增 `core/labeling.py`（纯函数：配对、让位、同值不进补丁），
+  `services/library.py` 只管读 zip 与落盘——大文件不再长新逻辑（拆分另立一轮，见 DESIGN 交接）。
+- **盘形纯插入 + schema v2→v3**：顶层可选 `official_pack_version`（只认正整数）、条目可选
+  `owner_edited`（只认白名单字段名，陌生名字 load 时丢）；两键都只在非空时写，旧库盘形一字不变。
+- dashboard 快照 `official` 三键 → **四键**（+`pack_version`，排障用，面板不读）；
+  `seed_official` 回包新增 `refresh` 子字典（status/version/refreshed/skipped_edited/unmatched/groups）。
+- **入口面 ±0、i18n ±0、配置三处同源 ±0**：本轮不加新入口、不加新配置键——
+  下发是启动时自动做的事，不该让主人多点一次按钮。
+- 测试 **261 → 275 passed**（新 `tests/test_official_refresh.py` 十四条：下发尺七门 +
+  宽松读两门 + 纯函数判定五门；改两处按设计该变的断言：`already` 回包形状、迁移后盘形版本号）。
+- 真包对账（`sticker_pack_lab/tools/j3_verify_upgrade.py`，旧包从本仓 git HEAD 取）：
+  装机态 190 张占位标签 → 换新包 → `refreshed=190 skipped_edited=1 unmatched=0 groups=22`，
+  一张图不用重进、主人的话保住、版本落盘、同版本重放短路。
+- 下一轮就位：v0.13.0 包实机验收（含 J-2 那份未回账清单：导真包→播种→实发一张贴尺 gif→拆官方区→恢复闭环）；
+  分类改名轮（轮 I 欠账 3A）；`services/library.py`(1250 行)/`core/catalog.py`(524 行)/`__init__.py`(2007 行) 拆分轮。
+
 ## 0.12.0
 
 v0.12.0「官方区内置」（J-2，主人拍板 P2A 完全内置 + P3 只播一次+恢复按钮）——她的收藏间开张即存货：**随包官方收藏 190 张，首启自动播种进「官方」区**：

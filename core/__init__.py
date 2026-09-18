@@ -48,6 +48,7 @@ from .configuration import (
     StickerManagerSettings,
     StorageSettings,
 )
+from .labeling import LabelRefresh, index_by_digest, plan_label_refresh
 from .pack import (
     PACK_DIR_PREFIX,
     PACK_MANIFEST_FILENAME,
@@ -58,6 +59,7 @@ from .pack import (
     pack_entry_from_raw,
     parse_manifest,
     parse_manifest_groups,
+    parse_pack_version,
     safe_member_name,
     sticker_to_manifest_entry,
 )
@@ -72,6 +74,7 @@ __all__ = [
     "PACK_MANIFEST_FILENAME",
     "PACK_MANIFEST_VERSION",
     "PACK_MAX_ENTRIES",
+    "PACK_VERSION_KEY",
     "PREVIEW_CHUNK_BYTES",
     "SEND_CANDIDATES_MAX",
     "UPLOAD_CHUNK_BYTES",
@@ -82,6 +85,7 @@ __all__ = [
     "OFFICIAL_PACK_RELPATH",
     "OFFICIAL_ZONE_NAME",
     "AwarenessSettings",
+    "LabelRefresh",
     "PackEntry",
     "SendSettings",
     "Sticker",
@@ -94,6 +98,7 @@ __all__ = [
     "detect_image_format",
     "format_catalog_for_model",
     "format_group_overview",
+    "index_by_digest",
     "new_sticker_id",
     "new_zone_id",
     "normalize_group",
@@ -103,8 +108,10 @@ __all__ = [
     "pack_entry_from_raw",
     "parse_manifest",
     "parse_manifest_groups",
+    "parse_pack_version",
     "parse_tags_field",
     "pick_recent",
+    "plan_label_refresh",
     "resolve_send_target",
     "safe_member_name",
     "search_stickers",

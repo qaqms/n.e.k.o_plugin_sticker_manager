@@ -73,9 +73,9 @@ class TestLegacyMigration:
         zones = lib.zones()
         assert len(zones) == 1 and zones[0]["active"] and zones[0]["total"] == 2
         assert lib.zone_of_group("旧组") == lib.active_zone()
-        # 迁移当场补写盘：再读就是 v2 形状
+        # 迁移当场补写盘：再读就是带区的形状（写侧版本号随版本涨，这里钉"有区三键"这件事）
         saved = json.loads(catalog.read_text(encoding="utf-8"))
-        assert saved["version"] == 2 and saved["zones"] and saved["group_zone"]["旧组"]
+        assert saved["version"] == 3 and saved["zones"] and saved["group_zone"]["旧组"]
 
     def test_empty_library_gets_default_zone(self, tmp_path, run_async):
         lib = Library(tmp_path)

@@ -84,7 +84,10 @@ class TestSeedLifecycle:
             now=9999.0,
         )
         out = lib.seed_official(pack)
-        assert out == {"status": "already"}
+        # 台账在册：再喊（非 force）不碰包、不挪图、不切区。
+        # 但 J-3 起"already"仍走一次标签刷新——这包的替身来自 export_pack，不带 pack_version，
+        # 所以尺据 no_version 什么都不做（主人的自打包永远不该被当成官方库覆写）。
+        assert out == {"status": "already", "refresh": {"status": "no_version"}}
         assert lib.count() == 4 and len([s for s in lib.active_pool() if s.desc == "自制"]) == 1
 
     def test_existing_library_not_hijacked(self, tmp_path):

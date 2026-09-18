@@ -266,6 +266,24 @@ def _lenient_int(value: Any) -> int:
     return number if abs(number) <= 2**53 else 0
 
 
+OWNER_EDITABLE_FIELDS: tuple[str, ...] = ("desc", "caption", "tags", "group", "visible_text")
+
+
+def normalize_owner_fields(value: Any) -> list[str]:
+    """宽松还原"主人改过哪些字段"（v0.13.0）：只认白名单内的字符串，去重保序。
+
+    旧库无此键 = 空表；混进陌生名字（手改盘/未来字段）一律丢——这把尺只用来
+    决定"刷标签时谁让位"，认不出的名字让不了任何位，留着反而是隐患。
+    """
+    if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
+        return []
+    out: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item in OWNER_EDITABLE_FIELDS and item not in out:
+            out.append(item)
+    return out
+
+
 @dataclass(frozen=True)
 class Sticker:
     """一条表情包记录（目录内存形状；文件在 stickers/<id>.<ext>）。"""
@@ -283,6 +301,9 @@ class Sticker:
     zone: str = ""
     caption: str = ""
     visible_text: str = ""
+    # 主人亲手改过哪些文本字段（v0.13.0 J-3）：官方包刷标签时按字段让位。
+    # 存字段名列表而不是一个 bool——"整条跳过"会让这张永远拿不到新分类。
+    owner_edited: list[str] = field(default_factory=list)
 
     def catalog_body(self, groups: dict[str, str] | None = None) -> str:
         """目录行正文（轮 F 尺）：梗义 > 主人描述 > 分组说明 > 如实「未标注」。
@@ -301,7 +322,7 @@ class Sticker:
         return "未标注"
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "id": self.id,
             "file": self.file,
             "desc": self.desc,
@@ -316,6 +337,10 @@ class Sticker:
             "caption": self.caption,
             "visible_text": self.visible_text,
         }
+        # v0.13.0：主人改过哪些文本字段，非空才写键（纯插入，没改过的库盘形一字不变）。
+        if self.owner_edited:
+            out["owner_edited"] = list(self.owner_edited)
+        return out
 
     @classmethod
     def from_dict(cls, raw: Any) -> "Sticker | None":
@@ -348,6 +373,7 @@ class Sticker:
             zone=normalize_optional_text(raw.get("zone"), limit=40),
             caption=normalize_optional_text(raw.get("caption"), limit=CAPTION_MAX_CHARS),
             visible_text=normalize_optional_text(raw.get("visible_text"), limit=VISIBLE_TEXT_MAX_CHARS),
+            owner_edited=normalize_owner_fields(raw.get("owner_edited")),
         )
 
     def with_touch(self, *, now: float) -> "Sticker":
