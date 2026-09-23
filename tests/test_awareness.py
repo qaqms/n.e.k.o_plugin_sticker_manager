@@ -21,7 +21,6 @@ from conftest import (
 )
 from sticker_manager.core.awareness import (  # pyright: ignore[reportMissingImports] — 包名由 conftest 在测试时注册；独立仓静态面不可解析
     build_awareness_text,
-    pick_recent,
 )
 from sticker_manager.core.catalog import Sticker  # pyright: ignore[reportMissingImports] — 同上
 from sticker_manager.core.configuration import (  # pyright: ignore[reportMissingImports] — 同上
@@ -45,12 +44,12 @@ def _st(sid: str, *, desc: str = "", use: int = 0, last: float = 0.0, disabled: 
     )
 
 
-def _settings(*, enabled: bool = True, interval: float = 3600.0, lines: int = 5) -> StickerManagerSettings:
+def _settings(*, enabled: bool = True, interval: float = 3600.0) -> StickerManagerSettings:
     return StickerManagerSettings(
         enabled=enabled,
         send=SendSettings(),
         storage=StorageSettings(),
-        awareness=AwarenessSettings(enabled=True, interval_sec=interval, max_recent_lines=lines),
+        awareness=AwarenessSettings(enabled=True, interval_sec=interval),
     )
 
 
@@ -65,43 +64,35 @@ def _clock_bus(lanlan: str = "K", *, ts: float = 10.0) -> FakeBus:
 
 
 class TestCoreSelection:
-    def test_pick_recent_prefers_usage_then_recency(self):
-        stickers = [_st("a", use=0, last=10), _st("b", use=3, last=5), _st("c", use=3, last=50)]
-        picked = pick_recent(stickers, 2)
-        assert [s.id for s in picked] == ["c", "b"]
-
-    def test_pick_recent_skips_disabled_and_caps(self):
-        stickers = [_st("a", use=9), _st("x", use=99, disabled=True), _st("b"), _st("c")]
-        assert {s.id for s in pick_recent(stickers, 3)} == {"a", "b", "c"}
-        assert all(s.id != "x" for s in pick_recent(stickers, 10))
-
     def test_empty_library_gives_empty_text(self):
-        assert build_awareness_text([], max_lines=5) == ""
-        assert build_awareness_text([_st("x", disabled=True)], max_lines=5) == ""
+        assert build_awareness_text([]) == ""
+        assert build_awareness_text([_st("x", disabled=True)]) == ""
 
-    def test_text_carries_count_lines_and_nudge(self):
-        stickers = [_st("a", desc="猫猫挥手", use=2), _st("b", desc="大哭", use=1), _st("c")]
-        text = build_awareness_text(stickers, max_lines=2)
-        assert "3" in text  # 总数按未禁用算
-        assert "猫猫挥手" in text and "大哭" in text
-        assert "[a]" in text  # 行形状与 sticker_list 对偶：id 可拿去 sticker_send
-        assert "sticker_send" in text
+    def test_text_is_one_breath_and_carries_no_catalog(self):
+        """v0.17.0：注入只剩"想起来"，目录不再随它走。
 
-    def test_text_carries_usage_guidance_and_candidate_hint(self):
-        # 轮 C：注入文案带"使用规则+数量软提示"（区分安慰/自述、宁缺毋滥）
-        # 与候选机制告知（多候选回清单），软提示在文案、硬闸在冷却——两层分离。
-        # 轮 D 追加：去重与概率闸的软提示必须同层告知（硬闸在 sender 节奏闸）。
-        text = build_awareness_text([_st("a", desc="笑", use=1)], max_lines=5)
+        钉"不带目录"比钉"带那句"更重要——目录回到注入里 = 这轮的载体判断被推翻，
+        而一次性 cue 装目录正是实机量出来的失效模式（10 次注入只换 2 次发图）。
+        """
+        stickers = [_st("a", desc="猫猫挥手", use=2), _st("b", desc="大哭", use=1)]
+        text = build_awareness_text(stickers)
+        assert "2" in text  # 总数按未禁用算
+        assert "sticker_send" in text and "分类" in text  # 指向常驻面
+        assert "[a]" not in text and "猫猫挥手" not in text and "大哭" not in text  # 无逐图行
+        assert "最近常用" not in text and "你的套图" not in text  # 无目录块
+        assert len(text) < 300, f"注入正文涨回目录复读机了：{len(text)} 字"
+
+    def test_text_still_carries_the_tier_guidance(self):
+        # 轮 C 的使用规则与轮 D 的两条软提示仍在中段（它们是档位的注入侧，不是目录）。
+        text = build_awareness_text([_st("a", desc="笑", use=1)])
         assert "安慰对方" in text and "宁缺毋滥" in text
-        assert "候选" in text and "id" in text
         assert "最近不重复" in text  # 去重软提示（轮 D①）
         assert "别重试" in text  # 概率闸软提示：被拒不许二次撞闸（轮 D②）
-        assert "force" in text  # 主人点名重发的绕行通道告知
 
-    def test_max_lines_caps_the_block(self):
-        stickers = [_st(f"s{i}", use=i) for i in range(10)]
-        text = build_awareness_text(stickers, max_lines=3)
-        assert text.count("[s") == 3
+    def test_unlisted_tier_degrades_to_default_wording(self):
+        natural = build_awareness_text([_st("a")])
+        assert build_awareness_text([_st("a")], eagerness="wild") == natural
+        assert build_awareness_text([_st("a")], eagerness="eager") != natural
 
 
 class TestLatestLanlan:
@@ -199,7 +190,10 @@ class TestAwarenessGates:
         assert call["visibility"] == []  # 用户看不见
         assert call["ai_behavior"] == "read"  # 不起话轮
         assert call["target_lanlan"] == "K"  # 归属只给本次选定的角色卡
-        assert "猫猫挥手" in call["parts"][0]["text"]
+        # v0.17.0：同卡共用一个合并键——cue 可能排队好几个话轮（语音模式尤甚），
+        # 不合并就会让一次对话收到多条内容相同的旧提醒。尺在宿主 proactive.py:3330。
+        assert call["coalesce_key"] == "sticker_manager:awareness:K"
+        assert "sticker_send" in call["parts"][0]["text"]  # 指向常驻面，不复述目录
 
     def test_rejected_push_does_not_advance_clock(self, tmp_path, run_async):
         host = FakeHostContext(

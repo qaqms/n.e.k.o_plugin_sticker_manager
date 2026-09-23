@@ -1,12 +1,15 @@
 # pyright: reportMissingImports=false
-"""v0.14.0「配表情积极度」三档的门。
+"""「配表情积极度」三档的门（v0.14.0 起，v0.19.0 扩到三面）。
 
-钉四件事：
-1. **档位只管意愿**：注入文案的意愿段随档变，节奏段（发送层事实）三档共用；
-2. **默认档 = 老行为**：natural 的意愿段与 v0.13.0 那句一字不差；
-3. **读入收敛**：不在册/非字符串/缺键一律回 natural，配置写错不该让她的行为变野；
-4. **入口与面板**：`set_eagerness` 写对配置路径、拒非法值、盘写不进去如实报错；
-   dashboard context 露当前档（Select 回填靠它）。
+钉五件事：
+1. **档位驱动三根"让她想起来"的面**：注入意愿段 + 工具描述的触发判据/许可句 + 点名节奏
+   （矜持 12 / 自然 6 / 爱发 3 轮，配置写正数覆盖）；
+2. **发送层的四把尺一口都不吃档位**（陷阱 26）：冷却 / 最近不重复 / 概率 / 复用窗口
+   在三档下解析结果必须相同——这条是"档位不是万能旋钮"的反向门；
+3. **默认档 = 老行为**：natural 的意愿段与 v0.13.0 那句一字不差；
+4. **读入收敛**：不在册/非字符串/缺键一律回 natural，配置写错不该让她的行为变野；
+5. **入口与面板**：`set_eagerness` 写对配置路径、拒非法值、盘写不进去如实报错；
+   dashboard 露当前档，且节奏读数给的是**生效值**不是哨兵 0。
 """
 
 from __future__ import annotations
@@ -16,9 +19,17 @@ from sticker_manager.core.awareness import build_awareness_text
 from sticker_manager.core.catalog import Sticker
 from sticker_manager.core.configuration import (
     EAGERNESS_LEVELS,
+    AwarenessSettings,
     SendSettings,
     StickerManagerSettings,
 )
+from sticker_manager.core.eagerness import (
+    NEXT_STEP_NOTE,
+    TRIGGER_CRITERIA,
+    effective_inject_interval_n,
+)
+from sticker_manager.core.tool_surface import build_send_tool_description
+from sticker_manager.services.awareness import Awareness
 
 
 def _settings(tmp_path, *, send: dict | None = None, enabled=True):
@@ -39,7 +50,7 @@ def _stickers(count: int = 2):
 
 
 def _text(eagerness: str):
-    return build_awareness_text(_stickers(), max_lines=5, groups={}, eagerness=eagerness)
+    return build_awareness_text(_stickers(), eagerness=eagerness)
 
 
 class TestReadIn:
@@ -108,3 +119,93 @@ class TestEntry:
         plugin, _host = _settings(tmp_path, send={"eagerness": "eager"})
         state = run_async(plugin.dashboard_context())
         assert state["eagerness"] == "eager"
+
+
+class TestTierDrivesThreeSurfaces:
+    """v0.19.0：一档驱动三面（判据 / 点名句 / 节奏），但发送层一口都不吃。"""
+
+    def test_each_tier_names_its_own_trigger_criteria(self):
+        catalog = "・困与睡（9 张） — 深夜犯困时用。"
+        texts = {tier: build_send_tool_description(catalog, tier) for tier in EAGERNESS_LEVELS}
+        for tier in EAGERNESS_LEVELS:
+            assert "什么时候该想到它" in texts[tier], f"{tier} 档的描述里没有触发判据"
+            assert TRIGGER_CRITERIA[tier] in texts[tier]
+        assert len(set(texts.values())) == len(EAGERNESS_LEVELS)
+
+    def test_eager_says_dont_wait_to_be_asked(self):
+        # 主人报的原话是"每次都是我提醒她才知道调用"——eager 档必须正面回应这一点。
+        assert "不用等他点名要图" in TRIGGER_CRITERIA["eager"]
+
+    def test_injection_names_the_tool_and_the_two_args(self):
+        text = build_awareness_text([Sticker(id="a", file="a.png", desc="甲", tags=[])], eagerness="eager")
+        assert "sticker_send" in text and "group" in text and "text" in text
+        assert len(text) < 320, f"注入正文又长回目录复读机了：{len(text)} 字"
+
+    def test_success_result_tells_her_what_next(self, tmp_path, run_async):
+        plugin, _host = _settings(tmp_path, send={"eagerness": "eager"})
+        plugin._library.load(force=True)
+        plugin._library.create_group("困与睡", "深夜犯困时用", "")
+        plugin._library.add(data=b"\x89PNG\r\n\x1a\n" + b"\x00" * 64 + b"|y", desc="哈欠", tags=[], group="困与睡")
+        result = run_async(plugin.tool_sticker_send(group="困与睡", text="先困了"))
+        assert result.get("ok") is True, result
+        assert result.get("note") == NEXT_STEP_NOTE
+
+    def test_the_note_never_names_a_throttle(self):
+        # 陷阱 29 的纪律挪到返回值上：闸只在撞的那一刻由 `_SEND_HINTS` 就地说，
+        # 成功指引里不许提前教育她"会被挡"。
+        for banned in ("冷却", "最近不重复", "概率", "force"):
+            assert banned not in NEXT_STEP_NOTE
+
+
+class TestTierDoesNotTouchSendGates:
+    """反向门（陷阱 26）：档位在"让她想起来"这侧走满，发送侧那四把尺一格都不许动。"""
+
+    def test_the_four_send_rulers_are_tier_independent(self, tmp_path):
+        baselines = None
+        for tier in EAGERNESS_LEVELS:
+            host = FakeHostContext(
+                data_root=tmp_path / tier,
+                config=FakeConfig(data={"sticker_manager": {"enabled": True, "send": {"eagerness": tier}}}),
+            )
+            settings = StickerManagerSettings.from_config(host.config.data)
+            got = (
+                settings.send.cooldown_sec,
+                settings.send.recent_dedup_count,
+                settings.send.probability,
+                settings.send.probability_reuse_sec,
+            )
+            baselines = baselines or got
+            assert got == baselines, f"{tier} 档擅自改了发送层的尺"
+
+
+class TestTierDrivenCadence:
+    def test_each_tier_has_its_own_cadence(self):
+        assert effective_inject_interval_n("reserved", 0) == 12
+        assert effective_inject_interval_n("natural", 0) == 6
+        assert effective_inject_interval_n("eager", 0) == 3
+        # 不在册的档位退到 natural 的节奏，不炸也不当 0 用。
+        assert effective_inject_interval_n("wild", 0) == 6
+
+    def test_written_number_beats_the_tier(self):
+        assert effective_inject_interval_n("eager", 20) == 20
+        assert effective_inject_interval_n("reserved", 1) == 1
+        # 负数不是"倒着数"，按"没写"处理（配置读入本来就会夹到 0，这里防的是旁路）。
+        assert effective_inject_interval_n("eager", -3) == 3
+
+    def test_awareness_uses_the_tier_of_the_running_settings(self, tmp_path):
+        plugin, host = _settings(tmp_path, send={"eagerness": "eager"})
+        assert Awareness.interval_n(plugin._settings) == 3
+        host.config.data["sticker_manager"]["send"]["eagerness"] = "reserved"
+        plugin._settings = StickerManagerSettings.from_config(host.config.data)
+        assert Awareness.interval_n(plugin._settings) == 12
+        # 主人定死一个数以后，档位再怎么切都不该影响节奏。
+        host.config.data["sticker_manager"]["awareness"] = {"inject_interval_n": 7}
+        plugin._settings = StickerManagerSettings.from_config(host.config.data)
+        assert Awareness.interval_n(plugin._settings) == 7
+
+    def test_dashboard_reports_the_effective_cadence_not_the_sentinel(self, tmp_path, run_async):
+        # 面板回 0 会让人以为"每 0 轮一次"——那是拿哨兵值当读数，仪器说谎的一种。
+        plugin, _host = _settings(tmp_path, send={"eagerness": "eager"})
+        state = run_async(plugin.dashboard_context())
+        assert state["awareness"]["inject_interval_n"] == 3
+        assert AwarenessSettings().inject_interval_n == 0  # 配置面默认仍是"跟随"

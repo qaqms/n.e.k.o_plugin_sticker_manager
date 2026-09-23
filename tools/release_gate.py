@@ -85,7 +85,7 @@ REPO_NAME = f"n.e.k.o_plugin_{PLUGIN_ID}"
 GATES = ("pytest", "ruff", "check", "release", "hosted-tsx")
 
 # 复制插件时排除的东西：全是不该进发行包、也不该进副本的生成物。
-_COPY_EXCLUDES = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", "dist", "build", ".tmpgate"}
+_COPY_EXCLUDES = {".git", ".venv", "venv", "__pycache__", ".pytest_cache", ".ruff_cache", "dist", "build", ".tmpgate", ".pytest-tmp"}
 # 注意：`.vscode` 必须在副本内——它是 check -r 要求的仓库支撑文件，缺位即拒。
 # ruff 必须**钉版本**：市场 CI 用的就是这一版，飘版本等于换了门。
 _RUFF_VERSION = "0.12.4"

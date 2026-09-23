@@ -5,16 +5,27 @@
 // 几百格的图墙一次性开跑会踩挤插件子进程。拿不到 IntersectionObserver 就直接排队，
 // 宁多拉不漏图。
 //
-// 预览取图（格子与聚焦卡共用一把尺）：同一分段协议、同一缓存、同一并发限。
-// 单张预览是分段的串行调用（宿主回包单帧上限≈4.56MiB，实机超时钉的坑——
-// DESIGN.md 陷阱 14）；循环有护栏，坏协议不许无限转；失败记空串，避免坏图重试风暴。
+// 预览取图（格子与聚焦卡共用同一套调度）：单张预览是分段的串行调用（宿主回包单帧上限≈4.56MiB，
+// 实机超时钉的坑——DESIGN.md 陷阱 14）；循环有护栏，坏协议不许无限转；失败记空串，避免坏图重试风暴。
+//
+// v0.17.2 加了一档 kind="thumb"：**墙上的格子取 256px 缩略图，点开的聚焦卡才取原图**。
+// 之前两者共用原图，实机账是官方区 190 张 ≈34.7MB（base64 后 ≈46MB）过控制通道、
+// 并发 2 —— 排在后面的格子等过 30s 就是"加载图片超时"，每张一行 SDK 的 TRIGGER 日志
+// 就是"日志刷屏"（当天 363 行里 313 行是 preview）。同一根因的两面，一起修。
+// 代价（主人拍板接受）：动图在格子里只显示第一帧。
 
 import { useEffect, useRef, useState } from "@neko/plugin-ui";
 import { callAction } from "./shared";
 import type { Surface } from "./shared";
 
-// 预览缓存：id -> dataUrl。失败记空串，避免每张坏图都重试一轮。
+// 预览缓存：`档位:id` -> dataUrl。失败记空串，避免每张坏图都重试一轮。
+// 档位必须进键：同一张图的缩略图与原图是两个不同的 dataUrl，
+// 共用一个键会让"先看过格子"的聚焦卡拿到糊图（或反过来让格子去等原图）。
 const previewCache: Record<string, string> = {};
+
+function cacheKey(kind: string, id: string): string {
+  return `${kind}:${id}`;
+}
 
 const PREVIEW_CONCURRENCY = 2;
 let previewActive = 0;
@@ -79,18 +90,24 @@ function observePreview(el: any, enter: () => void): () => void {
   };
 }
 
-export function useStickerPreview(surface: Surface, id: string, auto: boolean) {
-  const [preview, setPreview] = useState<string>(previewCache[id] || "");
+export function useStickerPreview(
+  surface: Surface,
+  id: string,
+  auto: boolean,
+  kind: string = "full",
+) {
+  const key = cacheKey(kind, id);
+  const [preview, setPreview] = useState<string>(previewCache[key] || "");
   const [loading, setLoading] = useState<boolean>(
-    previewCache[id] === undefined,
+    previewCache[key] === undefined,
   );
   const boxRef = useRef<any>(null);
 
   useEffect(() => {
     let alive = true;
-    setPreview(previewCache[id] || "");
-    setLoading(previewCache[id] === undefined);
-    if (previewCache[id] !== undefined) {
+    setPreview(previewCache[key] || "");
+    setLoading(previewCache[key] === undefined);
+    if (previewCache[key] !== undefined) {
       return undefined;
     }
     const load = async (): Promise<void> => {
@@ -100,10 +117,12 @@ export function useStickerPreview(surface: Surface, id: string, auto: boolean) {
         let mime = "";
         const parts: string[] = [];
         for (let guard = 0; guard < 16; guard += 1) {
-          const result = await callAction(surface, "preview", {
-            id: id,
-            offset: offset,
-          });
+          const args: Record<string, any> = { id: id, offset: offset };
+          // 只有要缩略图时才带 kind：留空=原图，老形状一字不变（服务端 kind 缺省即走原路）。
+          if (kind === "thumb") {
+            args.kind = "thumb";
+          }
+          const result = await callAction(surface, "preview", args);
           if (!result) {
             break;
           }
@@ -122,7 +141,7 @@ export function useStickerPreview(surface: Surface, id: string, auto: boolean) {
       } catch {
         dataUrl = "";
       }
-      previewCache[id] = dataUrl;
+      previewCache[key] = dataUrl;
       if (alive) {
         setPreview(dataUrl);
         setLoading(false);
@@ -144,7 +163,7 @@ export function useStickerPreview(surface: Surface, id: string, auto: boolean) {
       stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id]);
+  }, [id, kind]);
 
   return { preview, loading, boxRef };
 }

@@ -120,14 +120,15 @@ class AwarenessSettings:
     # 轮次节奏档：every_user_message（每轮都注）| interval_n（攒够 N 轮注一次）。
     inject_mode: str = INJECT_MODE_DEFAULT
     # interval_n 档下每 N 条用户轮注一次。<1 按 1 收（等价于每轮）。
-    inject_interval_n: int = 3
+    # v0.19.0 起 **0 = 跟随「配表情积极度」档位**（默认）：矜持 12 / 自然 6 / 爱发 3 轮
+    # （尺在 `core/eagerness.effective_inject_interval_n`，同门实机在跑的就是 3）。
+    # 主人要自己定死就写个具体数字——这一键的存在就是"能自定义"那半句话的落点。
+    inject_interval_n: int = 0
     # 相邻两次注入的最小间隔（秒）：连珠炮对话防刷屏。两种模式都吃这把地板。
     min_interval_sec: float = 60.0
     # 降级节奏：总线一次都没读通过时（宿主换了桶形状/总线断开）退回按这个挂钟
     # 打点，而不是让整条存在感链路静默死掉。默认一小时 = v0.15.0 之前的老行为。
     interval_sec: float = 3600.0
-    # 注入文本里"最近常用"最多带几行。
-    max_recent_lines: int = 5
 
 
 @dataclass(frozen=True)
@@ -225,12 +226,13 @@ class StickerManagerSettings:
                     INJECT_MODES,
                     awareness_default.inject_mode,
                 ),
+                # 0 = 跟随积极度档位（v0.19.0）；写正数就是主人自己定死的节奏。
                 inject_interval_n=_clamp_int(
                     _as_int(
                         awareness_raw.get("inject_interval_n"),
                         awareness_default.inject_interval_n,
                     ),
-                    1,
+                    0,
                     50,
                 ),
                 # 地板可以到 0（连珠炮也不拦），但上限不超过一小时——再长就该走降级时钟了。
@@ -246,14 +248,6 @@ class StickerManagerSettings:
                     _as_number(awareness_raw.get("interval_sec"), awareness_default.interval_sec),
                     60.0,
                     86400.0,
-                ),
-                max_recent_lines=_clamp_int(
-                    _as_int(
-                        awareness_raw.get("max_recent_lines"),
-                        awareness_default.max_recent_lines,
-                    ),
-                    1,
-                    20,
                 ),
             ),
         )

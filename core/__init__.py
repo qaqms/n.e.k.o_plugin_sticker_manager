@@ -10,7 +10,6 @@ from .awareness import (
     build_awareness_text,
     injection_due_for_turn,
     normalize_mode,
-    pick_recent,
 )
 from .catalog import (
     CAPTION_MAX_CHARS,
@@ -23,6 +22,7 @@ from .catalog import (
     OFFICIAL_ZONE_NAME,
     PREVIEW_CHUNK_BYTES,
     SEND_CANDIDATES_MAX,
+    SEND_TEXT_MAX_CHARS,
     UPLOAD_CHUNK_BYTES,
     UPLOAD_MAX_TOTAL_BYTES,
     VISIBLE_TEXT_MAX_CHARS,
@@ -57,7 +57,17 @@ from .configuration import (
     StickerManagerSettings,
     StorageSettings,
 )
-from .eagerness import injection_guidance, normalize_tier, send_tool_description
+from .eagerness import (
+    NEXT_STEP_NOTE,
+    TOOL_NOTE,
+    TRIGGER_CRITERIA,
+    effective_inject_interval_n,
+    injection_guidance,
+    injection_pointer,
+    normalize_tier,
+    send_tool_description,
+    tool_criteria,
+)
 from .labeling import LabelRefresh, index_by_digest, plan_label_refresh
 from .pack import (
     PACK_DIR_PREFIX,
@@ -73,6 +83,15 @@ from .pack import (
     safe_member_name,
     sticker_to_manifest_entry,
 )
+from .thumbs import (
+    THUMB_EDGE,
+    THUMB_MAX_BYTES,
+    THUMB_QUALITY,
+    build_thumb,
+    render_thumb,
+    thumb_filename,
+)
+from .tool_surface import build_send_tool_description, catalog_for_tool
 
 __all__ = [
     "CAPTION_MAX_CHARS",
@@ -80,6 +99,9 @@ __all__ = [
     "GROUP_DESC_MAX_CHARS",
     "GROUP_MAX_CHARS",
     "MAX_STICKER_BYTES",
+    "NEXT_STEP_NOTE",
+    "TOOL_NOTE",
+    "TRIGGER_CRITERIA",
     "PACK_DIR_PREFIX",
     "PACK_MANIFEST_FILENAME",
     "PACK_MANIFEST_VERSION",
@@ -87,6 +109,10 @@ __all__ = [
     "PACK_VERSION_KEY",
     "PREVIEW_CHUNK_BYTES",
     "SEND_CANDIDATES_MAX",
+    "SEND_TEXT_MAX_CHARS",
+    "THUMB_EDGE",
+    "THUMB_MAX_BYTES",
+    "THUMB_QUALITY",
     "UPLOAD_CHUNK_BYTES",
     "UPLOAD_MAX_TOTAL_BYTES",
     "VISIBLE_TEXT_MAX_CHARS",
@@ -107,6 +133,9 @@ __all__ = [
     "StickerManagerSettings",
     "build_awareness_text",
     "build_manifest",
+    "build_send_tool_description",
+    "build_thumb",
+    "catalog_for_tool",
     "content_sha256",
     "desc_from_filename",
     "detect_image_format",
@@ -114,6 +143,8 @@ __all__ = [
     "format_group_overview",
     "injection_due_for_turn",
     "injection_guidance",
+    "injection_pointer",
+    "effective_inject_interval_n",
     "index_by_digest",
     "new_sticker_id",
     "new_zone_id",
@@ -128,14 +159,16 @@ __all__ = [
     "parse_manifest_groups",
     "parse_pack_version",
     "parse_tags_field",
-    "pick_recent",
     "plan_label_refresh",
+    "render_thumb",
     "resolve_send_target",
     "safe_member_name",
     "send_tool_description",
+    "tool_criteria",
     "search_stickers",
     "search_with_scores",
     "sticker_to_manifest_entry",
+    "thumb_filename",
     "validate_desc",
     "validate_desc_optional",
     "validate_optional_text",

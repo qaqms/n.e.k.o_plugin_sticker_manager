@@ -151,8 +151,17 @@ class Sender:
         source: str,
         now: float | None = None,
         force: bool = False,
+        text: str = "",
     ) -> SendResult:
-        """投递一张表情包并记账。source 只进台账（"tool" / "panel"），不面向用户。"""
+        """投递一张表情包并记账。source 只进台账（"tool" / "panel"），不面向用户。
+
+        `text` 非空时**图与这句话合成一条气泡**（v0.18.0 图文同条）：宿主对一次 push
+        走同一条渲染路径，`parts=[{text},{image}]` 会按顺序变成同一个来源气泡
+        （宿主 `app/main_server/character_runtime.py:1154,1380` → `_ordered_plugin_chat_blocks`
+        带 `include_text=True`）。**署名仍是插件**——宿主明确规定插件内容不许穿她的身份
+        （同文件 1355-1372 的注释与 `turn.py:1804-1816`），所以这句话是她写进工具参数、
+        由我们代发的，不是她的回复气泡。
+        """
         moment = time.time() if now is None else now
         if not settings.enabled:
             return SendResult.failure(ERR_NOT_ENABLED, sticker_id=sticker.id)
@@ -182,11 +191,15 @@ class Sender:
             return SendResult.failure(ERR_BAD_IMAGE, sticker_id=sticker.id)
         _ext, mime = detected
 
-        part = await self._build_part(data, mime, settings=settings)
+        part = await self._build_part(data, mime, settings=settings, text_len=len(text))
         if part is None:
             return SendResult.failure(ERR_TOO_LARGE, sticker_id=sticker.id)
 
-        pushed = self._push(part, lanlan=lanlan)
+        # 图文一体：要么一起出去，要么一起不发。只把话投出去会造出"她说了句没人应答的话"，
+        # 那句话由她自己的回复通道说更合适——所以我们不降级成"纯文本重发"。
+        parts: list[dict[str, Any]] = [{"type": "text", "text": text}] if text else []
+        parts.append(part)
+        pushed = self._push(parts, lanlan=lanlan)
         if not pushed.get("submitted"):
             reason = str(pushed.get("reason", ERR_TRANSPORT))
             self._log(f"push rejected: reason={reason}")
@@ -202,15 +215,27 @@ class Sender:
                 "lanlan": lanlan or "",
                 "source": source,
                 "ok": True,
+                # 图文同条留个长度痕（v0.18.0）：**只记长度不记内容**——那句是她生成的话，
+                # 台账的既有纪律是"只放非隐私字段"（时刻/id/角色/来源/成败）。
+                "text_len": len(text),
             },
             keep=settings.storage.usage_history_keep,
         )
-        self._log(f"sticker sent: id={sticker.id} source={source}")
+        self._log(
+            f"sticker sent: id={sticker.id} source={source}"
+            + (f" text_len={len(text)}" if text else "")
+        )
         return SendResult.success(sticker)
 
-    async def _build_part(self, data: bytes, mime: str, *, settings: StickerManagerSettings) -> dict[str, Any] | None:
-        """构造 push_message 的 image part；无法投递时返回 None。"""
-        inline_budget = settings.send.inline_max_bytes
+    async def _build_part(
+        self, data: bytes, mime: str, *, settings: StickerManagerSettings, text_len: int = 0
+    ) -> dict[str, Any] | None:
+        """构造 push_message 的 image part；无法投递时返回 None。
+
+        `text_len` 是同条气泡里那句话的字符数：内联预算按**整条载荷**算，不是只看图字节
+        ——宿主的消息面单条上限（512KiB）扣的是拼完之后的总量。
+        """
+        inline_budget = settings.send.inline_max_bytes - max(0, text_len)
         if mime == "image/gif" and not settings.send.animated_via_upload:
             # gif 只能内联；内联不下就是真放不下（上传会毁掉动画，宁可拒绝）。
             if len(data) > inline_budget:
@@ -228,12 +253,12 @@ class Sender:
             return dict(upload)
         return None
 
-    def _push(self, part: dict[str, Any], *, lanlan: str) -> dict[str, Any]:
+    def _push(self, parts: list[dict[str, Any]], *, lanlan: str) -> dict[str, Any]:
         ctx = self._plugin.ctx
         kwargs: dict[str, Any] = {
             "visibility": ["chat"],
             "ai_behavior": "read",
-            "parts": [part],
+            "parts": parts,
             "description": "sticker_manager:send",
         }
         if lanlan:

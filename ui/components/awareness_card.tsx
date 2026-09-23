@@ -75,7 +75,7 @@ export function AwarenessCard(props: { surface: Surface }) {
         <Text>
           {t("panel.awareness.note", {
             defaultValue:
-              "在她每开新一轮时把『你有一间表情收藏间 + 最近常用的几张』静默注进她的上下文：你看不到、她不会因此开口。",
+              "在她每开新一轮时静默递一句『你有一间表情收藏间，想配就发一张』：你看不到、她不会因此开口。分类目录在 sticker_send 的说明里，每轮都在场。",
           })}
         </Text>
         <Field
@@ -84,7 +84,7 @@ export function AwarenessCard(props: { surface: Surface }) {
           })}
           help={t("panel.awareness.eagerness.help", {
             defaultValue:
-              "只管她有多想配图。冷却、最近不重复、概率闸不吃这一档——那些在下面的配置里。",
+              "她有多主动配图。这一档同时管三件事：每几轮点名提醒一次（矜持 12 / 自然 6 / 爱发 3）、工具描述里判据的强弱、以及提醒的措辞。冷却、最近不重复、概率闸一口都不吃这一档。想自己定节奏就在配置里把 inject_interval_n 写成具体数字（0 = 跟随档位）。",
           })}
         >
           <Select
@@ -179,6 +179,56 @@ export function AwarenessCard(props: { surface: Surface }) {
           </Button>
         </Inline>
         {awarenessNote ? <Text>{awarenessNote}</Text> : null}
+        {/* v0.17.1 观测轮：本次运行的四把读数。只读，不放任何旋钮。
+            分母是"开机到现在"，所以标题必须写"本次运行"——写成"今日"就是假账。 */}
+        <Text>
+          {t("panel.run.title", {
+            defaultValue: "本次运行（重启插件归零）",
+          })}
+        </Text>
+        <Inline gap={16} align="center" wrap>
+          <KeyValue
+            items={[
+              {
+                key: "turns",
+                label: t("panel.run.turns", { defaultValue: "她的话轮" }),
+                value: String((state.run && state.run.turns) || 0),
+              },
+              {
+                key: "calls",
+                label: t("panel.run.calls", { defaultValue: "她调用工具" }),
+                value: String((state.run && state.run.tool_calls) || 0),
+              },
+              {
+                key: "sent",
+                label: t("panel.run.sent", { defaultValue: "发出成功" }),
+                value: String((state.run && state.run.sent) || 0),
+              },
+              {
+                key: "refused",
+                label: t("panel.run.refused", { defaultValue: "被拦下" }),
+                value: String((state.run && state.run.refused) || 0),
+              },
+              {
+                key: "surface",
+                label: t("panel.run.surface", { defaultValue: "常驻目录" }),
+                value:
+                  String((state.run && state.run.surface_categories) || 0) +
+                  t("panel.run.surface.unit", { defaultValue: " 类" }),
+              },
+            ]}
+          />
+        </Inline>
+        {state.run && state.run.last_call ? (
+          <Text>
+            {t("panel.run.last", { defaultValue: "最近一次" }) +
+              "：" +
+              String(state.run.last_call) +
+              (state.run.last_reason
+                ? " → " + String(state.run.last_reason)
+                : "")}
+          </Text>
+        ) : null}
       </Stack>
     </Card>
   );

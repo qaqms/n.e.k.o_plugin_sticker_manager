@@ -13,9 +13,9 @@
 from __future__ import annotations
 
 from conftest import FakeConfig, FakeHostContext, build_plugin
-from sticker_manager import _SEND_TOOL_BASE
 from sticker_manager.core.configuration import EAGERNESS_LEVELS, StickerManagerSettings
 from sticker_manager.core.eagerness import send_tool_description
+from sticker_manager.core.tool_surface import build_send_tool_description
 
 
 def _plugin(tmp_path, *, send: dict | None = None):
@@ -93,46 +93,46 @@ def _meta(description: str) -> dict:
 
 class TestApplyTierToTool:
     def test_tier_swap_rewrites_the_description(self, tmp_path):
-        plugin, _host = _plugin(tmp_path)
+        plugin, _host = _plugin(tmp_path, send={"eagerness": "eager"})
         registry = _Registry({"sticker_send": _meta("旧描述")})
         _attach(plugin, registry)
-        assert plugin._apply_send_tool_tier("eager") is True
+        assert plugin._apply_send_tool_surface() is True
         applied = registry.tools["sticker_send"]["description"]
         assert applied != "旧描述" and "爱发档" in applied
         assert ("unregister", "sticker_send") in registry.calls
 
     def test_same_description_skips_the_ipc_round_trip(self, tmp_path):
-        plugin, _host = _plugin(tmp_path)
-        same = send_tool_description(_SEND_TOOL_BASE, "eager")
+        plugin, _host = _plugin(tmp_path, send={"eagerness": "eager"})
+        same = build_send_tool_description(plugin._send_tool_catalog(), "eager")
         registry = _Registry({"sticker_send": _meta(same)})
         _attach(plugin, registry)
-        assert plugin._apply_send_tool_tier("eager") is True
+        assert plugin._apply_send_tool_surface() is True
         assert registry.calls == []
 
     def test_failure_rolls_the_old_description_back(self, tmp_path):
-        plugin, _host = _plugin(tmp_path)
+        plugin, _host = _plugin(tmp_path, send={"eagerness": "eager"})
         registry = _Registry({"sticker_send": _meta("旧描述")}, fail_registers=1)
         _attach(plugin, registry)
-        assert plugin._apply_send_tool_tier("eager") is False
+        assert plugin._apply_send_tool_surface() is False
         assert ("register", "旧描述") in registry.calls
         assert registry.tools["sticker_send"]["description"] == "旧描述"
 
     def test_double_failure_leaves_a_log_not_a_crash(self, tmp_path):
-        # 连回滚都失败：不抬异常（换档不该把启动或入口调用炸掉），工具确实没了。
-        plugin, _host = _plugin(tmp_path)
+        # 连回滚都失败：不抬异常（重挂不该把启动或入口调用炸掉），工具确实没了。
+        plugin, _host = _plugin(tmp_path, send={"eagerness": "eager"})
         registry = _Registry({"sticker_send": _meta("旧描述")}, fail_registers=2)
         _attach(plugin, registry)
-        assert plugin._apply_send_tool_tier("eager") is False
+        assert plugin._apply_send_tool_surface() is False
         assert "sticker_send" not in registry.tools
 
     def test_missing_sdk_face_is_a_no_op(self, tmp_path):
         plugin, _host = _plugin(tmp_path)
-        assert plugin._apply_send_tool_tier("eager") is False  # 桩基类没有注册面 → 只记日志
+        assert plugin._apply_send_tool_surface() is False  # 桩基类没有注册面 → 只记日志
 
     def test_config_change_and_panel_switch_both_reapply(self, tmp_path, run_async):
         plugin, host = _plugin(tmp_path, send={"eagerness": "reserved"})
         applied: list[str] = []
-        plugin._apply_send_tool_tier = lambda tier: applied.append(tier) or True
+        plugin._apply_send_tool_surface = lambda: applied.append(plugin._settings.send.eagerness) or True
         run_async(plugin.on_config_change())
         run_async(plugin.set_eagerness_entry(eagerness="eager"))
         assert applied == ["reserved", "eager"], "改配置与面板切档都要重挂描述"

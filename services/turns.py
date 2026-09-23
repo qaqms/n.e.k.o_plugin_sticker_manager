@@ -128,6 +128,8 @@ class TurnWatcher:
         self._now = now if callable(now) else time.monotonic
         self._seen: dict[str, float] = {}
         self._counts: dict[str, int] = {}
+        # 本次运行累计见过的用户轮（分母，不归零）。
+        self._turns_seen = 0
         self._available = False
         self._last_error_logged = 0.0
         self._last_heartbeat_logged = 0.0
@@ -138,6 +140,11 @@ class TurnWatcher:
     def available(self) -> bool:
         return self._available
 
+    @property
+    def turns_seen(self) -> int:
+        """本次运行见过的用户轮总数（面板与日志的分母）。"""
+        return self._turns_seen
+
     def turns_since(self, lanlan: str) -> int:
         return self._counts.get(lanlan, 0)
 
@@ -146,6 +153,7 @@ class TurnWatcher:
         return {
             "source": "bus" if self._available else "unavailable",
             "turns_since_inject": dict(self._counts),
+            "turns_seen": self._turns_seen,
             "latest_turn_ts": max(self._seen.values(), default=None),
         }
 
@@ -172,6 +180,9 @@ class TurnWatcher:
             return None
         self._seen[target] = turn.ts
         self._counts[target] = self._counts.get(target, 0) + 1
+        # v0.17.1：本次运行见过的用户轮总数（分母）。与 `_counts` 是两把尺：
+        # `_counts` 是"距上次注入攒了几轮"（注入成功即清零），这个是累加不归零。
+        self._turns_seen += 1
         return UserTurn(ts=turn.ts, text=turn.text, lanlan=target, is_voice=turn.is_voice)
 
     # --- 总线读（全 getattr 化：形状缺失降级不抛）---------------------------

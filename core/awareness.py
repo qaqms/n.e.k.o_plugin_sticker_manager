@@ -1,15 +1,15 @@
 """存在感注入（v0.2.0）的纯函数层：选"注什么"，拼"注成什么样"。
 
 **为什么需要它**：`sticker_list` / `sticker_send` 两个工具一直在，但它们考的是
-"她想不想得起来用"。参考项目的做法是每轮把分类目录喂进上下文——那是平台钩子，
-插件拿不到；插件侧的等价通道是 `push_message(visibility=[], ai_behavior="read")`
-的静默注入（our_life 的 injector 已验证这条在 timer 里可走）。本模块只管两件事：
+"她想不想得起来用"。注入就是那句"想起来"。
 
-1. **挑内容**：库不为空才有存在感；带的是"最近常用"的前 N 张（她最常甩出去的那几张
-   最能唤起"哦我还有这个"），不是全目录——低频提示不是目录复读机。
-2. **拼文案**：给模型看的中文（our_life 同一纪律：面向模型的注入文本不走 i18n，
-   面板/入口的用户文案才走）。行形状复用 `format_catalog_for_model`，
-   她从这里看到的行与 `sticker_list` 返回的完全对偶——两处必须同一把尺。
+**v0.17.0 把职责收窄了**：目录（分类全表）不再由注入带——它搬进了 `sticker_send` 的
+工具描述（`core/tool_surface.py`），那里每轮都在场；注入是排干即弃的一次性 cue，
+当目录载体不合格。本模块现在只管两件事：
+
+1. **挑时机**：`injection_due_for_turn` 把"新一轮到了"翻成"这轮注不注"（纯判定）。
+2. **拼文案**：库大小 + 指向常驻面的一句 + 按档位的意愿段。空库回空串=不该注。
+   给模型看的中文不走 i18n（our_life 同一纪律），面板/入口的用户文案才走。
 
 节奏（间隔多少秒、注入给谁）不在这层：那是 services/awareness.py 与时钟的事。
 """
@@ -18,9 +18,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from .catalog import Sticker, format_catalog_for_model, format_group_overview
+from .catalog import Sticker
 from .configuration import INJECT_MODE_DEFAULT, INJECT_MODES
-from .eagerness import injection_guidance
+from .eagerness import injection_guidance, injection_pointer
 
 
 def normalize_mode(mode: Any) -> str:
@@ -54,49 +54,31 @@ def injection_due_for_turn(
 # 轮 C 起中段多一条**使用规则**（学习外部系统 提示词里"区分安慰与自述、不贴切就不发"
 # 与数量软提示）：硬闸在发送层的冷却，软提示进这段文案——两层分离，各管各的。
 _HEADER = "【表情包】你的收藏间里有 {count} 张表情包。"
+# v0.17.0：**目录与常货行从注入里退场**。它们搬去了常驻面（`core/tool_surface.py`
+# 拼进 `sticker_send` 的工具描述，每轮都在场），注入只剩"想起来"这一件事。
+# 理由不是省字——是载体错了：`ai_behavior="read"` 是排干即弃的一次性 cue，文字模式
+# 等下一个用户话轮、语音模式要等下一次自然热切换（宿主 lifecycle.py 明写"哪怕隔好几个
+# 话轮"）。把目录写进这种 cue，等于把地图塞进一张会过期的便条。
 # 意愿段与节奏段都在 `core/eagerness.py`（v0.15.0 收口）：那里同时管"注入怎么说"和
 # "工具描述怎么说"，两处许可强度必须同向，所以不许在这边再抄一份。
-_RECENT = "最近常用的：\n{lines}"
-_GROUPS = "你的套图（挑组再挑图，也可直接用 sticker_send 带 group 让组内帮你选）：\n{overview}"
-_FOOTER = (
-    "聊天里想配张图就用 sticker_send 发（给关键词会帮你筛，候选不止一个会回列表让你挑 id；"
-    "先 sticker_list 可以看全部）。别硬找、别连发；主人点名要再看某张时，用 force 绕行。"
-)
-
-
-def pick_recent(stickers: list[Sticker], limit: int) -> list[Sticker]:
-    """可选面（未禁用）里按"最近爱用"挑前 N 张：使用数 > 最近时刻 > 更早入库。
-
-    排序口径与 `search_stickers` 空查询一致——同一个"常货"定义在两处出现，
-    所以直接走同一条 key（对偶纪律）。
-    """
-    pool = [s for s in stickers if not s.disabled]
-    ranked = sorted(pool, key=lambda s: (-s.use_count, -s.last_used_at, s.added_at))
-    return ranked[: max(0, limit)]
-
-
+# v0.19.0：这句从"去看说明"改成**点名工具 + 说清现在就能做**。同门的经验是三面叠加
+# （描述给判据 + 事件门控的点名提醒 + 返回值指挥下一步），只靠常驻面那一条推不动她
+# ——见 `core/eagerness.TRIGGER_CRITERIA` 上方注释。尺在 `core/eagerness.injection_pointer`。
 def build_awareness_text(
     stickers: list[Sticker],
     *,
-    max_lines: int,
-    groups: dict[str, str] | None = None,
     eagerness: str = "natural",
 ) -> str:
     """拼一条注入文本。空库回空串——调用方拿空串当"这拍不该注"。
 
-    轮 F：分组概览插在指南之后、常货之前——她的"有什么"心智先从逐图清单升一层到
-    分类目录（对齐外部系统每轮喂分类行的体验，只是我们靠低频静默注入）。
+    v0.17.0 起它只有三句：库有多大 + 点名怎么做 + 按档位的意愿/节奏。
+    轮 F 那版还会附套图分类概览与最近常用前 N 行——那是把一次性 cue 当目录载体用，
+    实机账本（10 次注入 / 2 次发图）之后换成了常驻面。
     v0.14.0：意愿段按「配表情积极度」选档，不在册的档位退到 natural（与配置读入同一条尺）。
     """
     total = sum(1 for s in stickers if not s.disabled)
     if total <= 0:
         return ""
-    parts = [_HEADER.format(count=total), injection_guidance(eagerness)]
-    overview = format_group_overview(stickers, groups or {})
-    if overview:
-        parts.append(_GROUPS.format(overview=overview))
-    lines = format_catalog_for_model(pick_recent(stickers, max_lines), max_lines, groups)
-    if lines:
-        parts.append(_RECENT.format(lines=lines))
-    parts.append(_FOOTER)
-    return "\n".join(parts)
+    return "\n".join(
+        [_HEADER.format(count=total), injection_pointer(eagerness), injection_guidance(eagerness)]
+    )

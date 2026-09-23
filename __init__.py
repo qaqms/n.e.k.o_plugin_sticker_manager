@@ -29,6 +29,7 @@ v0.2.0「她得记得自己有表情」：三件事——① 存在感注入（s
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import random
@@ -56,12 +57,16 @@ from .core import (
     EAGERNESS_LEVELS,
     GROUP_DESC_MAX_CHARS,
     MAX_STICKER_BYTES,
+    NEXT_STEP_NOTE,
     OFFICIAL_PACK_RELPATH,
     PREVIEW_CHUNK_BYTES,
+    SEND_TEXT_MAX_CHARS,
     UPLOAD_CHUNK_BYTES,
     VISIBLE_TEXT_MAX_CHARS,
     Sticker,
     StickerManagerSettings,
+    build_send_tool_description,
+    catalog_for_tool,
     format_catalog_for_model,
     format_group_overview,
     normalize_group,
@@ -70,12 +75,11 @@ from .core import (
     parse_tags_field,
     resolve_send_target,
     search_stickers,
-    send_tool_description,
     validate_desc,
     validate_desc_optional,
     validate_optional_text,
 )
-from .services import Awareness, LanlanResolver, Library, Sender, ToolWatch
+from .services import Awareness, LanlanResolver, Library, RunStats, Sender, ToolWatch, gave_shape
 
 __all__ = ["StickerManagerPlugin"]
 
@@ -85,18 +89,14 @@ _MAX_BASE64_CHARS = 12 * 1024 * 1024
 # 超过就是故意的帧溢出尝试，在解码前拦下（同预览方向的 4,784,128 字节尺）。
 _UPLOAD_B64_MAX_CHARS = 4 * 1024 * 1024
 
-# sticker_send 的工具描述正文（v0.15.0）：档位的许可句由 `core/eagerness.py` 追加。
-# 为什么工具描述也要吃档位：注入文案会随对话沉底（实机 6 次注入只换来 2 次发图，
-# 且两次都紧跟在注入后一分钟内），而工具列表每一轮都在场——那才是常驻的杠杆。
+# sticker_send 的工具描述（v0.17.0 起是**常驻目录面**）：能力句 + 读表指引 + 激活区
+# 分类全表 + 档位许可句，拼装尺在 `core/tool_surface.py`。
+# 为什么目录放这儿：工具列表每轮都随请求喂给模型，且重挂即推活会话；而存在感注入是
+# 排干即弃的一次性 cue（语音模式还要等自然热切换）。v0.14/v0.15/v0.16 三轮都在调
+# "多久提醒她一次"，实机账本（44 轮 / 12 提醒 / 3 发图）说明错的不是频率，是**载体**。
+# 装饰器用的是空目录形状：万一重挂不可用，她看到的仍是与当前行为一致的那句。
 _SEND_TOOL_NAME = "sticker_send"
-_SEND_TOOL_BASE = (
-    "发一张表情包到聊天里。给 id 最准；给 group：从那个套图分组里帮你选一张（组内随机，"
-    "刚发过的会自动排除）；给关键词：筛得只剩一张就直接发，候选不止一张会把清单回给你——"
-    "看一眼再用 id 发第二刀。什么都没给会拒。发不出去会告诉你原因，别连试；"
-    "刚发过的会被'最近不重复'挡下，只有主人点名要再看某张时才带 force=true 绕行。"
-)
-# 装饰器用的是默认档形状：万一重注册不可用，她看到的至少是与默认行为一致的那句。
-_SEND_TOOL_DESCRIPTION_DEFAULT = send_tool_description(_SEND_TOOL_BASE, EAGERNESS_DEFAULT)
+_SEND_TOOL_DESCRIPTION_DEFAULT = build_send_tool_description("", EAGERNESS_DEFAULT)
 
 
 # 工具层拒发的二段指引（面向模型，同 multi_candidates 的 hint 一样走硬编码中文：
@@ -146,7 +146,18 @@ class StickerManagerPlugin(NekoPluginBase):
     def __init__(self, ctx: Any):
         super().__init__(ctx)
         self._settings = StickerManagerSettings.defaults()
-        self._library = Library(self.data_path("library"), logger=self.logger)
+        # v0.17.0：库一落盘就把"她的工具描述该重挂了"打个标——收口在 `Library.save()`，
+        # 所以新增入口只要走 save() 就自动带上，不必在每个调用点各记一遍。
+        # 这里只打标不发 IPC：批量导入会连着 save() 上百次。真正重挂在 10s 的 turns 拍。
+        self._surface_dirty = True
+        # 缩略图降级整轮只吼一次（v0.17.2）：一墙 190 张各自降级就是 190 行日志，
+        # 而"刷屏"本身就是本轮要修的两件事之一。
+        self._thumb_fallback_logged = False
+        self._library = Library(
+            self.data_path("library"),
+            logger=self.logger,
+            on_saved=self._mark_surface_dirty,
+        )
         self._sender = Sender(self, self._library, logger=self.logger)
         # 工具注册心跳（v0.1.4）：@llm_tool 只在启动时发一次 IPC，main_server 没就绪
         # 或重启后她的两个工具会静默缺席（见 services/tool_watch.py 模块 docstring）。
@@ -158,6 +169,8 @@ class StickerManagerPlugin(NekoPluginBase):
         # 存在感注入（v0.2.0）：与 tool_watch 共用 60s 拍，内部按角色卡时钟自节流。
         # 与总开关是「与」关系——[sticker_manager].enabled=false 时不注。
         self._awareness = Awareness(self, self._library, logger=self.logger, resolver=self._lanlan)
+        # 本次运行读数（v0.17.1 观测轮）：只记账不参与任何决策，进程重启归零。
+        self._runstats = RunStats()
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -179,8 +192,8 @@ class StickerManagerPlugin(NekoPluginBase):
         except Exception:  # noqa: BLE001 - 播种异常只进日志，不拖死启动
             self.logger.warning("sticker_manager official seed leaked", exc_info=True)
             seed_note = "leaked"
-        # v0.15.0：把她配图的意愿写进常驻面（工具描述），不只在会沉底的注入里。
-        self._apply_send_tool_tier(self._settings.send.eagerness)
+        # v0.17.0：她的分类目录 + 配图意愿都装进常驻面（工具描述），不再只活在一次性注入里。
+        self._refresh_send_tool_surface()
         self.logger.info(
             "sticker_manager ready: enabled={} stickers={} io_ok={} official_seed={}",
             self._settings.enabled,
@@ -200,7 +213,7 @@ class StickerManagerPlugin(NekoPluginBase):
     @lifecycle(id="config_change")
     async def on_config_change(self, **_):
         await self._reload_settings()
-        self._apply_send_tool_tier(self._settings.send.eagerness)
+        self._refresh_send_tool_surface()
         return Ok({"status": "config_updated", "enabled": self._settings.enabled})
 
     @lifecycle(id="shutdown")
@@ -238,13 +251,23 @@ class StickerManagerPlugin(NekoPluginBase):
         会把连发的几条用户轮并成一轮看见（同门 forever_companion 同样用 10s）。
         为什么必须自己兜异常：这一拍是整条存在感链路唯一的驱动，炸出去就是静默失声——
         而那正是本轮要修的症状。
+
+        v0.17.0 顺手当常驻目录面的扫尾：库一变（`Library.save()` 的收口回调）就打标，
+        这一拍最多 10 秒后把她的工具描述重挂一次。为什么不在回调里直接发 IPC：导入
+        官方包会连着 save() 190 次，那就是 190 个 `session.update` 打在一条线上。
+        两件事各兜各的异常——蹭在一起就是一个坏了把另一个的表也标黄（陷阱 16 同族）。
         """
         try:
             awareness = await self._awareness.maybe_run(settings=self._settings, now=time.time())
         except Exception:  # noqa: BLE001 - 注入坏掉不许带走 timer 线程
             self.logger.warning("sticker_manager awareness leaked", exc_info=True)
             awareness = {"status": "leaked"}
-        return Ok({"awareness": awareness})
+        try:
+            surface = self._refresh_send_tool_surface(force=False)
+        except Exception:  # noqa: BLE001 - 重挂坏掉不许带走这一拍（下拍还会再试）
+            self.logger.warning("sticker_manager tool surface leaked", exc_info=True)
+            surface = False
+        return Ok({"awareness": awareness, "tool_surface": surface})
 
     # ------------------------------------------------------------------
     # 管理入口（面板 + 命令面板共用）
@@ -979,32 +1002,90 @@ class StickerManagerPlugin(NekoPluginBase):
         """
         return await self._lanlan.resolve(_lanlan_from_kwargs(kwargs))
 
-    def _apply_send_tool_tier(self, tier: str) -> bool:
-        """把「配表情积极度」写进 `sticker_send` 的工具描述（v0.15.0）。
+    def _note_tool_call(
+        self,
+        *,
+        name: str,
+        result: dict[str, Any],
+        gave: str,
+        group: str = "",
+        query_len: int = 0,
+    ) -> None:
+        """她发起的每一次工具调用留一痕（v0.17.1 观测轮）：**只读结果，不改结果**。
 
-        注入文案会随对话沉底，工具列表却每轮都在场——想让她更想配图，这根才是常驻杠杆。
-        SDK 的 `register_llm_tool` 明写就是给"描述随配置变"用的；名字已在册时重注册会撞
-        EntryConflictError，所以先 unregister 再 register。
+        为什么值得单独一痕：主人那句"还是很少发"分不出三种病——她没想起来调 /
+        调了但被闸拦下 / 拦都没拦、图没出去。以前只有成功那一支有日志（`sticker sent`），
+        于是"0 次调用"和"0 次成功"在日志里长得一模一样。
+        隐私纪律：她的检索词只落长度；分类名是主人自己写的目录键，落原名——
+        "她挑了哪个分类、挑空了几次"正是本轮要看的东西。
+        """
+        reason = self._runstats.note_tool_call(
+            name=name, gave=gave, result=result, group=group, query_len=query_len
+        )
+        if reason:
+            outcome = f"refused reason={reason}"
+        elif result.get("sent"):
+            outcome = "sent"
+        else:
+            outcome = f"ok rows={result.get('count', '?')}" if name == "sticker_list" else "ok"
+        self.logger.info(
+            f"tool call: name={name} gave={gave}"
+            + (f" group={group}" if group else "")
+            + (f" q_len={query_len}" if query_len else "")
+            + f" outcome={outcome}"
+        )
 
-        三条底线：注册面缺席（桩/宿主改名）只记日志不动手；描述没变就不折腾 IPC；
-        重注册失败**先把原描述装回去**——宁可她读到旧档位的句子，也不能因为换档没了工具。
+    def _mark_surface_dirty(self) -> None:
+        """库落盘了 → 她那份常驻目录该重挂。只打标，不在这里发 IPC。"""
+        self._surface_dirty = True
+
+    def _send_tool_catalog(self) -> str:
+        """她该看见的分类全表：**激活区**里有未禁用图的那些分类（陷阱 23 那把尺）。"""
+        return catalog_for_tool(self._library.active_pool(), self._library.group_descs())
+
+    def _refresh_send_tool_surface(self, *, force: bool = True) -> bool:
+        """需要时把 `sticker_send` 的描述按当前库重挂一遍。
+
+        `force=False` 用在拍子上：只有脏了才动，且成功后清标。描述算出来与在册的一样
+        就不碰 IPC（v0.15.0 的纪律：换描述是重活，不该每拍都白干一次）。
+        """
+        if not force and not self._surface_dirty:
+            return True
+        ok = self._apply_send_tool_surface()
+        if ok:
+            self._surface_dirty = False
+        return ok
+
+    def _apply_send_tool_surface(self) -> bool:
+        """把「能力句 + 激活区分类全表 + 档位许可句」装进 `sticker_send` 的工具描述。
+
+        这是 v0.17.0 那根换了载体的杠杆：目录原本只活在存在感注入里（一次性 cue），
+        现在挪到每轮都在场的工具描述上。SDK 的 `register_llm_tool` 明写就是给
+        "描述随状态变"用的；名字已在册时重注册会撞 EntryConflictError，所以先 unregister
+        再 register。宿主侧 `register_tool_and_sync` 会把新快照直接推到活的 realtime
+        会话上，所以换区/建类不用等她下次开新会话。
+
+        三条底线（v0.15.0 定，本轮一字未改）：注册面缺席（桩/宿主改名）只记日志不动手；
+        描述没变就不折腾 IPC；重注册失败**先把原描述装回去**——宁可她读到旧目录，
+        也不能因为重挂失败没了这个工具。
         """
         unregister = getattr(self, "unregister_llm_tool", None)
         register = getattr(self, "register_llm_tool", None)
         lister = getattr(self, "list_llm_tools", None)
         if not (callable(unregister) and callable(register) and callable(lister)):
-            self.logger.info("sticker_send tier skipped: SDK 注册面不可用")
+            self.logger.info("sticker_send surface skipped: SDK 注册面不可用")
             return False
         try:
             metas = {str(meta.get("name")): meta for meta in lister()}
         except Exception:  # noqa: BLE001 - 读不到自己的工具表就什么都不做
-            self.logger.warning("sticker_send tier skipped: list_llm_tools 失败", exc_info=True)
+            self.logger.warning("sticker_send surface skipped: list_llm_tools 失败", exc_info=True)
             return False
         previous = metas.get(_SEND_TOOL_NAME)
         if not isinstance(previous, dict):
-            self.logger.warning("sticker_send tier skipped: 工具不在册")
+            self.logger.warning("sticker_send surface skipped: 工具不在册")
             return False
-        description = send_tool_description(_SEND_TOOL_BASE, tier)
+        catalog = self._send_tool_catalog()
+        description = build_send_tool_description(catalog, self._settings.send.eagerness)
         if str(previous.get("description") or "") == description:
             return True
         params = {
@@ -1017,9 +1098,21 @@ class StickerManagerPlugin(NekoPluginBase):
         }
         try:
             unregister(_SEND_TOOL_NAME)
-            return bool(register(**params))
+            applied = bool(register(**params))
+            if applied:
+                # v0.17.1：到场证据必须自己落在日志里。今晚判断"目录到底挂上没有"
+                # 靠的是手读宿主 GET /api/tools——一个需要人现场去问的读数等于没有读数。
+                categories = sum(1 for line in catalog.splitlines() if line.startswith("・"))
+                self._runstats.surface_applied(
+                    chars=len(description), categories=categories, tier=self._settings.send.eagerness
+                )
+                self.logger.info(
+                    f"sticker_send surface applied: chars={len(description)}"
+                    f" categories={categories} tier={self._settings.send.eagerness}"
+                )
+            return applied
         except Exception:  # noqa: BLE001 - 换档失败不许带走她的工具
-            self.logger.warning("sticker_send tier re-register failed", exc_info=True)
+            self.logger.warning("sticker_send surface re-register failed", exc_info=True)
             try:
                 register(
                     **{
@@ -1105,7 +1198,9 @@ class StickerManagerPlugin(NekoPluginBase):
         name=tr("entries.preview.name", default="取一张表情包的预览"),
         description=tr(
             "entries.preview.description",
-            default="按段返回图片字节（base64）：面板逐段拉取拼回 dataUrl。分段是为了躲宿主控制通道单帧上限（实测 3.95MB 图整张回包会被拒发导致超时）",
+            default="按段返回图片字节（base64）：面板逐段拉取拼回 dataUrl。分段是为了躲宿主控制通道单帧上限"
+            "（实测 3.95MB 图整张回包会被拒发导致超时）。kind=thumb 时改回一张 256px 缩略图"
+            "（一次到底、不分段），墙上的格子都走这一档；缩略图拿不到时自动回退原图",
         ),
         input_schema={
             "type": "object",
@@ -1115,16 +1210,43 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "integer",
                     "description": tr("fields.offset", default="从第几字节取（0 = 从头）"),
                 },
+                # v0.17.2：墙上格子只要一张 256px 小图。空或 "full" = 原图分段（老形状一字不变）。
+                "kind": {
+                    "type": "string",
+                    "description": tr("fields.preview_kind", default="thumb = 取缩略图；留空 = 原图"),
+                },
             },
             "required": ["id"],
             "additionalProperties": False,
         },
         timeout=15.0,
     )
-    async def preview_entry(self, id: str = "", offset: int = 0, **_):  # noqa: A002
+    async def preview_entry(self, id: str = "", offset: int = 0, kind: str = "", **_):  # noqa: A002
         sticker = self._library.get(id) if isinstance(id, str) else None
         if sticker is None:
             return Err(SdkError("sticker_not_found"))
+        # 缩略图先走缓存盘（v0.17.2）：命中时连原图字节都不读——本轮省的就是那一步。
+        if isinstance(kind, str) and kind.strip() == "thumb":
+            blob = await asyncio.to_thread(self._library.thumb_for, sticker)
+            if blob:
+                return Ok(
+                    {
+                        "note": "preview",
+                        "id": sticker.id,
+                        "mime": "image/jpeg",
+                        "size": len(blob),
+                        "offset": 0,
+                        "next_offset": len(blob),
+                        "chunk_base64": base64.b64encode(blob).decode("ascii"),
+                        "done": True,
+                        "kind": "thumb",
+                    }
+                )
+            # 降级不静默（ PIL 缺席/坏图/超字节都会走到这里），但**整轮只吼一次**：
+            # 一墙 190 张各自 fallback 就是 190 行日志，正是本轮要修的那个刷屏。
+            if not self._thumb_fallback_logged:
+                self._thumb_fallback_logged = True
+                self.logger.warning("thumb unavailable; falling back to original bytes (logged once)")
         try:
             data = self._library.image_path(sticker).read_bytes()
         except FileNotFoundError:
@@ -1245,7 +1367,7 @@ class StickerManagerPlugin(NekoPluginBase):
             return Err(SdkError("config_unavailable"))
         await self._reload_settings()
         # 换档当场把工具描述也换掉：那才是每轮都在场的那句话（v0.15.0）。
-        self._apply_send_tool_tier(self._settings.send.eagerness)
+        self._refresh_send_tool_surface()
         return Ok({"note": "eagerness_set", "eagerness": self._settings.send.eagerness})
 
     @ui.action(
@@ -1562,6 +1684,9 @@ class StickerManagerPlugin(NekoPluginBase):
                 "path": str(self._library.inbox_dir),
             },
             "awareness": self._awareness.snapshot(settings=settings, now=time.time()),
+            # v0.17.1 观测轮：本次运行的四把读数（内存态，重启归零——面板必须标"本次运行"）。
+            # 摆在这里是为了回答"到底断在哪一环"：话轮有多少 → 她调了几次 → 成了几次 → 拦了几次。
+            "run": self._runstats.snapshot(turns=self._awareness.turns_seen),
             "config": {
                 "cooldown_sec": settings.send.cooldown_sec,
                 "inline_max_bytes": settings.send.inline_max_bytes,
@@ -1599,6 +1724,19 @@ class StickerManagerPlugin(NekoPluginBase):
         timeout=10.0,
     )
     async def tool_sticker_list(self, query: str = "", group: str = "", **kwargs: Any) -> dict[str, Any]:
+        # 薄壳只干一件事：把"她调了这个工具、结果如何"记成一痕（v0.17.1 观测轮）。
+        # 判定逻辑一律留在 `_sticker_list_body` 里——本轮零行为变更，日志不参与决策。
+        result = await self._sticker_list_body(query=query, group=group, **kwargs)
+        self._note_tool_call(
+            name="sticker_list",
+            result=result,
+            group=group if isinstance(group, str) else "",
+            query_len=len(query) if isinstance(query, str) else 0,
+            gave=gave_shape(query=query, group=group),
+        )
+        return result
+
+    async def _sticker_list_body(self, query: str = "", group: str = "", **kwargs: Any) -> dict[str, Any]:
         if not self._settings.enabled:
             return {"ok": False, "reason": "not_enabled"}
         self._library.load()
@@ -1663,13 +1801,49 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "boolean",
                     "description": "仅当主人明确点名要再看/再发这张时置 true：跳过最近不重复与概率闸（冷却仍生效）",
                 },
+                "text": {
+                    "type": "string",
+                    "description": (
+                        f"想跟着这张图一起说的一句话（≤{SEND_TEXT_MAX_CHARS} 字）：填了就图文一条发出去，"
+                        "填了这句就别在调用前把同样的话再说一遍（会变成两条）。留空 = 只发图。"
+                    ),
+                },
             },
             "required": [],
         },
         timeout=20.0,
     )
     async def tool_sticker_send(
-        self, sticker_id: str = "", query: str = "", group: str = "", force: bool = False, **kwargs: Any
+        self,
+        sticker_id: str = "",
+        query: str = "",
+        group: str = "",
+        force: bool = False,
+        text: str = "",
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        # 同 `tool_sticker_list`：薄壳只留痕，判定一律在 `_sticker_send_body`。
+        # 这一痕就是本轮的要害——"她没调"与"她调了被闸拦下"以前在日志里长得一模一样。
+        result = await self._sticker_send_body(
+            sticker_id=sticker_id, query=query, group=group, force=force, text=text, **kwargs
+        )
+        self._note_tool_call(
+            name="sticker_send",
+            result=result,
+            group=group if isinstance(group, str) else "",
+            query_len=len(query) if isinstance(query, str) else 0,
+            gave=gave_shape(sticker_id=sticker_id, query=query, group=group, force=force, text=text),
+        )
+        return result
+
+    async def _sticker_send_body(
+        self,
+        sticker_id: str = "",
+        query: str = "",
+        group: str = "",
+        force: bool = False,
+        text: str = "",
+        **kwargs: Any,
     ) -> dict[str, Any]:
         if not self._settings.enabled:
             return {"ok": False, "reason": "not_enabled"}
@@ -1764,6 +1938,16 @@ class StickerManagerPlugin(NekoPluginBase):
                 "ok": False,
                 "reason": "no_match" if (has_id or has_query or has_group) else "id_or_query_required",
             }
+        # 图文同条（v0.18.0）：她把要说的话写进 `text`，图和这句话一起从插件这一条气泡出去。
+        # 只 trim 不改写——她给的措辞就是她给的措辞。上限拦的是"把整段回复塞进参数"，
+        # 那种话走她自己的回复通道更合适（署名也不同）。
+        caption = text.strip() if isinstance(text, str) else ""
+        if len(caption) > SEND_TEXT_MAX_CHARS:
+            return {
+                "ok": False,
+                "reason": "text_too_long",
+                "hint": f"配文最多 {SEND_TEXT_MAX_CHARS} 字：那句话太长就别写在这里，正常回文字就好。",
+            }
         result = await self._sender.send(
             sticker,
             lanlan=lanlan,
@@ -1771,6 +1955,7 @@ class StickerManagerPlugin(NekoPluginBase):
             source="tool",
             now=time.time(),
             force=bypass,
+            text=caption,
         )
         if not result.ok:
             self._sender.note_attempt_failed(
@@ -1785,7 +1970,14 @@ class StickerManagerPlugin(NekoPluginBase):
             if hint:
                 out["hint"] = hint
             return out
-        return {"ok": True, "sent": sticker.id, "desc": sticker.catalog_body(self._library.group_descs())}
+        return {
+            "ok": True,
+            "sent": sticker.id,
+            "desc": sticker.catalog_body(self._library.group_descs()),
+            # v0.19.0：同门每个情绪工具成功后都用 note 指挥下一步，我们以前只回三个字段——
+            # 她做完一件事后拿不到任何"接下来呢"，那一面是白扔的。不提任何闸（陷阱 29）。
+            "note": NEXT_STEP_NOTE,
+        }
 
     # ------------------------------------------------------------------
     # 内部

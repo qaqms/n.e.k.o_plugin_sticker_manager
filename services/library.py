@@ -45,6 +45,7 @@ from ..core.pack import (
     parse_pack_version,
     safe_member_name,
 )
+from ..core.thumbs import THUMB_CACHE_VERSION, build_thumb, thumb_filename
 
 # v2（v0.11.0 J-1）：顶层新增 zones / active_zone / group_zone 三键（区→分类→图）。
 # 读侧宽松兼容 v1（无这三键 = 旧平铺库，load() 里一次性迁进默认区）；写侧永远按 v2 写。
@@ -59,6 +60,11 @@ STICKER_DIRNAME = "stickers"
 # 选目录而不是浏览器多选当唯一批量通道：免 base64 膨胀、免逐次往返、
 # 成百张也不怕；点不到的文件（隐藏/子目录）一律不碰不删。
 INBOX_DIRNAME = "inbox"
+# 缩略图缓存（v0.17.2）：表情墙一格一图，以前每格拉的是**原图字节**——实机账是
+# 官方区 190 张 ≈34.7MB（base64 后 ≈46MB）走控制通道、并发 2，于是"加载图片超时"
+# 与"日志刷屏"（当天 363 行里 313 行是 preview）是同一个根因的两面。
+# 缓存按内容指纹命名 ⇒ 没有失效逻辑，内容变了自然重算；整目录删掉也不会坏（下次重生成）。
+THUMB_DIRNAME = "thumbs"
 # 直传暂存（v0.6.0 面板选择文件导入）：分块落盘在这里，完成即导入、随即删。
 # 与 inbox 的分工：inbox 是"主人自己找到了目录"的旁路，uploads 是面板会话的
 # 临时尸体——两者的文件都不该长期住下，但只有 inbox 参与"点导入"扫描。
@@ -87,11 +93,19 @@ class LibraryResult:
 
 
 class Library:
-    """表情库。`root` 是插件 data 目录（生产由 `plugin.data_path()` 提供）。"""
+    """表情库。`root` 是插件 data 目录（生产由 `plugin.data_path()` 提供）。
 
-    def __init__(self, root: Path, *, logger: Any = None):
+    `on_saved` 在**每次写盘成功**后被调一次（不传=不通知）。它是"库变了"这件事的唯一
+    收口：任何新增入口只要走了 `save()` 就自动带上，不用在调用点各记一遍。回调里只做
+    打标（便宜、同步），真正的重活（往宿主重挂工具描述）由调用方挪到自己的拍子上做——
+    批量导入会连着 save() 上百次，在回调里直接发 IPC 就是把会话刷爆。
+    回调抛了不许把一次成功的写盘说成失败，所以这里吞掉异常只记日志。
+    """
+
+    def __init__(self, root: Path, *, logger: Any = None, on_saved: Any = None):
         self._root = Path(root)
         self._logger = logger
+        self._on_saved = on_saved
         self._stickers: dict[str, Sticker] = {}
         # 分组说明（轮 F：“分类=描述”挂在组上，不挂在图上）；catalog.json 顶层 groups。
         self._groups: dict[str, str] = {}
@@ -127,6 +141,11 @@ class Library:
     @property
     def inbox_dir(self) -> Path:
         return self._root / INBOX_DIRNAME
+
+    @property
+    def thumbs_dir(self) -> Path:
+        """缩略图缓存目录（v0.17.2）。全部由我们生成，按内容指纹命名，可整目录删。"""
+        return self._root / THUMB_DIRNAME
 
     def inbox_files(self) -> list[Path]:
         """收件箱里可见的候选文件（排序稳定；不递归、不碰隐藏项）。"""
@@ -295,7 +314,27 @@ class Library:
             self._io_dirty = True
             return LibraryResult.failure(ERR_IO, "catalog_write_failed")
         self._io_dirty = False
+        self._notify_saved()
         return LibraryResult(ok=True)
+
+    def _notify_saved(self) -> None:
+        """写盘成功的收口通知（v0.17.0：库变了 → 她的工具描述该重挂）。
+
+        吞异常但不吞痕迹：库已经落盘了，不许被下游的打标动作反咬成"保存失败"，
+        可静默吞掉又会造出"盘面变了、她看到的目录没变"这种查不到的账——所以必须
+        warning 带栈（debug 不进日志文件，同 `services/turns.py` 那条纪律）。
+        """
+        hook = self._on_saved
+        if not callable(hook):
+            return
+        try:
+            hook()
+        except Exception:  # noqa: BLE001 - 通知失败不改写"存下来了"这个事实
+            if self._logger is not None:
+                try:
+                    self._logger.warning("library on_saved failed", exc_info=True)
+                except Exception:
+                    pass
 
     @property
     def io_dirty(self) -> bool:
@@ -717,6 +756,42 @@ class Library:
         # 所以这里不需要再做路径逃逸检查——检查在 add() 的入库口。
         return self.stickers_dir / sticker.file
 
+    def thumb_for(self, sticker: Sticker, *, build: Any = build_thumb) -> bytes | None:
+        """取这张图的缩略图字节；盘上没有就现做一份并落盘。`None` = 拿不到，调用方**降级回原图**。
+
+        缓存键是**内容指纹**不是 sticker id：内容变了自然重算，所以这里不需要任何失效逻辑，
+        同图重建（换了 id）也自动共用一份。整目录被删也不坏——下次要时重生成。
+
+        两条不许做错的尺：
+        - **命中缓存时绝不读原图**（本轮省的就是那 34.7MB，顺手 `read_bytes()` 一下等于白做）；
+        - 任何一步失败都只许"没有缩略图"，不许让格子空白——所以降级路径是回原图，不是报错。
+        """
+        digest = sticker.sha256
+        if digest:
+            cached = self.thumbs_dir / thumb_filename(digest)
+            if cached.is_file():
+                try:
+                    return cached.read_bytes()
+                except Exception:  # noqa: BLE001 - 缓存读不动就重做一份，别把图搞没
+                    self._log("thumb cache unreadable; regenerating")
+        try:
+            data = self.image_path(sticker).read_bytes()
+        except Exception:  # noqa: BLE001 - 原图都没了：preview 那条路会如实报 sticker_file_missing
+            return None
+        digest = digest or content_sha256(data)
+        blob = build(data)
+        if not blob:
+            return None
+        path = self.thumbs_dir / thumb_filename(digest)
+        try:
+            self.thumbs_dir.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".jpg.tmp")
+            tmp.write_bytes(blob)
+            tmp.replace(path)
+        except Exception:  # noqa: BLE001 - 写不下只是下次还要重做，这一次照样给得出图
+            self._log("thumb cache write failed; serving it anyway")
+        return blob
+
     # ------------------------------------------------------------------
     # 写路径
     # ------------------------------------------------------------------
@@ -940,9 +1015,30 @@ class Library:
                             self._log(f"orphan purge failed: {candidate.name}")
         except Exception:
             self._log("orphan scan failed")
+        # 缩略图缓存同批回收（v0.17.2）：目录里只认我们自己的命名（内容指纹 + 版本 + 尺寸），
+        # 别的一律不碰——这个目录理论上全是生成的，但"顺手全删"不是体检该做的事。
+        # 计数并进 purged_files（面板三格形状不动），分项数字进日志。
+        purged_thumbs = 0
+        wanted_thumbs = {thumb_filename(s.sha256) for s in self._stickers.values() if s.sha256}
+        try:
+            if self.thumbs_dir.is_dir():
+                for candidate in self.thumbs_dir.iterdir():
+                    if not candidate.is_file() or THUMB_CACHE_VERSION not in candidate.name:
+                        continue
+                    if candidate.name in wanted_thumbs:
+                        continue
+                    try:
+                        candidate.unlink()
+                        purged_thumbs += 1
+                        purged_files += 1
+                    except Exception:
+                        self._log(f"thumb purge failed: {candidate.name}")
+        except Exception:
+            self._log("thumb scan failed")
         self._log(
             f"library repaired: entries_removed={removed_entries} "
-            f"orphans_purged={purged_files} hashes_backfilled={backfilled}"
+            f"orphans_purged={purged_files} (thumbs={purged_thumbs}) "
+            f"hashes_backfilled={backfilled}"
         )
         return {
             "removed_entries": removed_entries,

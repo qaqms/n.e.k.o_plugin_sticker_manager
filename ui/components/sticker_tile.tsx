@@ -17,10 +17,13 @@ export function StickerTile(props: {
 }) {
   const row = props.row;
   const t = props.surface.t;
+  // 墙上的格子只要 256px 缩略图（v0.17.2）：动图在这里只显示第一帧，
+  // 点开聚焦卡才拉原图看动画——主人拍板的取舍，见 ui/preview.ts 头部。
   const { preview, loading, boxRef } = useStickerPreview(
     props.surface,
     row.id,
     false,
+    "thumb",
   );
 
   const tileBox = (extra: Record<string, unknown>) => {

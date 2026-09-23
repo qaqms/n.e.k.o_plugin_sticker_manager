@@ -43,17 +43,18 @@ catalog_limit_for_model = 80
 usage_history_keep = 200
 
 [sticker_manager.awareness]
-# 存在感注入：把「你有一间表情收藏间 + 最近常用的几张」静默注进她的上下文
+# 存在感注入：静默往她的上下文里递一句「你有一间表情收藏间，这轮想配就发一张」
 # （visibility=[] 用户看不见；ai_behavior="read" 不起话轮）。与总开关是「与」关系。
 # v0.16.0 起由「用户开了新一轮」触发（轮询 bus.memory），不再按挂钟打点。
+# v0.17.0 起正文只剩这一句：分类目录改挂在 sticker_send 的工具描述上（每轮都在场），
+# 因为 read 注入是排干即弃的一次性 cue——语音模式还要等下一次自然热切换。
 enabled = true
 # every_user_message=每轮都注 | interval_n=攒够 N 条用户轮注一次。
 inject_mode = "interval_n"
-# interval_n 档下每 N 条用户轮注一次。
-inject_interval_n = 3
+# interval_n 档下每 N 条用户轮注一次。0 = 跟随「配表情积极度」档位（矜持 12 / 自然 6 / 爱发 3）；
+# 写正数就是您自己定死的节奏，档位不再插手。
+inject_interval_n = 0
 # 相邻两次注入的最小间隔（秒）：连珠炮对话防刷屏。
 min_interval_sec = 60.0
 # 降级节奏（秒）：总线一次都没读通过时退回按这个挂钟打点。
 interval_sec = 3600.0
-# 注入文本里"最近常用"最多带几行。
-max_recent_lines = 5

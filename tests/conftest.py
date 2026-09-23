@@ -282,13 +282,47 @@ class FakeImages:
 
 
 class FakePush:
-    """记录 ctx.push_message 的调用；reject_next 可模拟本地超限拦截。"""
+    """记录 ctx.push_message 的调用；reject_next 可模拟本地超限拦截。
+
+    **参数名白名单按 SDK 逐字核过**（宿主 `SdkContext.push_message`，用
+    `inspect.signature` 拿的真参数表）。为什么不是宽 `**kwargs` 直接收下：
+    v0.16.1 的教训——`bus.memory` 那条宽桩把"传错参数名"遮了三轮，真机每次抛
+    TypeError 都被 except 吞成"总线没信号"，测试却全绿（桩宽容=盲区）。
+    `push_message` 同一个病：传错键在真机是 TypeError，注入静默不发生。
+    """
+
+    # 宿主 SdkContext.push_message 的全部入参（除 self）；缺一或多一都算桩被用错。
+    SDK_PARAMS = frozenset(
+        {
+            "source",
+            "message_type",
+            "description",
+            "priority",
+            "content",
+            "binary_data",
+            "binary_url",
+            "metadata",
+            "unsafe",
+            "fast_mode",
+            "target_lanlan",
+            "visibility",
+            "ai_behavior",
+            "parts",
+            "coalesce_key",
+            "mime",
+            "delivery",
+            "reply",
+        }
+    )
 
     def __init__(self):
         self.calls: list[dict[str, Any]] = []
         self.reject_reason: str | None = None
 
     def push_message(self, **kwargs: Any) -> dict[str, Any]:
+        unknown = set(kwargs) - self.SDK_PARAMS
+        if unknown:
+            raise TypeError(f"push_message() got unexpected keyword argument(s): {', '.join(sorted(unknown))}")
         self.calls.append(dict(kwargs))
         if self.reject_reason is not None:
             reason = self.reject_reason

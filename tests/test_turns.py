@@ -335,10 +335,13 @@ class TestConfigReadIn:
             {"sticker_manager": {"enabled": True, "awareness": raw}}
         ).awareness
 
-    def test_defaults_are_turn_driven_with_a_house_proven_cadence(self):
+    def test_defaults_are_turn_driven(self):
         settings = self._awareness()
         assert settings.inject_mode == "interval_n"
-        assert settings.inject_interval_n == 3
+        # v0.19.0：默认 0 = **跟随「配表情积极度」档位**（矜持 12 / 自然 6 / 爱发 3）。
+        # 上一版这里是写死的 8，而实机证明"密度"不是主因、"什么时候该想到"才是——
+        # 于是节奏改由档位统一驱动，主人想定死仍可在文件里写正数（下一条测试钉着）。
+        assert settings.inject_interval_n == 0
         assert settings.min_interval_sec == 60.0
         assert settings.interval_sec == 3600.0  # 降级时钟保留老默认
 
@@ -355,6 +358,7 @@ class TestConfigReadIn:
         assert self._awareness(inject_mode=mode).inject_mode == "interval_n"
 
     def test_out_of_range_numbers_are_clamped(self):
-        settings = self._awareness(inject_interval_n=0, min_interval_sec=-30.0)
-        assert settings.inject_interval_n == 1  # <1 按 1 收 = 每轮
+        # v0.19.0 起 0 是**合法哨兵**（跟随档位），不再是"<1 按 1 收"；负数夹到 0。
+        settings = self._awareness(inject_interval_n=-5, min_interval_sec=-30.0)
+        assert settings.inject_interval_n == 0
         assert settings.min_interval_sec == 0.0  # 地板可以关掉

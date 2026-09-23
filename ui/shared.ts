@@ -77,12 +77,27 @@ export type Section = {
   editable: boolean;
 };
 
+export type RunState = {
+  turns?: number;
+  tool_calls?: number;
+  sent?: number;
+  refused?: number;
+  last_call?: string;
+  last_reason?: string;
+  running_sec?: number;
+  surface_chars?: number;
+  surface_categories?: number;
+  surface_tier?: string;
+};
+
 export type State = {
   enabled?: boolean;
   // v0.14.0：配表情积极度当前档（面板 Select 的回填源）。
   eagerness?: string;
   lanlan?: string;
-  counts?: {
+  // v0.17.1 观测轮：本次运行读数。内存态、重启归零——所以展示位必须写"本次运行"，
+  // 摆成"今日累计"就是假账（分母只覆盖开机到现在的这一段）。
+  run?: RunState;  counts?: {
     total?: number;
     enabled?: number;
     sent_total?: number;

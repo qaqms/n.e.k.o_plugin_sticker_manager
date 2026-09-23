@@ -34,6 +34,7 @@ import logging
 from typing import Any
 
 from ..core.awareness import build_awareness_text, injection_due_for_turn
+from ..core.eagerness import effective_inject_interval_n
 from .lanlan import LanlanResolver
 from .library import Library
 from .turns import TurnWatcher, UserTurn
@@ -77,6 +78,27 @@ class Awareness:
             return 0.0
         return max(0.0, interval_sec - (now - last))
 
+    @property
+    def turns_seen(self) -> int:
+        """本次运行见过的用户轮总数（v0.17.1 面板读数的分母，转交给轮次看门狗）。"""
+        return int(getattr(self._turns, "turns_seen", 0) or 0)
+
+    @staticmethod
+    def interval_n(settings: Any) -> int:
+        """这一档实际每几轮点名一次（v0.19.0）。
+
+        配置里 `inject_interval_n` 写 0（默认）= 跟随「配表情积极度」档位；
+        写正数 = 主人自己定死，档位不再插手。**只裁提醒密度**——
+        发送层的四把闸（冷却/去重/概率/复用窗口）一口都不吃档位，陷阱 26 那条没动。
+        """
+        awareness = getattr(settings, "awareness", None)
+        send = getattr(settings, "send", None)
+        configured = int(getattr(awareness, "inject_interval_n", 0) or 0)
+        tier = str(getattr(send, "eagerness", "natural") or "natural")
+        resolved = effective_inject_interval_n(tier, configured)
+        # `every_user_message` 档下每轮都注，这把尺不参与；仍返回一个可展示的数。
+        return max(1, resolved)
+
     def snapshot(self, *, settings: Any, now: float) -> dict[str, Any]:
         """给面板的状态行：驱动源活着没、按什么节奏注、下次最快多久以后。"""
         awareness = settings.awareness
@@ -93,7 +115,9 @@ class Awareness:
             "last_inject_at": self.last_inject_at or None,
             "driver": turn_snap["source"],
             "inject_mode": awareness.inject_mode,
-            "inject_interval_n": awareness.inject_interval_n,
+            # 面板显示的是**生效值**（档位驱动的 3/6/12 或主人写死的数），
+            # 回 0 会让人以为"每 0 轮一次"——那是把哨兵值当读数，仪器说谎的一种。
+            "inject_interval_n": self.interval_n(settings),
             "turns_since": turns_since,
             "turns_since_inject": counts,
             "min_next_wait_sec": min(
@@ -157,7 +181,7 @@ class Awareness:
                 if not injection_due_for_turn(
                     awareness.inject_mode,
                     turns_since_inject=turns_since,
-                    interval_n=awareness.inject_interval_n,
+                    interval_n=self.interval_n(settings),
                     floor_remaining_sec=waiting_floor,
                 ):
                     return {"status": "not_due", "turns_since": turns_since}
@@ -170,9 +194,8 @@ class Awareness:
         text = build_awareness_text(
             self._library.active_pool(),
             # J-1：存在感只报她当前世界（激活区）的家底，不报跨区总量。
-            max_lines=awareness.max_recent_lines,
-            groups=self._library.group_descs(),
             # v0.14.0：意愿段按「配表情积极度」选档——档位只改这段文案，不碰发送层的闸。
+            # v0.17.0：目录不再随注入走（它在工具描述里每轮都在场），这里只剩一句"想起来"。
             eagerness=settings.send.eagerness,
         )
         if not text:
@@ -212,6 +235,12 @@ class Awareness:
             ai_behavior="read",
             parts=[{"type": "text", "text": text}],
             target_lanlan=lanlan,
+            # v0.17.0：同一张角色卡的提醒共用一个合并键。宿主为这件事专门造了尺——
+            # 带同一个 key 的新 cue 会把还排在队里的旧 cue 收掉（`proactive.py:3330-3340`：
+            # "a rapid ai_behavior='read' stream reusing one key would pile up stale
+            # snapshots"）。语音模式下 cue 可能排队好几个话轮，不合并就会有一次对话
+            # 突然收到三条内容相同的旧提醒。空键=不合并，是宿主给的默认值，我们不用。
+            coalesce_key=f"sticker_manager:awareness:{lanlan}",
             description="sticker_manager:awareness",
         )
         return result if isinstance(result, dict) else {"submitted": False}
