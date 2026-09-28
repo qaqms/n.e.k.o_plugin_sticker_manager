@@ -111,6 +111,11 @@ _SEND_HINTS: dict[str, str] = {
 # 模块级可注入——测试里换掉即可钉死“选的是哪张”，生产就是 random.choice。
 _GROUP_PICK = random.choice
 
+# 运行账本的日志节流（v0.20.0）：读数原来只在面板上，判"今晚这次改动有没有用"得开着
+# WebUI 盯——而这条链路的证据必须在日志里离线可读。节流是照陷阱 31 加的（那天 363 行
+# 日志里 313 行是同一个入口的重复留痕）：指纹没变不吼，变了也最快两分钟一行。
+_LEDGER_LOG_MIN_SEC = 120.0
+
 
 def _clean_id_list(value: Any, *, cap: int = 200) -> list[str]:
     """批量入口的 ids 参数尺：只收非空字符串、去重保序、限量。"""
@@ -171,6 +176,9 @@ class StickerManagerPlugin(NekoPluginBase):
         self._awareness = Awareness(self, self._library, logger=self.logger, resolver=self._lanlan)
         # 本次运行读数（v0.17.1 观测轮）：只记账不参与任何决策，进程重启归零。
         self._runstats = RunStats()
+        # 运行账本的日志面（v0.20.0）：上一次报出去的指纹 + 时刻。见 `_maybe_log_run_ledger`。
+        self._ledger_fingerprint: tuple[Any, ...] = ()
+        self._ledger_logged_at = 0.0
 
     # ------------------------------------------------------------------
     # 生命周期
@@ -241,6 +249,11 @@ class StickerManagerPlugin(NekoPluginBase):
         except Exception:  # noqa: BLE001 - timer 无 watchdog，异常漏出去会停不了但也静默
             self.logger.warning("sticker_manager tool watch leaked", exc_info=True)
             watch = {"status": "leaked"}
+        try:
+            # 运行账本一行（v0.20.0）：读数原来只在面板上，判"改了有没有用"得开 WebUI。
+            self._maybe_log_run_ledger(now=time.time())
+        except Exception:  # noqa: BLE001 - 观测面坏掉不许影响心跳本体
+            self.logger.warning("sticker_manager run ledger leaked", exc_info=True)
         return Ok({"tool_watch": watch})
 
     @timer_interval(id="turns", seconds=10, name="sticker_manager turns")
@@ -1033,6 +1046,62 @@ class StickerManagerPlugin(NekoPluginBase):
             + (f" group={group}" if group else "")
             + (f" q_len={query_len}" if query_len else "")
             + f" outcome={outcome}"
+        )
+
+    def _maybe_log_run_ledger(self, *, now: float) -> None:
+        """把本次运行的四把数落到日志一行（v0.20.0：纯观测，零行为变更）。
+
+        为什么非但面板要有、日志也要有一行：`RunStats` 那四把数（话轮数 / 她调用数 /
+        发出成功数 / 被拦下数）此前只有开 WebUI 才读得到，而"她到底调没调"是判断任何
+        一次措辞改动有没有用的第一手证据。
+
+        更要紧的是它把**插件看不见的两个洞**变得可推断：宿主 realtime 侧有 4 次/15 秒的
+        工具熔断（宿主 `omni_realtime_client/_tools.py:810-833`，直接回她"停止调用任何
+        工具"且**不执行**），以及用户抢话时在飞 tool task 被整批取消（同文件 `:356-381`）。
+        这两种情况一次都不会进到本插件的计数里——日志上就是"话轮在涨、调用为 0"。
+        所以这一行必须把 turns 与 calls 并排打：只看 sent=0 分不清"她没想起来"、
+        "被闸拦了"和"被宿主吞了"，三种病的处置完全相反。
+        """
+        stats = self._runstats.snapshot(turns=self._awareness.turns_seen)
+        triggers = dict(self._awareness.trigger_counts)
+        # v0.20.1 两组新读数，各自钉一种"读数正常但仪器坏了"的病：
+        # · 信号面：`pointer=0/N` 分不清"这句没情绪"与"`turn.text` 读成空串"（总线形状变了），
+        #   所以把有文本/空文本/命中三个次数并排打（只记次数，原话永不落盘）。
+        # · 工具面：她**根本没有** `sticker_send` 的窗口由 `ToolWatch` 巡检发现，
+        #   `gaps>0` 就是那段时间的调用注定为 0；秒数带 `_max` 语义——巡检 300s 一次，
+        #   真实缺席起点不可知，这里报的是**上界**，不许当精确时长读。
+        aware = self._awareness
+        gaps = getattr(self._tool_watch, "gaps", 0)
+        gap_seconds_max = float(getattr(self._tool_watch, "gap_seconds_max", 0.0) or 0.0)
+        unreachable = getattr(self._tool_watch, "unreachable", 0)
+        fingerprint = (
+            stats["turns"],
+            stats["tool_calls"],
+            stats["sent"],
+            stats["refused"],
+            tuple(sorted(triggers.items())),
+            aware.turn_texts,
+            aware.turn_empty,
+            aware.signal_hits,
+            gaps,
+            unreachable,
+        )
+        if fingerprint == self._ledger_fingerprint:
+            return
+        if now - self._ledger_logged_at < _LEDGER_LOG_MIN_SEC:
+            # 节流期内不更新指纹：下一拍报的是最新值，而不是把中间值攒成一条过期的。
+            return
+        self._ledger_fingerprint = fingerprint
+        self._ledger_logged_at = now
+        self.logger.info(
+            f"run ledger: turns={stats['turns']} calls={stats['tool_calls']}"
+            f" sent={stats['sent']} refused={stats['refused']}"
+            f" last_reason={stats['last_reason'] or '-'}"
+            f" last_call={stats['last_call'] or '-'}"
+            f" pointer={triggers.get('signal', 0)}/{triggers.get('count', 0)}"
+            f" sig_text={aware.turn_texts}/{aware.turn_empty} hits={aware.signal_hits}"
+            f" tool_gaps={gaps}(≤{gap_seconds_max:.0f}s) unreachable={unreachable}"
+            f" surface_cats={stats['surface_categories']} tier={stats['surface_tier'] or '-'}"
         )
 
     def _mark_surface_dirty(self) -> None:

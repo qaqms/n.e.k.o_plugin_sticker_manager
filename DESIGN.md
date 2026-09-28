@@ -479,6 +479,71 @@
     ③ 成功也要回话（`NEXT_STEP_NOTE`），但**只说下一步做什么，不说会被什么拦**——
       闸的说明仍留在撞闸那一刻（`_SEND_HINTS`），否则就是给她的常驻面又添禁令。
 
+34. **常驻面要的是「每轮做一次判断」，不是「给她一份选项」；点名要跟着这句话，不是跟着计数器**
+    （v0.20.0，宿主源码 + 同门实机两头核实）：
+
+    陷阱 33 把「许可式措辞在往返型动作上是错配」定成了案，但 v0.19.0 只补到**判据**就停了。
+    判据回答「什么时候该想到它」，仍然没有任何东西要求她**这一轮真的去想一次**。宿主里唯一
+    被验证她真会自主调用的工具是 `recall_memory`，靠的也不是工具描述，是系统提示里那句
+    「should call the recall_memory tool **FIRST** … **even when she feels she already remembers**」
+    （宿主 `config/prompts/prompts_chara.py:121`）——祈使 + 每轮在场 + 明确否定「我以为不用」。
+    插件碰不到系统提示（见下面第三条），最接近的每轮在场面就是工具描述，于是把检查点写成
+    `sticker_send` 描述的**第一句**（`core/eagerness.DECISION_CHECKPOINT`，按档位分三条）。
+
+    这直接**翻掉了 v0.17.0 的一道尺**：旧 `test_says_all_three_forms_are_allowed_without_an_imperative`
+    钉的是「描述里不许有祈使句」。尺换成两条新的（`tests/test_tool_surface.py`）：
+    ① 检查点必须排在目录之前（她是先读任务再读选项的，判据在尾部只是附录）；
+    ② 每一档都必须留「判断完是不配」的合法出口——**要她判断，不是要她发**，丢掉这个出口就是逼她滥发。
+    禁令族措辞那条尺（陷阱 29）**没动**，检查点不是禁令。
+
+    第二条：点名跟着**内容**走。同门 `forever_companion/services/emotion_sense.py:430-520`
+    那条她真会照着调的提醒，触发源是「刚读完的这句用户话」（语气标签 + 阈值 + 节流），
+    而它的载体**也是 `read`**——所以本轮没有换 `respond`（那是按「respond 才确定开一轮」推出来的
+    方案，被这份先例否掉了：差别从来在触发源，不在投递档）。轮次计数退居兜底，
+    `event_gated=false` 可整条关回旧节奏；判据是本地词表 + 反应标点
+    （`core/awareness.emotional_signal`），**不为这件事调用模型**（陷阱 30 仍有效）。
+    地板 `min_interval_sec` 对它照样生效，读数看 `pointer=signal/count` 那一对，不看注入总数。
+
+    第三条，三条诚实边界，别把本轮读成「问题解决了」：
+    - 标记协议在这套宿主**做不出来**：唯一出站口 `send_lanlan_response`（宿主
+      `main_logic/core/turn.py:1643`）逐 chunk 流式，插件侧总线只读（`HOST_OWNED_STORE_NAMES`
+      拒绝插件 publish），两个真 hook 都是入站且仅进程内。
+    - `append_context` / `user_directives` 那两个「每轮在场的系统提示」槽是**宿主内部**的
+      （宿主 `main_logic/core/notify.py:196-240`），插件 API 没有对应面，且 realtime 侧本来就
+      收不了 `append_context`（同文件 309 行）。所以检查点只能落在工具描述这根次优面上。
+    - 宿主 realtime 有两个**插件不可见**的吞图洞：4 次/15 秒的工具熔断（直接回她「停止调用
+      任何工具」且**不执行**，宿主 `omni_realtime_client/_tools.py:810-833`）、用户抢话时把在飞
+      tool task 整批取消（同文件 `:356-381`）。两者都不进本插件任何计数，日志上就是「话轮在涨、
+      调用为 0」——这是 `run ledger` 那行必须把 `turns` 与 `calls` 并排打的原因
+      （只读 `sent=0` 分辨不出「没想起来 / 被闸拦 / 被宿主吞」这三种病）。
+
+35. **读数要能回答"为什么是 0"，否则等于没有读数**（v0.20.1，Steam 实机第一份账教的）：
+    0.20.0 上线后 8 分钟的账是 `turns=19 calls=2 sent=2 refused=0 pointer=0/5`。发图率从历史的
+    2~3% 抬到 10.5%、两次都是 `gave=group+text` 且第一次发生在任何注入之前（措辞面有效），
+    但同一份账里有两处**仪器哑口**，处置方向完全相反却读不出来：
+
+    - `pointer=0/5`：事件门控一次都没赢。可能是"这 19 句确实没情绪"（什么都不用改），
+      也可能是 `turn.text` 在这份宿主的总线记录里被读成空串（判据恒假，得修读法）。
+      旧日志按隐私纪律只记 `q_len`，**没有一处记过这句用户话的长度**，所以现场分不开。
+      补法：`turn_texts / turn_empty / signal_hits` 三把次数（只记次数）+ 注入行 `turn_chars=`。
+      命中数必须记在**判据求值那一瞬**而不是注入落地之后——否则被地板/空库挡掉的轮会把
+      `signal_hits` 压小，读数反过来成为"门控没工作"的假证。
+    - 23:55:17 心跳器补挂了 `sticker_list, sticker_send`：**那之前她根本没有 `sticker_send` 可调**，
+      这段时间她的"不发"与措辞毫无关系。而旧实现只在补挂那一刻吼一行，丢了多久、期间吃掉几轮全丢。
+      补法：`gaps / gap_seconds_max / unreachable` 进 `run ledger`。
+
+    三条诚实性尺（写进实现注释，别再漂回去）：
+    ① **巡检发现的缺席只能报上界**（300s 一次，真实起点不可知），字段名一律带 `_max`，
+      把它当精确时长读就是仪器说谎（陷阱 30 同族）；
+    ② **补挂 ≠ 确认在场**：健康基线在 repaired 时清空，要等下一次 healthy 才重新计时，
+      否则连续两次缺席会把同一段窗口报两遍；
+    ③ **`unreachable` 是第三种状态**：对面没答应既不算健康也不算缺席，单独一支；
+      开机首检就发现缺席时**只加次数、不编时长**。
+
+    顺带一条比 realtime 熔断更常发生的洞：`tool_registry` 是 main_server 的内存属性，
+    宿主侧重连/重启即清空（实机那条 `APIConnectionError` 就紧邻在同一分钟里）。
+    `tool_watch` 的 300s 心跳是目前唯一的兜底，**别把它当可选项拆掉**（陷阱 15 的结论仍在）。
+
 ## Read Context Plan
 
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）

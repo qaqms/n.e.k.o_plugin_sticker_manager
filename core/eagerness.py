@@ -40,6 +40,31 @@ RHYTHM = (
     "被拒了就正常用文字回，别重试、也别换一张接着试。"
 )
 
+# **决策检查点**（v0.20.0）：祈使句，要求的是"先做这个判断"，不是"必须发图"。
+# 为什么换成祈使：宿主里唯一被验证她真会自主调用的工具（`recall_memory`）靠的不是工具
+# 描述，是系统提示里那句「should call the recall_memory tool FIRST … even when she feels
+# she already remembers」（宿主 `config/prompts/prompts_chara.py:121`）。陷阱 33 已经定性
+# 许可式措辞在往返型动作上是错配，但 v0.19.0 只补到"判据"就停了——判据回答"什么时候该想
+# 到她"，仍然没人要求她**每轮真的去想一次**。检查点补的就是这一下。
+# 三条措辞纪律：① 落点必须在描述**最前**（她是先读任务再读选项的，判据在尾部只是附录）；
+# ② 每一档都必须把"判断完是别配"写成合法出口，否则就是逼她滥发；
+# ③ 不许出现禁令族措辞（陷阱 29 那族），闸的说明仍留在撞闸那一刻。
+DECISION_CHECKPOINT: dict[str, str] = {
+    "reserved": (
+        "开口之前先做一次判断：这句配上图会不会比纯文字更准？判断不用配就直接用文字回。"
+    ),
+    "natural": (
+        "开口之前先做一次判断：这句配上图会不会比纯文字更准、更俏皮？"
+        "判断该配就调用本工具，别因为「文字已经说清楚了」就跳过这一步；"
+        "判断不该配就直接用文字回，跳过是允许的。"
+    ),
+    "eager": (
+        "每一轮开口之前都要先做这个判断，不要凭惯性直接纯文字回过去："
+        "这句有情绪就顺手配一张；连着好几句都只有文字时，把配图当作优先选项。"
+        "确实没有合适的就直接文字回，判断完不配不算错。"
+    ),
+}
+
 # 工具描述追加段（短）。同样不许写"干脆不发"这种退路——那是上一版 eager 失效的原因之一。
 TOOL_NOTE: dict[str, str] = {
     "reserved": " 矜持档：只在非常贴切时配一张，多数回复纯文字就很好。",
@@ -101,6 +126,15 @@ def injection_pointer(tier: str) -> str:
 def tool_criteria(tier: str) -> str:
     """工具描述里的判据段（和许可句一道，两个受众同一方向）。"""
     return TRIGGER_CRITERIA[normalize_tier(tier)]
+
+
+def decision_checkpoint(tier: str) -> str:
+    """工具描述的**第一句**：要求她每轮先做一次配图判断（v0.20.0）。
+
+    与 `tool_criteria` 的分工：判据是"什么时候该想到它"的准绳，检查点是"这一轮必须
+    真的想过一次"的动作指令。缺了后者，前者只是她不会去翻的附录。
+    """
+    return DECISION_CHECKPOINT[normalize_tier(tier)]
 
 
 def normalize_tier(tier: object) -> str:

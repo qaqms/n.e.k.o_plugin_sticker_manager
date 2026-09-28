@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.20.1
+
+v0.20.1「把两个说不出口的读数补上」——0.20.0 在 Steam 实机跑出来的第一份账（19 轮 / 2 次自发调用 / 0 拒绝）
+暴露了两处仪器哑口，本轮**纯观测，零行为变更**：
+
+- **信号面**：`pointer=0/5` 讲不出病因。两种病处置完全相反——"这 19 句确实没情绪"（什么都不用改）
+  vs "`turn.text` 在总线里读成空串"（事件门控恒假，得修读法）。现在每轮求值时记
+  `turn_texts / turn_empty / signal_hits` 三个次数（**只记长度与次数，原话永不落盘**），
+  注入日志行尾加 `turn_chars=`。命中数记在**判据求值那一瞬**、不等注入落地，
+  否则被地板挡住的轮会把 `signal_hits` 压成假证。
+- **工具面**：实机 23:55:17 心跳器补挂了 `sticker_list, sticker_send`——那之前她**根本没有**
+  这个工具可调，而这条通道只在补挂那一刻吼一行，丢了多久、期间吃掉几轮全看不出来。
+  现在 `ToolWatch` 记 `gaps / gap_seconds_max / unreachable`，账本并排打
+  `tool_gaps=3(≤900s) unreachable=4`。**秒数是上界不是时长**：巡检 300s 一次，真实缺席起点不可知，
+  字段名一律带 `_max`；补挂≠确认在场，基线清空后要到下一次 healthy 才重新计时；
+  开机第一次巡检就发现缺席时**不编时长**（只加次数）。`unreachable` 单独一支——
+  对面没答应是"状态未知"，既不算健康也不算缺席。
+- 顺带记一条比 realtime 熔断更常见的洞：`tool_registry` 是 main_server 的内存属性，
+  宿主侧重连/重启即清空（实机紧邻 23:50:49 的 `APIConnectionError`）。成文为**陷阱 35**。
+- 发送层四把闸、措辞面、点门判据**一字未动**。测试 447 → 455。
+
+## 0.20.0
+
+v0.20.0「检查点 + 跟着这句话点名」——接着陷阱 33 没走完的那半步，并翻掉 v0.17.0 的一道尺：
+
+- **常驻面从「选项表」改成「决策检查点」**：`sticker_send` 的描述**第一句**现在要求她
+  「开口之前先做一次判断：这句配上图会不会比纯文字更准」（`core/eagerness.DECISION_CHECKPOINT`，
+  三档三条）。依据是宿主里唯一被验证她真会自主调用的先例——`recall_memory` 靠的是系统提示里
+  那句 「call the recall_memory tool **FIRST** … even when she feels she already remembers」
+  （宿主 `config/prompts/prompts_chara.py:121`），不是它的工具描述。
+- **翻尺**：旧门 `test_says_all_three_forms_are_allowed_without_an_imperative`（「描述里不许有祈使句」）
+  删掉，换成两道新门——检查点必须排在目录之前、每一档都必须留「判断完是不配」的合法出口。
+  要她**判断**，不是要她**发**。禁令族措辞那条旧尺一字未动。
+- **点名换触发源**：由「每 N 轮」改成「**这句用户话里有情绪**就点名一次」（`core/awareness.emotional_signal`
+  = 本地情绪词表 + 反应标点，不为这件事调用模型，陷阱 30 仍有效），轮次计数退居兜底，
+  新键 `[sticker_manager.awareness].event_gated`（默认开）可整条关回旧节奏。
+  载体仍是 `read`：同门 `forever_companion/services/emotion_sense.py:430-520` 那条真有效的提醒用的
+  就是 `read`，差别在触发源是刚读完的那句，不在投递档——原本打算换 `respond`，被这份先例否掉。
+- **读数补齐**：注入日志新增 `trigger=signal|count|wall_clock` 与累计 `trigger_counts`（面板快照同步），
+  每 60s 心跳落一行 `run ledger:`（turns / calls / sent / refused / pointer 占比 / 常驻面形状）。
+  为什么要并排打 `turns` 与 `calls`：宿主 realtime 有两个**插件不可见**的吞图洞
+  （4 次/15s 工具熔断、抢话时在飞 tool task 整批取消，宿主 `omni_realtime_client/_tools.py:810-833,356-381`），
+  它们一次都不会进本插件的计数，读数上就是「话轮在涨、调用为 0」。节流照陷阱 31 的尺来。
+- **发送层四把闸一口没动**（冷却 / 最近不重复 / 概率 / 复用窗口，陷阱 26），本轮全在措辞面与观测面。
+- 成文为**陷阱 34**，内含三条诚实边界：标记协议在本宿主做不出来、系统提示槽不对插件开放、
+   realtime 两个洞插件测不到。测试 421 → 447。
+
 ## 0.19.0
 
 v0.19.0「三面补齐 + 档位驱动节奏」（主人拍板：三面一起补，**且积极性要能自己调**）——先把一个错判记账清楚：

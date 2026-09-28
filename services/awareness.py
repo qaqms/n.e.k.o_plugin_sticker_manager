@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from ..core.awareness import build_awareness_text, injection_due_for_turn
+from ..core.awareness import build_awareness_text, emotional_signal, injection_due_for_turn
 from ..core.eagerness import effective_inject_interval_n
 from .lanlan import LanlanResolver
 from .library import Library
@@ -67,6 +67,16 @@ class Awareness:
         self.last_status = ""
         self.last_inject_at = 0.0
         self.last_target = ""
+        # v0.20.0：这一枪是谁开的（signal / count / wall_clock）+ 各开了几次。
+        # 事件门控的成败只看这两个读数，注入总数会骗人。
+        self.last_trigger = ""
+        self.trigger_counts: dict[str, int] = {}
+        # v0.20.1 事件门控的可解释性：读到的轮里有文本 / 空文本 / 命中情绪各几次。
+        # `signal_hits=0` 配 `turn_empty>0` = 总线形状问题；配 `turn_texts>0` = 词表没命中。
+        self.turn_texts = 0
+        self.turn_empty = 0
+        self.signal_hits = 0
+        self.last_turn_chars = 0
 
     # ------------------------------------------------------------------
     # 时钟与快照
@@ -118,6 +128,13 @@ class Awareness:
             # 面板显示的是**生效值**（档位驱动的 3/6/12 或主人写死的数），
             # 回 0 会让人以为"每 0 轮一次"——那是把哨兵值当读数，仪器说谎的一种。
             "inject_interval_n": self.interval_n(settings),
+            # v0.20.0：点名是谁开的这一枪（signal = 那句用户话带情绪，见 emotional_signal）。
+            "last_trigger": self.last_trigger,
+            "trigger_counts": dict(self.trigger_counts),
+            # v0.20.1：解释 `pointer=0/N` 用的三把数（只记长度与次数，不记原话）。
+            "turn_texts": self.turn_texts,
+            "turn_empty": self.turn_empty,
+            "signal_hits": self.signal_hits,
             "turns_since": turns_since,
             "turns_since_inject": counts,
             "min_next_wait_sec": min(
@@ -167,6 +184,7 @@ class Awareness:
         if not target:
             # 没有可归属的角色卡：不推进任何时钟，也不报错——没人说话就没地方注。
             return {"status": "no_target"}
+        pointer_event = False
         if not force:
             if turn is None and self._turns.available:
                 # 轮次源活着但这拍没有新轮：什么都不做。挂钟模式那条"每小时注一次"
@@ -178,11 +196,28 @@ class Awareness:
                     target, interval_sec=awareness.min_interval_sec, now=now
                 )
                 turns_since = self._turns.turns_since(target)
+                # v0.20.0 事件门控：这句用户话里有情绪反应时不等计数攒满就点名。
+                # 载体仍是 `read`（不是 respond）——同门 `emotion_sense.py:480-520` 那条
+                # 她真会照着调的提醒用的就是 read，差别在触发源是"刚读完的这句"。
+                event_gated = bool(getattr(awareness, "event_gated", True))
+                # v0.20.1 观测：`pointer=0/N` 这种读数必须能解释。两种病完全相反——
+                # "这句确实没情绪"（判据正常，别改词表）vs "`turn.text` 是空串"
+                # （总线形状变了，事件门控恒假）。只记**长度**，原话一律不落盘（隐私纪律同 sender）。
+                self.last_turn_chars = len(str(turn.text or ""))
+                if self.last_turn_chars:
+                    self.turn_texts += 1
+                else:
+                    self.turn_empty += 1
+                pointer_event = event_gated and emotional_signal(turn.text)
+                if pointer_event:
+                    self.signal_hits += 1
                 if not injection_due_for_turn(
                     awareness.inject_mode,
                     turns_since_inject=turns_since,
                     interval_n=self.interval_n(settings),
                     floor_remaining_sec=waiting_floor,
+                    signal=pointer_event,
+                    event_gated=event_gated,
                 ):
                     return {"status": "not_due", "turns_since": turns_since}
             else:
@@ -197,6 +232,7 @@ class Awareness:
             # v0.14.0：意愿段按「配表情积极度」选档——档位只改这段文案，不碰发送层的闸。
             # v0.17.0：目录不再随注入走（它在工具描述里每轮都在场），这里只剩一句"想起来"。
             eagerness=settings.send.eagerness,
+            event=pointer_event,
         )
         if not text:
             return {"status": "empty_library"}
@@ -212,11 +248,25 @@ class Awareness:
         self.last_status = "injected"
         self.last_inject_at = now
         self.last_target = target
+        # 是哪一路把她叫到这一轮的：signal（这句用户话有情绪）/ count（攒够轮次）/
+        # wall_clock（总线不可达的降级）。事件门控上线后要看的是 signal 占比，
+        # 不是注入总数——只涨总数说明门控没在工作。
+        trigger = (
+            "signal" if pointer_event else ("count" if turn is not None else "wall_clock")
+        )
+        self.last_trigger = trigger
+        self.trigger_counts[trigger] = self.trigger_counts.get(trigger, 0) + 1
         self._log(
             f"awareness injected: target={target} chars={len(text)}"
-            f" driver={'turn' if turn is not None else 'wall_clock'}"
+            f" driver={'turn' if turn is not None else 'wall_clock'} trigger={trigger}"
+            f" turn_chars={self.last_turn_chars if turn is not None else 0}"
         )
-        return {"status": "injected", "target": target, "chars": len(text)}
+        return {
+            "status": "injected",
+            "target": target,
+            "chars": len(text),
+            "trigger": trigger,
+        }
 
     # ------------------------------------------------------------------
     # 宿主通道（全部 getattr 化：测试替身/形状缺失一律降级不炸）

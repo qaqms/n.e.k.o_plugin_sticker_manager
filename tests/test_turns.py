@@ -23,6 +23,7 @@ from conftest import (
     user_message_record,
 )
 from sticker_manager.core.awareness import (  # pyright: ignore[reportMissingImports] — 包名由 conftest 在测试时注册；独立仓静态面不可解析
+    emotional_signal,
     injection_due_for_turn,
     normalize_mode,
 )
@@ -228,6 +229,57 @@ class TestInjectionDue:
     def test_interval_n_below_one_is_clamped_to_one(self):
         assert injection_due_for_turn("interval_n", turns_since_inject=1, interval_n=0, floor_remaining_sec=0.0) is True
 
+    def test_signal_points_before_the_count_is_full(self):
+        # v0.20.0 事件门控：这句有情绪就点名，不等 N 轮攒满（同门 fc 的 tone nudge
+        # 就是这个形状——触发源是刚读完的那句用户话，不是计数器）。
+        assert (
+            injection_due_for_turn(
+                "interval_n", turns_since_inject=0, interval_n=12, floor_remaining_sec=0.0, signal=True
+            )
+            is True
+        )
+
+    def test_floor_beats_the_signal_too(self):
+        # 地板不许被门控绕过，否则连珠炮情绪句会把注入打成每句都点。
+        assert (
+            injection_due_for_turn(
+                "interval_n", turns_since_inject=0, interval_n=12, floor_remaining_sec=0.5, signal=True
+            )
+            is False
+        )
+
+    def test_event_gated_off_restores_count_only_rhythm(self):
+        assert (
+            injection_due_for_turn(
+                "interval_n",
+                turns_since_inject=0,
+                interval_n=12,
+                floor_remaining_sec=0.0,
+                signal=True,
+                event_gated=False,
+            )
+            is False
+        )
+
+
+class TestEmotionalSignal:
+    """v0.20.0 点名的判据：只认"这句里有人在反应"。"""
+
+    @pytest.mark.parametrize(
+        "text",
+        ["今天加班到十一点，累瘫了", "哈哈哈哈笑死我了", "你是不是生我气了……", "想你了~", "帮我看看这个好不好呀~~"],
+    )
+    def test_reactions_count(self, text: str):
+        assert emotional_signal(text) is True
+
+    @pytest.mark.parametrize(
+        "text",
+        ["现在几点了", "帮我算一下 128 * 7", "把报告第三节的日期改成 5 月", "python 的 with 怎么用？", ""],
+    )
+    def test_business_questions_do_not(self, text: str):
+        # 误报的代价是她连着甩图，比漏报难看——参考与同门的判据都是"办事的时候纯文字"。
+        assert emotional_signal(text) is False
+
     @pytest.mark.parametrize("mode", ["", "whenever", None, 7, "OFF"])
     def test_unlisted_mode_degrades_to_default(self, mode: Any):
         assert normalize_mode(mode) == "interval_n"
@@ -267,6 +319,28 @@ class TestTurnDrivenAwareness:
         due = run_async(plugin._awareness.maybe_run(settings=settings, now=52.0))
         assert due["status"] == "injected"
         assert host.push.calls[-1]["target_lanlan"] == "K"
+
+    def test_signal_turn_points_immediately_without_waiting_for_the_count(self, tmp_path, run_async):
+        # v0.20.0 事件门控端到端：interval_n=12 还没攒满，但这句有情绪 ⇒ 立刻点名，
+        # 且推出去的那条带 lede、trigger 记成 signal（面板与日志要靠这个占比判断门控有没有活）。
+        plugin, host = self._plugin(tmp_path, [user_message_record(100.0, "今天被夸了，好开心", "K")])
+        settings = _turns(mode="interval_n", interval_n=12, floor=0.0)
+        result = run_async(plugin._awareness.maybe_run(settings=settings, now=50.0))
+        assert result["status"] == "injected" and result["trigger"] == "signal"
+        assert "（表情包点名）" in host.push.calls[-1]["parts"][0]["text"]
+        assert plugin._awareness.trigger_counts["signal"] == 1
+
+    def test_business_turn_still_follows_the_count(self, tmp_path, run_async):
+        # 反向半：判据不许把每轮都变成点名轮，纯信息问答照旧走计数。
+        plugin, host = self._plugin(tmp_path, [user_message_record(100.0, "帮我算一下 128 * 7", "K")])
+        settings = _turns(mode="interval_n", interval_n=12, floor=0.0)
+        assert run_async(plugin._awareness.maybe_run(settings=settings, now=50.0))["status"] == "not_due"
+        assert host.push.calls == []
+
+    def test_event_gated_off_is_exactly_the_old_rhythm(self, tmp_path, run_async):
+        plugin, host = self._plugin(tmp_path, [user_message_record(100.0, "今天被夸了，好开心", "K")])
+        settings = _turns(mode="interval_n", interval_n=12, floor=0.0, event_gated=False)
+        assert run_async(plugin._awareness.maybe_run(settings=settings, now=50.0))["status"] == "not_due"
 
     def test_floor_block_does_not_consume_the_count(self, tmp_path, run_async):
         # 地板只在"已经注过一次"之后生效（首轮没有历史可挡），所以先注一发再验：
@@ -311,6 +385,7 @@ def _turns(
     mode: str = "interval_n",
     interval_n: int = 3,
     floor: float = 60.0,
+    event_gated: bool = True,
 ) -> StickerManagerSettings:
     return StickerManagerSettings(
         enabled=True,
@@ -321,6 +396,7 @@ def _turns(
             inject_mode=mode,
             inject_interval_n=interval_n,
             min_interval_sec=floor,
+            event_gated=event_gated,
         ),
     )
 
@@ -343,15 +419,25 @@ class TestConfigReadIn:
         # 于是节奏改由档位统一驱动，主人想定死仍可在文件里写正数（下一条测试钉着）。
         assert settings.inject_interval_n == 0
         assert settings.min_interval_sec == 60.0
+        assert settings.event_gated is True  # v0.20.0：事件门控点名默认开
         assert settings.interval_sec == 3600.0  # 降级时钟保留老默认
 
     def test_written_keys_are_honoured(self):
         settings = self._awareness(
-            inject_mode="every_user_message", inject_interval_n=7, min_interval_sec=5.0
+            inject_mode="every_user_message",
+            inject_interval_n=7,
+            min_interval_sec=5.0,
+            event_gated=False,
         )
         assert settings.inject_mode == "every_user_message"
         assert settings.inject_interval_n == 7
         assert settings.min_interval_sec == 5.0
+        assert settings.event_gated is False
+
+    @pytest.mark.parametrize("raw", ["no", 1, None, ""])
+    def test_non_bool_event_gated_sinks_to_default(self, raw: Any):
+        # 与 enabled 同一把 `_as_bool` 尺：垃圾值不许让她的行为变野。
+        assert self._awareness(event_gated=raw).event_gated is True
 
     @pytest.mark.parametrize("mode", ["", "off", "ON_TRIGGER", 7, None])
     def test_unknown_mode_sinks_to_interval_n(self, mode: Any):
@@ -362,3 +448,65 @@ class TestConfigReadIn:
         settings = self._awareness(inject_interval_n=-5, min_interval_sec=-30.0)
         assert settings.inject_interval_n == 0
         assert settings.min_interval_sec == 0.0  # 地板可以关掉
+
+
+class _RecLogger:
+    """录音假 logger：只用来断言留痕（形状对齐 test_runstats 的同名替身）。"""
+
+    def __init__(self) -> None:
+        self.lines: list[str] = []
+
+    def _emit(self, message: str = "", **_kwargs: Any) -> None:
+        self.lines.append(str(message))
+
+    info = warning = error = debug = _emit
+
+    def text(self) -> str:
+        return "\n".join(self.lines)
+
+
+class TestSignalAccounting:
+    """v0.20.1：`pointer=0/N` 这种读数必须能解释病因，两种病的处置完全相反。"""
+
+    @staticmethod
+    def _feed(tmp_path, texts, settings, run_async, *, recorder: bool = False):
+        host = FakeHostContext(
+            config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
+            data_root=tmp_path,
+            bus=FakeBus([conversation_record("c", 1.0, "K")], memory_records=[]),
+        )
+        plugin, host = build_plugin(host)
+        plugin._library.add(data=PNG_BYTES, desc="猫猫挥手", tags=[])
+        if recorder:
+            # 注入器在构造时就把 logger 抓走了（`Awareness(self, ..., logger=self.logger)`），
+            # 事后只换 plugin.logger 不会生效——两处都要换。
+            plugin.logger = _RecLogger()
+            plugin._awareness._logger = plugin.logger
+        for index, text in enumerate(texts):
+            host.bus.memory.records.append(user_message_record(100.0 + index, text, "K"))
+            run_async(plugin._awareness.maybe_run(settings=settings, now=1000.0 + index))
+        return plugin
+
+    def test_empty_bus_text_is_counted_separately_from_a_miss(self, tmp_path, run_async):
+        # 总线把 content 写成空串（形状变了）与"这句确实没情绪"必须分得开：
+        # 前者要修读法，后者什么都不用改。
+        plugin = self._feed(tmp_path, ["现在几点了", ""], _turns(interval_n=99, floor=0.0), run_async)
+        assert plugin._awareness.turn_texts == 1
+        assert plugin._awareness.turn_empty == 1
+        assert plugin._awareness.signal_hits == 0
+
+    def test_signal_hit_is_counted_even_when_the_injection_is_not_due(self, tmp_path, run_async):
+        # 命中记在**判据求值那一瞬**，不等注入落地：否则被地板挡住的那些轮会让
+        # signal_hits 恒小于真实命中数，读数反过来变成"门控没工作"的假证。
+        # 第一注必成（该角色卡还没有历史，地板无从挡），第二注才被 500 秒地板拦下。
+        plugin = self._feed(
+            tmp_path, ["今天好开心啊", "还是好开心"], _turns(interval_n=99, floor=500.0), run_async
+        )
+        assert plugin._awareness.signal_hits == 2
+        assert plugin._awareness.trigger_counts.get("signal", 0) == 1
+
+    def test_injection_log_carries_the_turn_length(self, tmp_path, run_async):
+        plugin = self._feed(
+            tmp_path, ["现在几点了"], _turns(interval_n=1, floor=0.0), run_async, recorder=True
+        )
+        assert "turn_chars=5" in plugin.logger.text()  # "现在几点了" 五个字，只记长度不记原话

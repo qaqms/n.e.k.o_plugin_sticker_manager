@@ -209,3 +209,66 @@ def test_on_turns_entry_returns_ok_offline(run_async: Any) -> None:
     result = run_async(plugin.on_turns())
     assert result.is_ok()
     assert result.value["awareness"]["status"] == "disabled"
+
+
+# ---------------------------------------------------------------------------
+# 缺席窗口记账（v0.20.1）：把"她根本没有这个工具"的时长变成可推断的读数
+# ---------------------------------------------------------------------------
+
+
+def _scripted_watch(plugin: Any, payloads: list[Any]) -> ToolWatch:
+    """每次巡检回一份预设 payload（列表用尽后重复最后一份）。"""
+    state = {"i": 0}
+
+    async def fetch(url: str):
+        index = min(state["i"], len(payloads) - 1)
+        state["i"] += 1
+        return payloads[index]
+
+    return ToolWatch(plugin, fetch=fetch)
+
+
+def test_gap_seconds_accumulate_only_from_a_healthy_baseline(run_async: Any) -> None:
+    plugin = FakePlugin(["sticker_list", "sticker_send"])
+    full = {"tools_by_role": {"r": [{"name": "sticker_list"}, {"name": "sticker_send"}]}}
+    gone = {"tools_by_role": {"r": []}}
+    watch = _scripted_watch(plugin, [full, gone])
+    assert run_async(watch.maybe_run(now=1000.0))["status"] == "healthy"
+    repaired = run_async(watch.maybe_run(now=1000.0 + TOOL_WATCH_INTERVAL_SEC))
+    assert repaired["status"] == "repaired" and repaired["gaps"] == 1
+    # 上界语义：真实缺席起点在两次巡检之间，不可知；报的是"距上次确认在场"的秒数。
+    assert repaired["gap_seconds_max"] == TOOL_WATCH_INTERVAL_SEC
+    assert watch.gap_seconds_max == TOOL_WATCH_INTERVAL_SEC
+
+
+def test_first_sweep_missing_leaves_the_duration_unknown(run_async: Any) -> None:
+    # 开机第一拍就发现缺席：不能说"缺席了 0 秒"，也不能编一个时长——只记次数。
+    plugin = FakePlugin(["sticker_send"])
+    watch = _scripted_watch(plugin, [{"tools_by_role": {"r": []}}])
+    repaired = run_async(watch.maybe_run(now=5000.0))
+    assert repaired["status"] == "repaired" and repaired["gaps"] == 1
+    assert repaired["gap_seconds_max"] == 0.0
+
+
+def test_repair_alone_is_not_proof_of_presence(run_async: Any) -> None:
+    # 补挂≠确认在场：基线被清空，第二次缺席在没有新的 healthy 之前不再累加秒数。
+    plugin = FakePlugin(["sticker_send"])
+    gone, full = {"tools_by_role": {"r": []}}, {"tools_by_role": {"r": [{"name": "sticker_send"}]}}
+    watch = _scripted_watch(plugin, [full, gone, gone, full, gone])
+    run_async(watch.maybe_run(now=1000.0))  # healthy → 建立基线
+    first = run_async(watch.maybe_run(now=1300.0))
+    second = run_async(watch.maybe_run(now=1600.0))  # 补挂后没再确认过：秒数不再涨
+    assert first["gap_seconds_max"] == 300.0 and second["gap_seconds_max"] == 300.0
+    assert second["gaps"] == 2
+    run_async(watch.maybe_run(now=1900.0))  # healthy → 重新建立基线
+    third = run_async(watch.maybe_run(now=2200.0))
+    assert third["gaps"] == 3 and third["gap_seconds_max"] == 600.0
+
+
+def test_unreachable_is_neither_healthy_nor_a_gap(run_async: Any) -> None:
+    # 对面没答应 = 状态未知：算进 unreachable，绝不写成缺席秒数（那是仪器说谎）。
+    plugin = FakePlugin(["sticker_send"])
+    watch = _scripted_watch(plugin, [None])
+    result = run_async(watch.maybe_run(now=1000.0))
+    assert result["status"] == "unreachable"
+    assert watch.unreachable == 1 and watch.gaps == 0 and watch.gap_seconds_max == 0.0

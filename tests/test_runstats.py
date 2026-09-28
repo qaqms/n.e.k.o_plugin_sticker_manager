@@ -130,6 +130,59 @@ class TestToolCallTrace:
         assert "tool call:" not in plugin.logger.text()
 
 
+class TestRunLedgerLog:
+    """v0.20.0：四把数落到日志一行，且不许变成刷屏。"""
+
+    def test_changed_numbers_emit_one_ledger_line(self, tmp_path, run_async):
+        plugin, _host = self._wired(tmp_path)
+        run_async(plugin.tool_sticker_send(group="困与睡"))
+        plugin._maybe_log_run_ledger(now=10_000.0)
+        line = [text for text in plugin.logger.lines if text.startswith("run ledger:")]
+        assert len(line) == 1, plugin.logger.text()
+        assert "calls=1" in line[0] and "turns=" in line[0]
+
+    def test_same_numbers_do_not_repeat_themselves(self, tmp_path, run_async):
+        # 陷阱 31 的同一把尺：留痕只报变化，否则 363 行里 313 行是同一件事。
+        plugin, _host = self._wired(tmp_path)
+        run_async(plugin.tool_sticker_send(group="困与睡"))
+        plugin._maybe_log_run_ledger(now=10_000.0)
+        plugin._maybe_log_run_ledger(now=99_000.0)
+        assert plugin.logger.text().count("run ledger:") == 1
+
+    def test_throttled_numbers_are_reported_later_not_never(self, tmp_path, run_async):
+        # 节流期内不许把指纹更新掉：那样中间值就被吞了，读数是过期的。
+        plugin, _host = self._wired(tmp_path)
+        run_async(plugin.tool_sticker_send(group="困与睡"))
+        plugin._maybe_log_run_ledger(now=10_000.0)
+        run_async(plugin.tool_sticker_send(group="困与睡", force=True))
+        plugin._maybe_log_run_ledger(now=10_030.0)  # 距上次 30s < 120s：这一拍不报
+        assert plugin.logger.text().count("run ledger:") == 1
+        plugin._maybe_log_run_ledger(now=10_500.0)
+        assert plugin.logger.text().count("run ledger:") == 2
+        assert "calls=2" in plugin.logger.text().splitlines()[-1]
+
+    def test_ledger_carries_the_signal_and_tool_gap_readings(self, tmp_path, run_async):
+        # v0.20.1：`pointer=0/N` 与"她没调工具"都要能被解释，两组数必须并排在这一行里。
+        plugin, _host = self._wired(tmp_path)
+        plugin._awareness.turn_texts = 7
+        plugin._awareness.turn_empty = 2
+        plugin._awareness.signal_hits = 1
+        plugin._tool_watch.gaps = 3
+        plugin._tool_watch.gap_seconds_max = 900.0
+        plugin._tool_watch.unreachable = 4
+        run_async(plugin.tool_sticker_send(group="困与睡"))
+        plugin._maybe_log_run_ledger(now=10_000.0)
+        line = plugin.logger.text().splitlines()[-1]
+        assert "sig_text=7/2 hits=1" in line, line
+        assert "tool_gaps=3(≤900s) unreachable=4" in line, line
+
+    @staticmethod
+    def _wired(tmp_path):
+        plugin, host = _plugin(tmp_path)
+        plugin._awareness.trigger_counts["signal"] = 2
+        return plugin, host
+
+
 class TestSurfaceAppliedTrace:
     def _attach(self, plugin, registry) -> None:
         for name in ("list_llm_tools", "unregister_llm_tool", "register_llm_tool"):

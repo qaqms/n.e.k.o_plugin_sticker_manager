@@ -61,6 +61,7 @@ def _dataclass_defaults() -> dict[str, object]:
         "sticker_manager.awareness.inject_mode": settings.awareness.inject_mode,
         "sticker_manager.awareness.inject_interval_n": settings.awareness.inject_interval_n,
         "sticker_manager.awareness.min_interval_sec": float(settings.awareness.min_interval_sec),
+        "sticker_manager.awareness.event_gated": settings.awareness.event_gated,
         "sticker_manager.awareness.interval_sec": float(settings.awareness.interval_sec),
     }
 
@@ -93,4 +94,4 @@ def test_dataclass_section_dataclasses_have_no_undeclared_extra():
     """dataclass 加了键但没进 _dataclass_defaults —— 用字段数钉住。"""
     assert len(SendSettings.__dataclass_fields__) == 7
     assert len(StorageSettings.__dataclass_fields__) == 2
-    assert len(AwarenessSettings.__dataclass_fields__) == 5
+    assert len(AwarenessSettings.__dataclass_fields__) == 6

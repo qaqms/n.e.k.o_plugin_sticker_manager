@@ -21,7 +21,7 @@
 from __future__ import annotations
 
 from .catalog import Sticker, format_group_overview
-from .eagerness import normalize_tier, send_tool_description
+from .eagerness import decision_checkpoint, normalize_tier, send_tool_description
 
 # 能力句：说清"这是什么"，并把三种形态都摆成合法选项（参考侧 prompt.head 的结构）。
 _HEAD = "发一张你收藏间里的表情包，配合你正在回的这句话。纯文字、图文一起、只发图都行。"
@@ -60,10 +60,13 @@ def catalog_for_tool(stickers: list[Sticker], groups: dict[str, str] | None = No
 
 
 def build_send_tool_description(catalog: str, tier: str = "natural") -> str:
-    """拼 `sticker_send` 的完整工具描述：能力句 + 读表指引 + 分类全表 + 档位许可句。
+    """拼 `sticker_send` 的完整工具描述：决策检查点 + 能力句 + 读表指引 + 分类全表 + 档位许可句。
+
+    检查点排最前（v0.20.0，陷阱 34）：判据与许可句都在尾部，对往返型动作推不动她——
+    宿主里她真会自主调用的那条先例（`recall_memory`）靠的就是系统提示里一句"先调用它"。
 
     档位那句仍由 `core/eagerness.send_tool_description` 追加——两个受众共用一个来源。
     """
     body = f"\n{CATALOG_TITLE}\n{catalog}\n" if catalog else f"\n{_EMPTY}\n"
-    base = f"{_HEAD}\n{_TAIL}{body}"
+    base = f"{decision_checkpoint(tier)}\n{_HEAD}\n{_TAIL}{body}"
     return send_tool_description(base, normalize_tier(tier))

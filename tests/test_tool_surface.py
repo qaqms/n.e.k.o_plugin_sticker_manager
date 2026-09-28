@@ -12,7 +12,7 @@
 - `sticker_send` 的工具描述才是每轮重发的那根面，且重挂即推活会话（宿主
   `main_logic/core/tool_calling.py:67` 的 `register_tool_and_sync` → `session.update`）。
 
-钉四件事：目录进描述、描述里不许有禁令、只报激活区、库变了会自动重挂。
+钉五件事：目录进描述、描述里不许有禁令、只报激活区、库变了会自动重挂、检查点排在描述最前（v0.20.0）。
 """
 
 from __future__ import annotations
@@ -87,11 +87,28 @@ class TestStandingDescription:
             for word in PROHIBITIONS:
                 assert word not in text, f"{tier} 档的描述里又写回禁令了：{word}"
 
-    def test_says_all_three_forms_are_allowed_without_an_imperative(self):
-        # 参考侧 head 的核心：把选项摆齐，而不是下"必须发"的祈使句。
+    def test_checkpoint_leads_the_description_in_every_tier(self):
+        # v0.20.0（陷阱 34）把这条从"不许有祈使句"翻成"必须有决策检查点"：
+        # 参考那边的"只给许可"建立在零往返的标记协议上，搬到"停下来调一次工具"就变成
+        # "没事我就不做"。宿主里她真会自主调用的先例靠的正是系统提示一句"先调用它"
+        # （宿主 `config/prompts/prompts_chara.py:121`）。
+        # 翻掉的旧尺是 test_says_all_three_forms_are_allowed_without_an_imperative。
+        for tier in TOOL_NOTE:
+            text = build_send_tool_description(_ONE_CATEGORY, tier)
+            assert "开口之前先做一次判断" in text or "先做这个判断" in text, f"{tier} 档丢了检查点"
+            assert text.index("判断") < text.index("发一张你收藏间"), f"{tier} 档的检查点没排在最前"
+
+    def test_checkpoint_still_grants_a_text_only_exit(self):
+        # 检查点要求的是"想过一次"，不是"必须发"。丢掉这个出口就是逼她滥发。
+        for tier in TOOL_NOTE:
+            text = build_send_tool_description(_ONE_CATEGORY, tier)
+            assert "你必须配图" not in text and "一定要发" not in text
+            assert "文字回" in text, f"{tier} 档的检查点没留下纯文字的出口"
+
+    def test_says_all_three_forms_are_still_allowed(self):
+        # 摆齐三种形态这条没被检查点顶掉：两者共存。
         text = build_send_tool_description("", "natural")
         assert "纯文字" in text and "只发图" in text
-        assert "你必须" not in text and "一定要" not in text
 
     def test_empty_catalog_says_so_instead_of_encouraging(self):
         # 没有可发的分类还鼓励她发，只会换来一堆失败调用。

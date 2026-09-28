@@ -13,7 +13,7 @@ keywords = [
     "meme",
     "gallery",
 ]
-version = "0.19.0"
+version = "0.20.1"
 type = "plugin"
 entry = "plugin.plugins.sticker_manager:StickerManagerPlugin"
 
@@ -102,6 +102,10 @@ inject_mode = "interval_n"
 inject_interval_n = 0
 # 相邻两次注入的最小间隔（秒）：连珠炮对话防刷屏，两种模式都吃这把地板。
 min_interval_sec = 60.0
+# 事件门控点名（v0.20.0）：这句用户话里有情绪反应时，不等轮次攒满就点名一次。
+# 判据是本地情绪词表 + 反应符号（不为这件事调用模型），上面的地板对它照样生效。
+# 关掉它 = 回到「只按轮次计数点名」。
+event_gated = true
 # 降级节奏（秒）：总线一次都没读通过时（宿主换了桶形状/总线断开）退回按这个挂钟
 # 打点，好过整条存在感链路静默死掉。默认一小时 = v0.15.0 之前的老行为。
 interval_sec = 3600.0

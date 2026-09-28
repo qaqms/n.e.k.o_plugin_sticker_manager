@@ -126,6 +126,11 @@ class AwarenessSettings:
     inject_interval_n: int = 0
     # 相邻两次注入的最小间隔（秒）：连珠炮对话防刷屏。两种模式都吃这把地板。
     min_interval_sec: float = 60.0
+    # v0.20.0 事件门控点名：这句用户话里有情绪反应时，不等轮次攒满就点名一次。
+    # 判据是 `core/awareness.emotional_signal` 的本地词表——陷阱 30 不许为这件事去连模型。
+    # 轮次节奏由此退居兜底；false = 完全回到"只按轮次计数点名"。
+    # 上面那把地板对这一路照样生效，所以它不会变成每句都点名。
+    event_gated: bool = True
     # 降级节奏：总线一次都没读通过时（宿主换了桶形状/总线断开）退回按这个挂钟
     # 打点，而不是让整条存在感链路静默死掉。默认一小时 = v0.15.0 之前的老行为。
     interval_sec: float = 3600.0
@@ -243,6 +248,10 @@ class StickerManagerSettings:
                     ),
                     0.0,
                     3600.0,
+                ),
+                # 非布尔一律回默认（与 enabled 同一把 `_as_bool` 尺）。
+                event_gated=_as_bool(
+                    awareness_raw.get("event_gated"), awareness_default.event_gated
                 ),
                 interval_sec=_clamp_float(
                     _as_number(awareness_raw.get("interval_sec"), awareness_default.interval_sec),

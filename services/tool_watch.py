@@ -120,6 +120,17 @@ class ToolWatch:
         # 0.0 = 进程起来第一拍（timer 秒数后）立刻巡检，不等满一个间隔——
         # "宿主起得比插件晚"的竞态窗口要的是早发现。
         self._last_run_at = 0.0
+        # 缺席窗口记账（v0.20.1，纯观测）。为什么要有它：主人的实机日志里出现过
+        # "23:55:17 补挂了 2 个缺席工具"——那之前她**根本没有** `sticker_send` 可调，
+        # 而这条通道只在补挂那一刻吼一行，丢了多久、期间吃掉几轮全都看不出来。
+        # 尺的诚实性：巡检是 300s 一次，缺席的**真实起点不可知**，所以我们只能报上界
+        # （上次确认全在场 → 本次发现缺席之间的秒数）。字段名一律带 `_max_sec`，
+        # 绝不写成 `gap_sec`——把上界当读数就是仪器说谎（陷阱 30 同族）。
+        self.gaps = 0
+        self.gap_seconds_max = 0.0
+        self.unreachable = 0
+        self.last_healthy_at: float | None = None
+        self.last_gap_at = 0.0
 
     def _log(self, message: str, *args: Any, exc: bool = False) -> None:
         if self._logger is None:
@@ -188,16 +199,36 @@ class ToolWatch:
             if payload is None:
                 # 不可达：等下一轮。不盲重注册（纪律 1），也不把时钟退回去——
                 # 退回去会让"main_server 长期没起"变成每拍一发 GET 的追打。
+                # 记账上这段是"状态未知"，不许算成健康也不许算成缺席。
+                self.unreachable += 1
                 return {"status": "unreachable"}
             missing = missing_tool_names(payload, declared)
             if not missing:
-                return {"status": "healthy"}
+                self.last_healthy_at = now
+                return {"status": "healthy", "gap_seconds_max": round(self.gap_seconds_max, 1)}
+            self.gaps += 1
+            self.last_gap_at = now
+            # 只有拿到过健康基线才累加上界：开机第一次巡检就发现缺席时，
+            # "从什么时候开始缺"确实不知道（main_server 可能比插件晚起），硬记一个数就是编。
+            gap_max = 0.0 if self.last_healthy_at is None else max(0.0, now - self.last_healthy_at)
+            self.gap_seconds_max += gap_max
+            self.last_healthy_at = None  # 补挂≠确认在场，等下一次 healthy 才重建基线
             reissued = self._reissue(missing)
             self._log(
-                "sticker_manager tool watch: re-registered {} missing llm tool(s): {}",
-                reissued, ", ".join(missing),
+                "sticker_manager tool watch: re-registered {} missing llm tool(s): {}"
+                " (absent {}s since last healthy, gaps={})",
+                reissued,
+                ", ".join(missing),
+                "≤{:.0f}".format(gap_max) if gap_max else "起点未知",
+                self.gaps,
             )
-            return {"status": "repaired", "missing": missing, "reissued": reissued}
+            return {
+                "status": "repaired",
+                "missing": missing,
+                "reissued": reissued,
+                "gaps": self.gaps,
+                "gap_seconds_max": round(self.gap_seconds_max, 1),
+            }
         except Exception:  # noqa: BLE001 - 永不炸 tick（纪律 3）
             self._log("sticker_manager tool watch failed", exc=True)
             return {"status": "watch_failed"}
