@@ -483,12 +483,21 @@
 
 - `N.E.K.O/.agent/skills/neko-plugin/**`（契约）→ `plugin/sdk/plugin/base.py`、`plugin/core/context.py`（images/push 语义）
 - 本仓 `docs/sticker-system-study.md`（外部表情包管理系统机制剖析与分轮移植方案，2026-09-15）
+- **同级仓 `../sticker_pack_lab`**（官方包的打标表、分类学、压图与打包流水线**唯一源**，
+  以及四份离线对账脚本）——改官方包标签/重打包必走它，别在插件仓里另起一条路。
+  2026-09-28 本工作区补齐；它的 README 末尾记着落地状态与"素材源头之尺已挪进本仓 git 的包"这件事。
 - 同工作区 `n.e.k.o_plugin_our_life`（工程基线与五门）；`plugin/plugins/qq_auto_reply`（sticker 目录注入先例）
-- `问题清单/已知问题.md`（本机环境坑）
+  ⚠ **`our_life` 与 `forever_companion` 都不在 kaifa5 工作区**（只在 `F:\ai\neko kaifa2`）——
+  本轮多次引用的同门三面叠加做法要复核，得回那份工作区读，别照本档记的结论当真。
+- `问题清单/已知问题.md`（本机环境坑）⚠ 同样不在本工作区。
 
 ## Write Workspace
 
-`F:\ai\neko kaifa2\n.e.k.o_plugin_sticker_manager`（独立 Git 仓；宿主仓同级）
+**本工作区的插件开发仓根目录**（独立 Git 仓；与宿主仓同级）：
+
+- kaifa5：`F:\ai\neko kaifa5\n.e.k.o_plugin_sticker_manager`
+- 换工作区就换这一行的盘符路径——`sticker_pack_lab` 的脚本早已改成从自身位置派生
+  （`LAB.parent / "n.e.k.o_plugin_sticker_manager"`），不再钉死绝对路径（2026-09-28 收尾）。
 
 **发行形态（2026-09-16 主人拍板）**：不上架插件市场——release.yml 已删；verify.yml 只留
 **无自动触发的 no-op 桩**（平台 `check --release` 要求该文件存在才放行，存在性≠接线：
