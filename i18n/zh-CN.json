@@ -30,7 +30,7 @@
   "entries.repair.name": "库体检与自修复",
   "entries.remove.description": "从库里删掉这张图和它的记录（不可恢复）",
   "entries.remove.name": "删除表情包",
-  "entries.send.description": "面板上的试发按钮：以当前角色卡的名义发出这张图",
+  "entries.send.description": "发一张表情包到当前聊天：可给 id、分类 group 或关键词 query。用户只要求发一个时可不填参数，从当前区可用且最近未发的图中选一张；无需先知道 id。冷却、去重和概率仍生效。面板仍可用 id 试发指定图片。",
   "entries.send.name": "把这张表情发到聊天",
   "entries.switch.description": "fail-closed 总开关：关闭后她不发图、看不到目录；库本身的增删改仍可用",
   "entries.switch.name": "开关表情包管理",

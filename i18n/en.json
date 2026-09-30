@@ -30,7 +30,7 @@
   "entries.repair.name": "Repair the library",
   "entries.remove.description": "Delete this sticker and its record (irreversible)",
   "entries.remove.name": "Delete a sticker",
-  "entries.send.description": "Panel test-send button: send this image as the current character",
+  "entries.send.description": "Send a sticker to the current chat by id, group, or query. When the user simply asks for a sticker, omit all selectors to choose an available, non-recent image from the active zone. Cooldown, deduplication, and probability still apply. The panel can still send an exact image by id.",
   "entries.send.name": "Send this sticker to chat",
   "entries.switch.description": "Fail-closed master switch: when off she sends no stickers and sees no catalog; library CRUD still works",
   "entries.switch.name": "Toggle sticker manager",

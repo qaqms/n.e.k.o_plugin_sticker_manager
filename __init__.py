@@ -226,6 +226,15 @@ class StickerManagerPlugin(NekoPluginBase):
 
     @lifecycle(id="shutdown")
     async def on_shutdown(self, **_):
+        # Observe retained turns without injecting a new cue during shutdown.
+        try:
+            await self._awareness.observe_pending(settings=self._settings)
+        except Exception:
+            self.logger.warning("final turn poll failed", exc_info=True)
+        try:
+            self._maybe_log_run_ledger(now=time.time(), final=True)
+        except Exception:
+            self.logger.warning("final run ledger failed", exc_info=True)
         # 本插件的写路径全部是同步落盘（写穿式 JSON + 原子替换），没有待 flush 的
         # 内存态；shutdown 只留一个收尾日志与"目录还能读"的健康探针。
         probe = self._library.load(force=True)
@@ -1048,7 +1057,7 @@ class StickerManagerPlugin(NekoPluginBase):
             + f" outcome={outcome}"
         )
 
-    def _maybe_log_run_ledger(self, *, now: float) -> None:
+    def _maybe_log_run_ledger(self, *, now: float, final: bool = False) -> None:
         """把本次运行的四把数落到日志一行（v0.20.0：纯观测，零行为变更）。
 
         为什么非但面板要有、日志也要有一行：`RunStats` 那四把数（话轮数 / 她调用数 /
@@ -1086,9 +1095,9 @@ class StickerManagerPlugin(NekoPluginBase):
             gaps,
             unreachable,
         )
-        if fingerprint == self._ledger_fingerprint:
+        if not final and fingerprint == self._ledger_fingerprint:
             return
-        if now - self._ledger_logged_at < _LEDGER_LOG_MIN_SEC:
+        if not final and now - self._ledger_logged_at < _LEDGER_LOG_MIN_SEC:
             # 节流期内不更新指纹：下一拍报的是最新值，而不是把中间值攒成一条过期的。
             return
         self._ledger_fingerprint = fingerprint
@@ -1102,6 +1111,7 @@ class StickerManagerPlugin(NekoPluginBase):
             f" sig_text={aware.turn_texts}/{aware.turn_empty} hits={aware.signal_hits}"
             f" tool_gaps={gaps}(≤{gap_seconds_max:.0f}s) unreachable={unreachable}"
             f" surface_cats={stats['surface_categories']} tier={stats['surface_tier'] or '-'}"
+            + (" final=True" if final else "")
         )
 
     def _mark_surface_dirty(self) -> None:
@@ -1202,19 +1212,43 @@ class StickerManagerPlugin(NekoPluginBase):
     @plugin_entry(
         id="send",
         name=tr("entries.send.name", default="把这张表情发到聊天"),
-        description=tr("entries.send.description", default="面板上的试发按钮：以当前角色卡的名义发出这张图"),
+        description=tr(
+            "entries.send.description",
+            default="发一张表情包到当前聊天：可给 id、分类 group 或关键词 query。用户只要求发一个时可不填参数，"
+            "从当前区可用且最近未发的图中选一张；无需先知道 id。冷却、去重和概率仍生效。"
+            "面板仍可用 id 试发指定图片。"
+        ),
         input_schema={
             "type": "object",
             "properties": {
                 "id": {"type": "string", "description": tr("fields.id", default="表情包 id")},
+                "group": {"type": "string", "description": "要发送的表情分类（可选）"},
+                "query": {"type": "string", "description": "想表达的情绪或场景关键词（可选）"},
+                "text": {"type": "string", "maxLength": SEND_TEXT_MAX_CHARS, "description": "随图发送的配文（可选）"},
             },
-            "required": ["id"],
+            "required": [],
             "additionalProperties": False,
         },
-        llm_result_fields=["note", "id"],
+        llm_result_fields=["note", "id", "reason", "candidates", "hint"],
         timeout=30.0,
     )
-    async def send_entry(self, id: str = "", **kwargs):  # noqa: A002
+    async def send_entry(
+        self, id: str = "", group: str = "", query: str = "", text: str = "", **kwargs: Any
+    ):  # noqa: A002
+        if not id or group or query or text:
+            result = await self._sticker_send_body(
+                sticker_id=id, group=group, query=query, text=text, _source="agent", _auto_pick=True, **kwargs
+            )
+            self._note_tool_call(
+                name="agent_send",
+                result=result,
+                group=group if isinstance(group, str) else "",
+                query_len=len(query) if isinstance(query, str) else 0,
+                gave=gave_shape(sticker_id=id, query=query, group=group, text=text, force=False),
+            )
+            if not result.get("ok"):
+                return Err(SdkError(str(result.get("reason") or "send_failed"), details=result))
+            return Ok({**result, "id": result.get("sent", "")})
         lanlan = await self._resolve_lanlan(kwargs)
         sticker, failure = self._pick_for_send(id, lanlan)
         if failure is not None or sticker is None:
@@ -1912,12 +1946,16 @@ class StickerManagerPlugin(NekoPluginBase):
         group: str = "",
         force: bool = False,
         text: str = "",
+        _source: str = "tool",
+        _auto_pick: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
         if not self._settings.enabled:
             return {"ok": False, "reason": "not_enabled"}
         lanlan = await self._resolve_lanlan(kwargs)
-        self._library.load()
+        loaded = self._library.load()
+        if not loaded.ok:
+            return {"ok": False, "reason": loaded.code}
         settings = self._settings
         bypass = bool(force)
         # 去重（轮 D①）：query 候选池剔除"她最近发过的 N 张"（同一角色卡）。
@@ -1935,6 +1973,14 @@ class StickerManagerPlugin(NekoPluginBase):
         # J-1：她的候选池 = 激活区。非激活区的图与分类对她不存在（id 点到了也算没找到）。
         pool = self._library.active_pool()
         known_ids = {s.id for s in pool}
+        if _auto_pick and not (has_id or has_query or has_group):
+            available = [s for s in pool if not s.disabled]
+            if not available:
+                return {"ok": False, "reason": "no_match"}
+            selectable = [s for s in available if s.id not in recent]
+            if not selectable:
+                return {"ok": False, "reason": "recent_repeat"}
+            sticker = _GROUP_PICK(selectable)
         if has_id:
             raw_sticker = self._library.get(sticker_id.strip())
             sticker = raw_sticker if raw_sticker is not None and raw_sticker.id in known_ids else None
@@ -2021,7 +2067,7 @@ class StickerManagerPlugin(NekoPluginBase):
             sticker,
             lanlan=lanlan,
             settings=settings,
-            source="tool",
+            source=_source,
             now=time.time(),
             force=bypass,
             text=caption,
@@ -2033,6 +2079,7 @@ class StickerManagerPlugin(NekoPluginBase):
                 code=result.code,
                 settings=self._settings,
                 now=time.time(),
+                source=_source,
             )
             out: dict[str, Any] = {"ok": False, "reason": result.code, "tried": sticker.id}
             hint = _SEND_HINTS.get(result.code)

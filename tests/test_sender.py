@@ -126,6 +126,12 @@ class TestGuards:
 
 
 class TestCooldown:
+    def test_disabled_cooldown_ignores_future_submission_timestamp(self, tmp_path):
+        plugin, _host, _settings, _lib = _setup(tmp_path)
+        settings = StickerManagerSettings(enabled=True, send=SendSettings(cooldown_sec=0.0))
+        plugin._sender._last_sent["K"] = 1000.001
+        assert plugin._sender.cooldown_remaining("K", settings, now=1000.0) == 0.0
+
     def test_second_send_within_cooldown_blocked(self, tmp_path, run_async):
         plugin, host, settings, lib = _setup(tmp_path)
         sticker, _ = lib.add(data=PNG_BYTES, desc="笑", tags=[])
@@ -147,7 +153,7 @@ class TestCooldown:
 
 
 class TestConcurrentSend:
-    @pytest.mark.parametrize("source,force", [("tool", False), ("tool", True), ("panel", False)])
+    @pytest.mark.parametrize("source,force", [("tool", False), ("tool", True), ("panel", False), ("agent", False)])
     def test_same_character_cannot_send_during_upload(self, tmp_path, run_async, source, force):
         plugin, host, settings, lib = _setup(tmp_path)
         sticker, _ = lib.add(data=PNG_BYTES + b"0" * (300 * 1024), desc="large", tags=[])

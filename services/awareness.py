@@ -176,8 +176,15 @@ class Awareness:
             return {"status": "failed"}
 
     async def inject_now(self, *, settings: Any, lanlan: str, now: float) -> dict[str, Any]:
-        """手动一拍（面板调试入口）：绕过节奏闸，其余闸一个不少。"""
+        """Manual injection using the same gates except the interval."""
         return await self._run(settings=settings, now=now, force=True, lanlan_hint=lanlan)
+
+    async def observe_pending(self, *, settings: Any) -> None:
+        """Account for retained turns without injecting a cue during shutdown."""
+        turns = await self._turns.poll_all()
+        if settings.enabled and settings.awareness.enabled:
+            for turn in turns:
+                self._observe_turn(turn, settings)
 
     async def _run(
         self,

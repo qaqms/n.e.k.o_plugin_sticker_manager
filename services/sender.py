@@ -17,7 +17,7 @@
  N 张成功发送的 distinct id）："最近发过什么"是事实记忆，重启不该失忆。
 概率闸门（轮 D②）掷后复用，判定缓存是内存表（重启重掷，与冷却同纪律）：
 同一角色卡在复用窗口内只掷一次——multi_candidates→拿 id 二次定夺是同一次
-意愿的延续，不重掷（外部系统的 p² 教训）。两者都只拦 `source=="tool"`：
+意愿的延续，不重掷（外部系统的 p² 教训）。两者都拦 `source` 为 tool 或 agent 的模型路径：
 面板"试发"是主人的直接动作，不该被她的行为节奏闸拦下。
 """
 
@@ -93,6 +93,8 @@ class Sender:
     # ------------------------------------------------------------------
 
     def cooldown_remaining(self, lanlan: str, settings: StickerManagerSettings, *, now: float) -> float:
+        if settings.send.cooldown_sec <= 0.0:
+            return 0.0
         last = self._last_sent.get(lanlan)
         if last is None:
             return 0.0
@@ -156,7 +158,7 @@ class Sender:
         force: bool = False,
         text: str = "",
     ) -> SendResult:
-        """投递一张表情包并记账。source 只进台账（"tool" / "panel"），不面向用户。
+        """投递一张表情包并记账。source 为 tool / agent / panel，不面向用户。
 
         `text` 非空时**图与这句话合成一条气泡**（v0.18.0 图文同条）：宿主对一次 push
         走同一条渲染路径，`parts=[{text},{image}]` 会按顺序变成同一个来源气泡
@@ -200,10 +202,10 @@ class Sender:
         remaining = self.cooldown_remaining(lanlan, settings, now=moment)
         if remaining > 0.0:
             return SendResult.failure(ERR_COOLDOWN, sticker_id=sticker.id)
-        # 两个节奏闸只拦她（source=="tool"）；force=主人点名要再看这张，绕行两个闸
+        # Both model paths share the rhythm gates; panel sends keep their existing behavior.
         # （冷却仍生效——那是防刷屏，不是表达问题）。先查重（确定性）再掷骰，
         # 不让重复图白耗一次判定。
-        if source == "tool" and not force:
+        if source in {"tool", "agent"} and not force:
             if sticker.id in self.recent_sent_ids(lanlan, settings):
                 return SendResult.failure(ERR_RECENT_REPEAT, sticker_id=sticker.id)
             if not self.probability_allow(lanlan, settings, now=moment):
@@ -298,14 +300,16 @@ class Sender:
             return result
         return {"submitted": False, "reason": ERR_TRANSPORT}
 
-    def note_attempt_failed(self, *, lanlan: str, sticker_id: str, code: str, settings, now: float) -> None:
+    def note_attempt_failed(
+        self, *, lanlan: str, sticker_id: str, code: str, settings, now: float, source: str = "tool"
+    ) -> None:
         """失败的发送也进台账（ok=False），面板"她最近想用但没成"看得见。"""
         self._library.append_usage(
             {
                 "at": now,
                 "id": sticker_id,
                 "lanlan": lanlan or "",
-                "source": "tool",
+                "source": source,
                 "ok": False,
                 "code": code,
             },

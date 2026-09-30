@@ -11,18 +11,9 @@
     .venv/Scripts/python.exe tools/build_package.py            # 出到 ../dist/
     .venv/Scripts/python.exe tools/build_package.py --out /tmp
 
-出包前必须刷新入口清单 `plugin.meta.json`（改过入口/工具/定时器就要重来一遍）。
-它只能由宿主官方 probe 生成——那份要算源码指纹、用的也是宿主那个 Python：
-
-    # 1) 把插件树摆进宿主期望的挂载位
-    cp -r <本仓>/* N.E.K.O/plugin/plugins/sticker_manager/
-    # 2) 用宿主 venv 跑 probe，结果写回挂载位
-    cd N.E.K.O && ./.venv/Scripts/python.exe -c \\
-      "from pathlib import Path; import json; \\
-       from plugin.neko_plugin_cli.core.metadata_probe import derive_plugin_metadata; \\
-       d=Path('plugin/plugins/sticker_manager').resolve(); \\
-       (d/'plugin.meta.json').write_text(json.dumps(derive_plugin_metadata(d), ensure_ascii=False, indent=2)+chr(10), encoding='utf-8')"
-    # 3) 拷回本仓，然后删掉第 1 步的暂存目录（别把它留在宿主仓里）
+元数据在实际发行文件的临时副本上由宿主官方 probe 自动生成并验证，
+不再复制开发目录的 plugin.meta.json。宿主默认在 ../N.E.K.O，
+可用 --host-root 或 NEKO_HOST_ROOT 指定。宿主 Python 不可用或探测失败时拒绝出包。
 
 载荷哈希与宿主/官方 CLI 同算法：NFC 规范化后的 posix 相对路径（去掉 `payload/` 前缀）
 按大小写敏感排序，每条贡献 `path + NUL + 内容 + NUL`。改了算法宿主会判包损坏。
@@ -32,6 +23,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
+import os
+import shutil
+import subprocess
+import tempfile
 import unicodedata
 import zipfile
 from pathlib import Path
@@ -198,29 +194,45 @@ def metadata_toml(hash_value: str) -> str:
     )
 
 
-def assert_meta_fresh(files: list[Path]) -> None:
-    """入口清单必须比它描述的代码新。
-
-    `plugin.meta.json` 是宿主官方 probe 导入插件后生成的（注册了哪些入口、参数形状、
-    定时器），宿主刷新注册表时**只读这份文件不再导入插件**
-    （`plugin/server/application/plugins/registry_service.py:438`）。
-    带着旧 meta 出包 = 包会宣传一个装上去根本不会注册的入口（本轮新增的 `turns`
-    定时器正是这种后果）。生成方式见模块 docstring。
-    """
-    meta = ROOT / "plugin.meta.json"
-    if not meta.is_file():
-        raise SystemExit(
-            "[FAIL] 缺 plugin.meta.json——先按模块 docstring 里的命令用宿主 venv 生成，"
-            "不要拿旧包里的凑数。"
+def stage_plugin_entries(files: list[Path], host_root: Path) -> list[tuple[str, bytes]]:
+    """Probe the shipped tree with the host SDK, not the development tree."""
+    python = host_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    if not python.is_file():
+        raise SystemExit(f"[FAIL] Host Python not found: {python}; pass --host-root")
+    with tempfile.TemporaryDirectory(prefix="sticker-package-") as temp:
+        staged = Path(temp) / PACKAGE_ID
+        for source in files:
+            if source.name == "plugin.meta.json":
+                continue
+            target = staged / source.relative_to(ROOT)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, target)
+        code = (
+            "import json,sys; from pathlib import Path; "
+            "from plugin.neko_plugin_cli.core.metadata_probe import derive_plugin_metadata; "
+            "from plugin.server.infrastructure.packaged_metadata import read_packaged_metadata; "
+            "p=Path(sys.argv[1]); m=derive_plugin_metadata(p, source_only=True); "
+            "(p/'plugin.meta.json').write_bytes((json.dumps(m,ensure_ascii=False,indent=2)+'\\n').encode('utf-8')); "
+            "assert read_packaged_metadata(p) is not None, 'host rejected staged metadata'"
         )
-    newest = max((path.stat().st_mtime for path in files if path.suffix in {".py", ".ts", ".tsx"}), default=0.0)
-    if meta.stat().st_mtime < newest:
-        raise SystemExit(
-            "[FAIL] plugin.meta.json 比插件代码旧——改过入口/定时器就先重新生成再出包。"
+        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"}
+        result = subprocess.run(
+            [str(python), "-c", code, str(staged)], cwd=host_root, env=env,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         )
+        if result.returncode:
+            raise SystemExit(f"[FAIL] Staged metadata probe failed:\n{result.stdout}\n{result.stderr}")
+        payload = (staged / "plugin.meta.json").read_bytes()
+        expected = {p.relative_to(ROOT).as_posix() for p in files if p.name != "plugin.meta.json"}
+        if set(json.loads(payload)["source_files"]) != expected:
+            raise SystemExit("[FAIL] Metadata file list does not match the payload")
+        # Archive the same bytes that were probed, even if source files change during the build.
+        entries = [(f"plugins/{PACKAGE_ID}/{name}", (staged / name).read_bytes()) for name in sorted(expected)]
+        entries.append((f"plugins/{PACKAGE_ID}/plugin.meta.json", payload))
+        return entries
 
 
-def build(out_dir: Path) -> Path:
+def build(out_dir: Path, *, host_root: Path | None = None) -> Path:
     """装配 zip。归档名与哈希用的"相对路径"是两回事，这里分开算清楚：
 
     - 归档名：`payload/plugins/<id>/<仓内相对路径>`、`payload/dependencies.toml`、
@@ -229,11 +241,9 @@ def build(out_dir: Path) -> Path:
       少算这一截，宿主安装时会判包损坏——手抄那四轮就是这么差点栽的。
     """
     plugin_files = collect_plugin_files()
-    assert_meta_fresh(plugin_files)
-    plugin_entries = [
-        (f"plugins/{PACKAGE_ID}/{path.relative_to(ROOT).as_posix()}", path.read_bytes())
-        for path in plugin_files
-    ]
+    plugin_entries = stage_plugin_entries(
+        plugin_files, (host_root or Path(os.environ.get("NEKO_HOST_ROOT", ROOT.parent / "N.E.K.O"))).resolve()
+    )
     generated = [
         ("dependencies.toml", dependencies_toml().encode("utf-8")),
         ("profiles/default.toml", profile_toml().encode("utf-8")),
@@ -252,9 +262,10 @@ def build(out_dir: Path) -> Path:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__ or "")
+    parser.add_argument("--host-root", help="Host source directory with .venv and plugin/sdk")
     parser.add_argument("--out", default=str(ROOT.parent / "dist"), help="输出目录（默认 ../dist）")
     args = parser.parse_args()
-    target = build(Path(args.out))
+    target = build(Path(args.out), host_root=Path(args.host_root) if args.host_root else None)
     with zipfile.ZipFile(target) as archive:
         names = archive.namelist()
         raw = sum(info.file_size for info in archive.infolist())

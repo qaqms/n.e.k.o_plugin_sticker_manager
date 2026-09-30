@@ -32,8 +32,8 @@ class RecLogger:
     def __init__(self) -> None:
         self.lines: list[str] = []
 
-    def _emit(self, message: str = "", **_kwargs: Any) -> None:
-        self.lines.append(str(message))
+    def _emit(self, message: str = "", *args: Any, **_kwargs: Any) -> None:
+        self.lines.append(str(message).format(*args) if args else str(message))
 
     info = _emit
     warning = _emit
@@ -131,6 +131,25 @@ class TestToolCallTrace:
 
 
 class TestRunLedgerLog:
+    def test_shutdown_counts_pending_turns_and_logs_even_when_throttled(self, tmp_path, run_async):
+        plugin, host = _plugin(tmp_path)
+        host.bus.memory.records = [user_message_record(100.0, "private sentinel", "K")]
+        plugin._ledger_logged_at = 10**15
+        result = run_async(plugin.on_shutdown())
+        assert result.is_ok()
+        final = [line for line in plugin.logger.lines if "final=True" in line]
+        assert len(final) == 1 and "turns=1" in final[0]
+        assert "sig_text=1/0" in final[0]
+        assert "private sentinel" not in plugin.logger.text()
+        assert not host.push.calls
+
+    def test_final_ledger_is_written_even_without_changed_numbers(self, tmp_path):
+        plugin, _host = _plugin(tmp_path)
+        plugin._maybe_log_run_ledger(now=10_000.0)
+        plugin._maybe_log_run_ledger(now=10_001.0, final=True)
+        assert plugin.logger.text().count("run ledger:") == 2
+        assert "final=True" in plugin.logger.lines[-1]
+
     """v0.20.0：四把数落到日志一行，且不许变成刷屏。"""
 
     def test_changed_numbers_emit_one_ledger_line(self, tmp_path, run_async):

@@ -11,6 +11,10 @@
 `sticker_list` / `sticker_send` 两个工具在对话里自主挑一张发出去。
 每次发送（含失败的尝试）都记进使用台账——台账在幕后供跨轮去重与最近爱用排序，面板不再展示明细。
 
+聊天栏明确要求「发一个表情包」时，后台 Agent 可调用 `send`：支持可选 `id`、`group`、
+`query` 和配文 `text`。不提供选图参数时，从当前激活区可用且最近未发的图中选一张；
+冷却、去重和概率仍生效。面板按 `id` 试发指定图的行为不变。
+
 ## 能力面
 
 | 面 | 内容 |
@@ -87,6 +91,7 @@
 
 ```bash
 uv run python tools/release_gate.py   # 五门：pytest / ruff / check / release / hosted-tsx
+uv run python tools/build_package.py --host-root ../N.E.K.O  # 在实际发行文件上自动生成并验证元数据
 ```
 
 详见 `DESIGN.md`。

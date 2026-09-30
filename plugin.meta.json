@@ -1,7 +1,7 @@
 {
   "schema_version": 4,
   "sdk_version": "0.1.0",
-  "source_sha256": "3c679400327b3b00c1ad76a914fbe3e476eb308b3d1421074925545ed6a5f040",
+  "source_sha256": "14d10639fbe0c399c05111b79e70ede04becd4864a72b895d0659126b27c3966",
   "source_files": [
     ".github/workflows/verify.yml",
     ".gitignore",
@@ -37,7 +37,9 @@
     "services/tool_watch.py",
     "services/turns.py",
     "tests/conftest.py",
+    "tests/test_agent_send.py",
     "tests/test_awareness.py",
+    "tests/test_build_package.py",
     "tests/test_catalog.py",
     "tests/test_config_docs_sync.py",
     "tests/test_eagerness.py",
@@ -77,7 +79,7 @@
     "ui/shared.ts",
     "uv.lock"
   ],
-  "source_bytes": 37501500,
+  "source_bytes": 37517530,
   "build_env": {
     "os": "win32",
     "python": "3.11",
@@ -1093,7 +1095,7 @@
       },
       "description": {
         "$i18n": "entries.send.description",
-        "default": "面板上的试发按钮：以当前角色卡的名义发出这张图"
+        "default": "发一张表情包到当前聊天：可给 id、分类 group 或关键词 query。用户只要求发一个时可不填参数，从当前区可用且最近未发的图中选一张；无需先知道 id。冷却、去重和概率仍生效。面板仍可用 id 试发指定图片。"
       },
       "event_key": "sticker_manager.send",
       "input_schema": {
@@ -1105,11 +1107,22 @@
               "$i18n": "fields.id",
               "default": "表情包 id"
             }
+          },
+          "group": {
+            "type": "string",
+            "description": "要发送的表情分类（可选）"
+          },
+          "query": {
+            "type": "string",
+            "description": "想表达的情绪或场景关键词（可选）"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "随图发送的配文（可选）"
           }
         },
-        "required": [
-          "id"
-        ],
+        "required": [],
         "additionalProperties": false
       },
       "return_message": "",
@@ -1122,17 +1135,26 @@
         "type": "object",
         "properties": {
           "note": {},
-          "id": {}
+          "id": {},
+          "reason": {},
+          "candidates": {},
+          "hint": {}
         },
         "required": [
           "note",
-          "id"
+          "id",
+          "reason",
+          "candidates",
+          "hint"
         ]
       },
       "metadata": {},
       "llm_result_fields": [
         "note",
-        "id"
+        "id",
+        "reason",
+        "candidates",
+        "hint"
       ]
     },
     {
@@ -4040,7 +4062,7 @@
       },
       "description": {
         "$i18n": "entries.send.description",
-        "default": "面板上的试发按钮：以当前角色卡的名义发出这张图"
+        "default": "发一张表情包到当前聊天：可给 id、分类 group 或关键词 query。用户只要求发一个时可不填参数，从当前区可用且最近未发的图中选一张；无需先知道 id。冷却、去重和概率仍生效。面板仍可用 id 试发指定图片。"
       },
       "input_schema": {
         "type": "object",
@@ -4051,11 +4073,22 @@
               "$i18n": "fields.id",
               "default": "表情包 id"
             }
+          },
+          "group": {
+            "type": "string",
+            "description": "要发送的表情分类（可选）"
+          },
+          "query": {
+            "type": "string",
+            "description": "想表达的情绪或场景关键词（可选）"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "随图发送的配文（可选）"
           }
         },
-        "required": [
-          "id"
-        ],
+        "required": [],
         "additionalProperties": false
       },
       "enabled": true,
@@ -4067,17 +4100,26 @@
       "timeout": 30.0,
       "llm_result_fields": [
         "note",
-        "id"
+        "id",
+        "reason",
+        "candidates",
+        "hint"
       ],
       "llm_result_schema": {
         "type": "object",
         "properties": {
           "note": {},
-          "id": {}
+          "id": {},
+          "reason": {},
+          "candidates": {},
+          "hint": {}
         },
         "required": [
           "note",
-          "id"
+          "id",
+          "reason",
+          "candidates",
+          "hint"
         ]
       },
       "metadata": {},
@@ -4097,7 +4139,7 @@
       },
       "description": {
         "$i18n": "entries.send.description",
-        "default": "面板上的试发按钮：以当前角色卡的名义发出这张图"
+        "default": "发一张表情包到当前聊天：可给 id、分类 group 或关键词 query。用户只要求发一个时可不填参数，从当前区可用且最近未发的图中选一张；无需先知道 id。冷却、去重和概率仍生效。面板仍可用 id 试发指定图片。"
       },
       "input_schema": {
         "type": "object",
@@ -4108,11 +4150,22 @@
               "$i18n": "fields.id",
               "default": "表情包 id"
             }
+          },
+          "group": {
+            "type": "string",
+            "description": "要发送的表情分类（可选）"
+          },
+          "query": {
+            "type": "string",
+            "description": "想表达的情绪或场景关键词（可选）"
+          },
+          "text": {
+            "type": "string",
+            "maxLength": 500,
+            "description": "随图发送的配文（可选）"
           }
         },
-        "required": [
-          "id"
-        ],
+        "required": [],
         "additionalProperties": false
       },
       "enabled": true,
@@ -4124,17 +4177,26 @@
       "timeout": 30.0,
       "llm_result_fields": [
         "note",
-        "id"
+        "id",
+        "reason",
+        "candidates",
+        "hint"
       ],
       "llm_result_schema": {
         "type": "object",
         "properties": {
           "note": {},
-          "id": {}
+          "id": {},
+          "reason": {},
+          "candidates": {},
+          "hint": {}
         },
         "required": [
           "note",
-          "id"
+          "id",
+          "reason",
+          "candidates",
+          "hint"
         ]
       },
       "metadata": {},

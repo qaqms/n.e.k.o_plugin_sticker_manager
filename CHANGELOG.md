@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.20.3
+
+- Let the background Agent use the send entry with a group, query, or no selector. An explicit generic request selects an available, non-recent image from the active zone; existing panel sends by id and all send gates remain unchanged.
+- Generate package metadata using the official host probe on the actual filtered payload, and reject builds if the host cannot read it. Development-tree metadata is no longer copied into distribution packages.
+- Poll retained turns without injecting new cues at shutdown and always emit a final run ledger. Agent sends are recorded separately from panel sends.
+- Treat zero cooldown as disabled even when submission-time clock correction is slightly ahead of the wall clock.
+- Add 22 regression cases for Agent selection and gates, payload metadata validation, final accounting, and disabled cooldown.
+
 ## 0.20.2
 
 - Protect the catalog after read failures: retain the last good snapshot, reject writes and repair purges until a successful reload, and distinguish a fresh install from a missing index with remaining images.

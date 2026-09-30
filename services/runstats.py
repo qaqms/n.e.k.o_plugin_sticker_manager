@@ -84,7 +84,7 @@ class RunStats:
         if reason:
             self.refused += 1
             self.last_reason = reason
-        elif name == "sticker_send" and result.get("sent"):
+        elif name in {"sticker_send", "agent_send"} and result.get("sent"):
             self.sent += 1
         return reason
 
