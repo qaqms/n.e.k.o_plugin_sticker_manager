@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import random
+import threading
 import time
 from dataclasses import dataclass
 from typing import Any
@@ -73,6 +74,8 @@ class Sender:
         self._logger = logger
         self._last_sent: dict[str, float] = {}  # lanlan -> 上次成功投递的时刻
         self._prob_rolls: dict[str, tuple[float, bool]] = {}  # lanlan -> (掷骰时刻, 命中)
+        self._inflight: set[str] = set()
+        self._inflight_lock = threading.Lock()
 
     def _log(self, message: str, *, exc: bool = False) -> None:
         if self._logger is None:
@@ -163,6 +166,32 @@ class Sender:
         由我们代发的，不是她的回复气泡。
         """
         moment = time.time() if now is None else now
+        # Reservation spans awaits and works across the host's separate event loops.
+        with self._inflight_lock:
+            if lanlan in self._inflight:
+                return SendResult.failure(ERR_COOLDOWN, sticker_id=sticker.id)
+            self._inflight.add(lanlan)
+        try:
+            return await self._send_reserved(
+                sticker, lanlan=lanlan, settings=settings, source=source, now=moment, force=force, text=text
+            )
+        finally:
+            with self._inflight_lock:
+                self._inflight.discard(lanlan)
+
+    async def _send_reserved(
+        self,
+        sticker: Sticker,
+        *,
+        lanlan: str,
+        settings: StickerManagerSettings,
+        source: str,
+        now: float,
+        force: bool,
+        text: str,
+    ) -> SendResult:
+        moment = now
+        started = time.monotonic()
         if not settings.enabled:
             return SendResult.failure(ERR_NOT_ENABLED, sticker_id=sticker.id)
         if sticker.disabled:
@@ -206,6 +235,7 @@ class Sender:
             return SendResult.failure(reason or ERR_TRANSPORT, sticker_id=sticker.id)
 
         # 只有真交给传输了才前进冷却与计数（被拒的投递不该罚她等下一轮）。
+        moment += max(0.0, time.monotonic() - started)
         self._last_sent[lanlan] = moment
         self._library.touch_used(sticker.id, now=moment)
         self._library.append_usage(

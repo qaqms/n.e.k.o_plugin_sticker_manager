@@ -130,6 +130,53 @@ def watcher():
 
 
 class TestTurnWatcher:
+    def test_burst_counts_every_new_turn_once(self, run_async, watcher):
+        w, bus = watcher([user_message_record(100.0 + i, str(i), "K") for i in range(15)])
+        turns = run_async(w.poll_all())
+        assert len(turns) == 15 and turns[-1].ts == 114.0
+        assert w.turns_seen == 15 and w.turns_since("K") == 15
+        assert bus.memory.calls[-1]["limit"] == 500
+        assert run_async(w.poll_all()) == []
+        assert w.turns_seen == 15
+
+    def test_unsorted_interleaved_roles_are_all_counted(self, run_async, watcher):
+        w, _bus = watcher([
+            user_message_record(103.0, "a2", "A"),
+            user_message_record(102.0, "b1", "B"),
+            user_message_record(101.0, "a1", "A"),
+            {"type": "other", "_ts": 104.0},
+        ])
+        turns = run_async(w.poll_all())
+        assert [(turn.lanlan, turn.ts) for turn in turns] == [("A", 101.0), ("B", 102.0), ("A", 103.0)]
+        assert w.turns_seen == 3 and w.turns_since("A") == 2 and w.turns_since("B") == 1
+        assert run_async(w.poll()) is None
+
+    def test_nonfinite_timestamp_does_not_poison_watermark(self, run_async, watcher):
+        w, bus = watcher([user_message_record(float("inf"), "bad", "K")])
+        assert run_async(w.poll()) is None
+        bus.memory.records.append(user_message_record(100.0, "good", "K"))
+        assert run_async(w.poll()).ts == 100.0
+
+    def test_equal_timestamps_keep_distinct_messages_without_double_counting(self, run_async, watcher):
+        w, bus = watcher([
+            user_message_record(100.0, "first", "K"),
+            user_message_record(100.0, "second", "K"),
+        ])
+        assert len(run_async(w.poll_all())) == 2
+        assert run_async(w.poll_all()) == []
+        bus.memory.records.append(user_message_record(100.0, "third", "K"))
+        assert len(run_async(w.poll_all())) == 1
+        assert w.turns_seen == 3
+
+    def test_read_failure_preserves_counts_and_backlog(self, run_async, watcher):
+        w, bus = watcher([user_message_record(100.0, "first", "K")])
+        run_async(w.poll_all())
+        bus.memory.error = True
+        bus.memory.records.extend([user_message_record(101.0 + i, str(i), "K") for i in range(3)])
+        assert run_async(w.poll_all()) == [] and w.turns_seen == 1
+        bus.memory.error = False
+        assert len(run_async(w.poll_all())) == 3 and w.turns_seen == 4
+
     def test_first_sight_is_a_new_turn(self, run_async: Any, watcher: Any):
         w, _bus = watcher([user_message_record(100.0, "在吗", "K")])
         turn = run_async(w.poll())
@@ -298,6 +345,40 @@ class TestTurnDrivenAwareness:
         plugin, host = build_plugin(host)
         plugin._library.add(data=PNG_BYTES, desc="猫猫挥手", tags=[])
         return plugin, host
+
+    def test_burst_reaches_interval_without_replaying_old_cues(self, tmp_path, run_async):
+        plugin, host = self._plugin(tmp_path, [
+            user_message_record(100.0 + i, "business", "K") for i in range(3)
+        ])
+        settings = _turns(interval_n=3, floor=0.0)
+        assert run_async(plugin._awareness.maybe_run(settings=settings, now=50.0))["status"] == "injected"
+        assert len(host.push.calls) == 1
+        assert plugin._awareness.turns_seen == 3 and plugin._awareness.turn_texts == 3
+        assert plugin._awareness._turns.turns_since("K") == 0
+        assert run_async(plugin._awareness.maybe_run(settings=settings, now=51.0))["status"] == "idle"
+
+    def test_interleaved_roles_each_receive_latest_cue(self, tmp_path, run_async):
+        plugin, host = self._plugin(tmp_path, [
+            user_message_record(100.0, "business", "A"),
+            user_message_record(101.0, "business", "B"),
+            user_message_record(102.0, "business", "A"),
+        ])
+        settings = _turns(interval_n=1, floor=0.0)
+        run_async(plugin._awareness.maybe_run(settings=settings, now=50.0))
+        assert [call["target_lanlan"] for call in host.push.calls] == ["B", "A"]
+        assert plugin._awareness.turns_seen == 3
+        assert plugin._awareness._turns.turns_since("A") == 0
+        assert plugin._awareness._turns.turns_since("B") == 0
+
+    def test_superseded_emotion_is_counted_but_not_injected(self, tmp_path, run_async):
+        plugin, host = self._plugin(tmp_path, [
+            user_message_record(100.0, "好开心", "K"),
+            user_message_record(101.0, "business", "K"),
+        ])
+        settings = _turns(interval_n=99, floor=0.0)
+        assert run_async(plugin._awareness.maybe_run(settings=settings, now=50.0))["status"] == "not_due"
+        assert plugin._awareness.turn_texts == 2 and plugin._awareness.signal_hits == 1
+        assert host.push.calls == []
 
     def test_no_new_turn_injects_nothing(self, tmp_path, run_async):
         plugin, host = self._plugin(tmp_path, [user_message_record(100.0, "在吗", "K")])

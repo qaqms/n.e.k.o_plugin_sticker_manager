@@ -120,6 +120,8 @@ class Library:
         # 已应用的官方包内容版本（v0.13.0 J-3）：0 = 从没刷过标签。
         self._official_pack_version = 0
         self._loaded = False
+        self._read_failed = False
+        self._catalog_seen = False
         self._io_dirty = False
         # zip 直传会话（仅本进程，sid -> {h, path, seq, size, name, at}）：
         # 入口调用都跑在同一事件循环上，字典变更天然串行；进程重启 = 会话作废，
@@ -170,13 +172,33 @@ class Library:
                 pass
 
     def load(self, *, force: bool = False) -> LibraryResult:
-        """全量读目录。坏 JSON / 坏条目宽松处理：能救多少救多少。
+        """Read a valid catalog; reject unreadable roots without discarding the last good snapshot.
 
         区的不变量在此兜住：**zones 永远非空、active_zone 永远在册**；
         旧库（无 zones 键）在这里一次性迁进默认区（当场补写一次盘，失败不阻断读）。
         """
-        if self._loaded and not force:
+        if self._loaded and not self._read_failed and not force:
             return LibraryResult(ok=True)
+        try:
+            raw = json.loads(self.catalog_path.read_text(encoding="utf-8"))
+            if not isinstance(raw, dict) or not isinstance(raw.get("stickers"), list):
+                raise ValueError("invalid catalog structure")
+        except FileNotFoundError:
+            try:
+                images_remain = self.stickers_dir.is_dir() and any(self.stickers_dir.iterdir())
+            except OSError:
+                images_remain = True
+            if self._catalog_seen or self._read_failed or images_remain:
+                self._read_failed = self._io_dirty = True
+                return LibraryResult.failure(ERR_IO, "catalog_unreadable")
+            raw = {"stickers": [], "zones": []}
+        except Exception:
+            # Keep the last good snapshot, but block writes until a successful read.
+            self._read_failed = self._io_dirty = True
+            return LibraryResult.failure(ERR_IO, "catalog_unreadable")
+        else:
+            self._catalog_seen = True
+        self._read_failed = False
         self._stickers = {}
         self._groups = {}
         self._zones = {}
@@ -185,18 +207,6 @@ class Library:
         self._official_seeded = False
         self._official_pack_version = 0
         legacy_shape = True
-        try:
-            raw = json.loads(self.catalog_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            self._ensure_zone_invariant()
-            self._loaded = True
-            self._io_dirty = False
-            return LibraryResult(ok=True)
-        except Exception:
-            self._ensure_zone_invariant()
-            self._loaded = True
-            self._io_dirty = True
-            return LibraryResult.failure(ERR_IO, "catalog_unreadable")
         entries = raw.get("stickers") if isinstance(raw, dict) else None
         if isinstance(entries, list):
             for item in entries:
@@ -251,9 +261,9 @@ class Library:
         self._official_pack_version = (
             version_raw if isinstance(version_raw, int) and not isinstance(version_raw, bool) and version_raw > 0 else 0
         )
-        self._ensure_zone_invariant(migrated=legacy_shape)
         self._loaded = True
         self._io_dirty = False
+        self._ensure_zone_invariant(migrated=legacy_shape and self._catalog_seen)
         return LibraryResult(ok=True)
 
     def _ensure_zone_invariant(self, *, migrated: bool = False) -> None:
@@ -282,6 +292,12 @@ class Library:
             self._log("catalog migrated to zones v2")
 
     def save(self) -> LibraryResult:
+        if self._read_failed:
+            return LibraryResult.failure(ERR_IO, "catalog_unreadable")
+        if not self._loaded:
+            loaded = self.load()
+            if not loaded.ok:
+                return loaded
         try:
             self._root.mkdir(parents=True, exist_ok=True)
             payload = {
@@ -310,6 +326,7 @@ class Library:
             tmp = self.catalog_path.with_suffix(".json.tmp")
             tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
             tmp.replace(self.catalog_path)
+            self._catalog_seen = True
         except Exception:
             self._io_dirty = True
             return LibraryResult.failure(ERR_IO, "catalog_write_failed")
@@ -838,6 +855,9 @@ class Library:
         再缺省落激活区。
         """
         detected = detect_image_format(data or b"")
+        loaded = self.load()
+        if not loaded.ok:
+            return None, loaded.code
         if detected is None:
             return None, "invalid_image"
         digest = content_sha256(data)
@@ -969,6 +989,9 @@ class Library:
         removed_entries = 0
         purged_files = 0
         backfilled = 0
+        if not self.load().ok:
+            self._log("library repair blocked: catalog unreadable")
+            return {"removed_entries": 0, "purged_files": 0, "backfilled_hashes": 0}
         referenced: set[str] = set()
         dirty = False
         for sticker_id in list(self._stickers.keys()):

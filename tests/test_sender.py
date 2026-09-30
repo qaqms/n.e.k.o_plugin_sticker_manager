@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
+
+import pytest
 from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, build_plugin
 from sticker_manager.core.configuration import (  # pyright: ignore[reportMissingImports] — 包名由 conftest 在测试时注册；独立仓静态面不可解析
     SendSettings,
@@ -139,6 +144,157 @@ class TestCooldown:
         sticker, _ = lib.add(data=PNG_BYTES, desc="笑", tags=[])
         assert run_async(plugin._sender.send(sticker, lanlan="A", settings=settings, source="tool", now=1000.0)).ok
         assert run_async(plugin._sender.send(sticker, lanlan="B", settings=settings, source="tool", now=1001.0)).ok
+
+
+class TestConcurrentSend:
+    @pytest.mark.parametrize("source,force", [("tool", False), ("tool", True), ("panel", False)])
+    def test_same_character_cannot_send_during_upload(self, tmp_path, run_async, source, force):
+        plugin, host, settings, lib = _setup(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES + b"0" * (300 * 1024), desc="large", tags=[])
+
+        async def scenario():
+            started, release = asyncio.Event(), asyncio.Event()
+
+            async def upload(*args, **kwargs):
+                started.set()
+                await release.wait()
+                return {"type": "image", "url": "https://stub.local/image.jpg"}
+
+            host.images.upload = upload
+            first = asyncio.create_task(
+                plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0)
+            )
+            await started.wait()
+            second = asyncio.create_task(
+                plugin._sender.send(
+                    sticker, lanlan="K", settings=settings, source=source, force=force, now=1000.0
+                )
+            )
+            await asyncio.sleep(0)
+            release.set()
+            return await asyncio.gather(first, second)
+
+        first, second = run_async(scenario())
+        assert first.ok and not second.ok and second.code == "send_cooldown"
+        assert len(host.push.calls) == 1
+        assert lib.get(sticker.id).use_count == 1
+        assert len(lib.read_usage()) == 1
+
+    def test_pending_send_does_not_block_another_character(self, tmp_path, run_async):
+        plugin, host, settings, lib = _setup(tmp_path)
+        large, _ = lib.add(data=PNG_BYTES + b"0" * (300 * 1024), desc="large", tags=[])
+        small, _ = lib.add(data=PNG_BYTES, desc="small", tags=[])
+
+        async def scenario():
+            started, release = asyncio.Event(), asyncio.Event()
+
+            async def upload(*args, **kwargs):
+                started.set()
+                await release.wait()
+                return {"type": "image", "url": "https://stub.local/image.jpg"}
+
+            host.images.upload = upload
+            first = asyncio.create_task(
+                plugin._sender.send(large, lanlan="A", settings=settings, source="tool", now=1000.0)
+            )
+            await started.wait()
+            try:
+                second = await plugin._sender.send(
+                    small, lanlan="B", settings=settings, source="tool", now=1000.0
+                )
+            finally:
+                release.set()
+            return await first, second
+
+        assert all(result.ok for result in run_async(scenario()))
+        assert len(host.push.calls) == 2
+
+    def test_cancelled_upload_releases_reservation_without_starting_cooldown(self, tmp_path, run_async):
+        plugin, host, settings, lib = _setup(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES + b"0" * (300 * 1024), desc="large", tags=[])
+
+        async def scenario():
+            started = asyncio.Event()
+            original_upload = host.images.upload
+
+            async def upload(*args, **kwargs):
+                started.set()
+                await asyncio.Event().wait()
+
+            host.images.upload = upload
+            task = asyncio.create_task(
+                plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0)
+            )
+            await started.wait()
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+            host.images.upload = original_upload
+            return await plugin._sender.send(
+                sticker, lanlan="K", settings=settings, source="tool", now=1000.0
+            )
+
+        assert run_async(scenario()).ok
+        assert len(host.push.calls) == 1
+
+
+    def test_reservation_is_shared_between_host_threads(self, tmp_path, run_async):
+        plugin, host, settings, lib = _setup(tmp_path)
+        large, _ = lib.add(data=PNG_BYTES + b"0" * (300 * 1024), desc="large", tags=[])
+        small, _ = lib.add(data=PNG_BYTES, desc="small", tags=[])
+        started, release = threading.Event(), threading.Event()
+
+        async def upload(*args, **kwargs):
+            started.set()
+            assert await asyncio.to_thread(release.wait, 5.0)
+            return {"type": "image", "url": "https://stub.local/image.jpg"}
+
+        host.images.upload = upload
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            first = executor.submit(
+                run_async, plugin._sender.send(large, lanlan="K", settings=settings, source="tool", now=1000.0)
+            )
+            try:
+                assert started.wait(5.0)
+                second = run_async(
+                    plugin._sender.send(small, lanlan="K", settings=settings, source="panel", now=1000.0)
+                )
+                assert not second.ok and second.code == "send_cooldown"
+            finally:
+                release.set()
+            assert first.result(timeout=5.0).ok
+        assert len(host.push.calls) == 1
+
+    def test_upload_failure_releases_reservation(self, tmp_path, run_async):
+        plugin, host, settings, lib = _setup(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES + b"0" * (300 * 1024), desc="large", tags=[])
+        host.images.fail = True
+        assert not run_async(
+            plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0)
+        ).ok
+        host.images.fail = False
+        assert run_async(
+            plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0)
+        ).ok
+        assert len(host.push.calls) == 1
+
+    def test_cooldown_starts_after_upload_finishes(self, tmp_path, run_async, monkeypatch):
+        from sticker_manager.services import sender as sender_module
+
+        plugin, host, settings, lib = _setup(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES + b"0" * (300 * 1024), desc="large", tags=[])
+        clock = [10.0]
+        monkeypatch.setattr(sender_module.time, "monotonic", lambda: clock[0])
+
+        async def upload(*args, **kwargs):
+            clock[0] += 8.0
+            return {"type": "image", "url": "https://stub.local/image.jpg"}
+
+        host.images.upload = upload
+        assert run_async(
+            plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0)
+        ).ok
+        assert plugin._sender.cooldown_remaining("K", settings, now=1008.0) == 20.0
 
 
 class TestLedger:

@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import math
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -36,8 +37,8 @@ from .lanlan import unwrap_record
 
 logger = logging.getLogger("sticker_manager.turns")
 
-# 只翻最近这一小截：找"最新一条用户消息"，不是重建历史。
-_SCAN_RECORDS = 10
+# Host query cap; count all retained new turns, including interleaved roles.
+_SCAN_RECORDS = 500
 # 单次总线读的上限：它在 timer 里跑，卡住就是拖垮整拍。
 _BUS_TIMEOUT_SEC = 1.0
 # 同一条总线故障最多 5 分钟吼一次。
@@ -68,7 +69,8 @@ def _float_of(value: Any) -> float:
     # 但拦不住巨整数——float(10**400) 抬 OverflowError，坏值当 0 垫底，不许炸掉整拍。
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         try:
-            return float(value)
+            number = float(value)
+            return number if math.isfinite(number) else 0.0
         except OverflowError:
             return 0.0
     return 0.0
@@ -115,7 +117,7 @@ def latest_user_turn(records: Any) -> UserTurn | None:
 
 
 class TurnWatcher:
-    """每拍问一次总线，把"最新用户轮"翻成"这轮我们没见过"。
+    """Count every unseen retained turn; poll_all returns the full new batch.
 
     `poll()` 只在新轮次（水位前进）时返回对象；重复读到同一轮返回 None。
     `available` 是给注入侧的降级判据：总线一次都没读通过时，退回挂钟节奏，
@@ -127,6 +129,7 @@ class TurnWatcher:
         self._logger = logger
         self._now = now if callable(now) else time.monotonic
         self._seen: dict[str, float] = {}
+        self._seen_at_watermark: dict[str, set[UserTurn]] = {}
         self._counts: dict[str, int] = {}
         # 本次运行累计见过的用户轮（分母，不归零）。
         self._turns_seen = 0
@@ -163,27 +166,37 @@ class TurnWatcher:
     # --- 节拍 ---------------------------------------------------------------
 
     async def poll(self) -> UserTurn | None:
-        """读一拍总线，返回本轮新增的用户轮；没有新轮（或读失败）回 None。"""
+        """Compatibility view: count the whole batch, return its latest turn."""
+        turns = await self.poll_all()
+        return turns[-1] if turns else None
+
+    async def poll_all(self) -> list[UserTurn]:
+        """Count every unseen retained message once, with independent role watermarks."""
         records = await self._read()
         if records is None:  # 读失败：不改动任何状态，也不标记 available
-            return None
+            return []
         self._available = True
-        turn = latest_user_turn(records)
-        if turn is None:
+        turns = [turn for record in records if (turn := user_turn_of(record)) is not None]
+        if not turns:
             self._log_heartbeat(records)
-            return None
-        target = turn.lanlan or self._current_lanlan()
-        if not target:
-            # 归属不明的轮次不计数：钉在空名字上会让计数永远攒不满。
-            return None
-        if turn.ts <= self._seen.get(target, 0.0):
-            return None
-        self._seen[target] = turn.ts
-        self._counts[target] = self._counts.get(target, 0) + 1
-        # v0.17.1：本次运行见过的用户轮总数（分母）。与 `_counts` 是两把尺：
-        # `_counts` 是"距上次注入攒了几轮"（注入成功即清零），这个是累加不归零。
-        self._turns_seen += 1
-        return UserTurn(ts=turn.ts, text=turn.text, lanlan=target, is_voice=turn.is_voice)
+            return []
+        fresh: list[UserTurn] = []
+        for turn in sorted(turns, key=lambda item: item.ts):
+            target = turn.lanlan or self._current_lanlan()
+            watermark = self._seen.get(target, 0.0)
+            if not target or turn.ts <= 0.0 or turn.ts < watermark:
+                continue
+            resolved = UserTurn(ts=turn.ts, text=turn.text, lanlan=target, is_voice=turn.is_voice)
+            if turn.ts == watermark and resolved in self._seen_at_watermark.get(target, set()):
+                continue
+            if turn.ts > watermark:
+                self._seen_at_watermark[target] = set()
+            self._seen_at_watermark[target].add(resolved)
+            self._seen[target] = turn.ts
+            self._counts[target] = self._counts.get(target, 0) + 1
+            self._turns_seen += 1
+            fresh.append(resolved)
+        return fresh
 
     # --- 总线读（全 getattr 化：形状缺失降级不抛）---------------------------
 

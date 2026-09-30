@@ -383,7 +383,7 @@ class FakeMemoryNamespace:
         self.calls.append({"bucket_id": bucket_id, "limit": limit, "timeout": timeout})
         if self.error:
             raise RuntimeError("bus unavailable")
-        return list(self.records)
+        return list(self.records)[-limit:]
 
 
 class FakeBus:

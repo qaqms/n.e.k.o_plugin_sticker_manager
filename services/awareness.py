@@ -158,8 +158,19 @@ class Awareness:
         永不抛异常（纪律见模块 docstring），结果只用于可观测。
         """
         try:
-            turn = await self._turns.poll()
-            return await self._run(settings=settings, now=now, force=False, turn=turn)
+            turns = await self._turns.poll_all()
+            if not turns:
+                return await self._run(settings=settings, now=now, force=False)
+            latest: dict[str, UserTurn] = {}
+            for turn in turns:
+                if settings.enabled and settings.awareness.enabled:
+                    self._observe_turn(turn, settings)
+                latest[turn.lanlan] = turn
+            # Count the full batch, but never send cues for superseded messages.
+            result: dict[str, Any] = {}
+            for turn in sorted(latest.values(), key=lambda item: item.ts):
+                result = await self._run(settings=settings, now=now, force=False, turn=turn, observed=True)
+            return result
         except Exception:  # noqa: BLE001 - timer 无 watchdog，一切异常就地消化
             self._log("sticker_manager awareness leaked", exc=True)
             return {"status": "failed"}
@@ -176,6 +187,7 @@ class Awareness:
         force: bool,
         lanlan_hint: str = "",
         turn: UserTurn | None = None,
+        observed: bool = False,
     ) -> dict[str, Any]:
         if not settings.enabled or not settings.awareness.enabled:
             return {"status": "disabled"}
@@ -204,13 +216,9 @@ class Awareness:
                 # "这句确实没情绪"（判据正常，别改词表）vs "`turn.text` 是空串"
                 # （总线形状变了，事件门控恒假）。只记**长度**，原话一律不落盘（隐私纪律同 sender）。
                 self.last_turn_chars = len(str(turn.text or ""))
-                if self.last_turn_chars:
-                    self.turn_texts += 1
-                else:
-                    self.turn_empty += 1
-                pointer_event = event_gated and emotional_signal(turn.text)
-                if pointer_event:
-                    self.signal_hits += 1
+                pointer_event = (
+                    event_gated and emotional_signal(turn.text) if observed else self._observe_turn(turn, settings)
+                )
                 if not injection_due_for_turn(
                     awareness.inject_mode,
                     turns_since_inject=turns_since,
@@ -274,6 +282,17 @@ class Awareness:
 
     async def _active_lanlan(self) -> str:
         return await self._resolver.resolve()
+
+    def _observe_turn(self, turn: UserTurn, settings: Any) -> bool:
+        self.last_turn_chars = len(str(turn.text or ""))
+        if self.last_turn_chars:
+            self.turn_texts += 1
+        else:
+            self.turn_empty += 1
+        signal = bool(getattr(settings.awareness, "event_gated", True)) and emotional_signal(turn.text)
+        if signal:
+            self.signal_hits += 1
+        return signal
 
     def _push(self, text: str, lanlan: str) -> dict[str, Any]:
         ctx = getattr(self._plugin, "ctx", None)

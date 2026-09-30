@@ -1,7 +1,7 @@
 {
   "schema_version": 4,
   "sdk_version": "0.1.0",
-  "source_sha256": "61753103948bffe460e86b8ac1546bcdcc3a5c95396244131ce16847deb44648",
+  "source_sha256": "3c679400327b3b00c1ad76a914fbe3e476eb308b3d1421074925545ed6a5f040",
   "source_files": [
     ".github/workflows/verify.yml",
     ".gitignore",
@@ -77,7 +77,7 @@
     "ui/shared.ts",
     "uv.lock"
   ],
-  "source_bytes": 37492520,
+  "source_bytes": 37501500,
   "build_env": {
     "os": "win32",
     "python": "3.11",

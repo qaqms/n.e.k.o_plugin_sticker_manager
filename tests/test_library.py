@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
+import pytest
 from conftest import GIF_BYTES, JPEG_BYTES, NOT_AN_IMAGE, PNG_BYTES
 from sticker_manager.services.library import ERR_NOT_FOUND, Library
 
@@ -67,6 +69,80 @@ class TestAddAndLoad:
         assert not result.ok
         assert result.code == "library_io_error"
         assert lib.io_dirty is True
+
+
+class TestCatalogReadProtection:
+    @pytest.mark.parametrize("broken", ["{ broken", "[]", "null", '{"stickers": {}}', "{}"])
+    def test_failed_read_cannot_be_cached_as_success_or_overwritten(self, tmp_path, broken):
+        lib = _library(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES, desc="original", tags=[])
+        lib.catalog_path.write_text(broken, encoding="utf-8")
+        damaged = Library(tmp_path)
+        assert not damaged.load().ok
+        assert not damaged.load().ok
+        assert not damaged.save().ok
+        assert damaged.catalog_path.read_text(encoding="utf-8") == broken
+        damaged.repair()
+        assert lib.image_path(sticker).read_bytes() == PNG_BYTES
+
+    def test_transient_read_failure_recovers_without_losing_last_good_state(self, tmp_path, monkeypatch):
+        lib = _library(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES, desc="original", tags=[])
+        original = lib.catalog_path.read_bytes()
+        reader = Path.read_text
+
+        def unreadable(path, *args, **kwargs):
+            if path == lib.catalog_path:
+                raise PermissionError("temporary read failure")
+            return reader(path, *args, **kwargs)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(Path, "read_text", unreadable)
+            assert not lib.load(force=True).ok
+            assert lib.get(sticker.id) is not None
+            assert not lib.load().ok
+            assert not lib.save().ok
+            assert lib.add(data=JPEG_BYTES, desc="new", tags=[])[1] == "library_io_error"
+        assert lib.catalog_path.read_bytes() == original
+        assert lib.load().ok and not lib.io_dirty
+        assert lib.count() == 1 and lib.get(sticker.id) is not None
+        assert lib.add(data=JPEG_BYTES, desc="new", tags=[])[1] == ""
+
+    def test_deleted_catalog_after_load_is_not_treated_as_fresh_install(self, tmp_path):
+        lib = _library(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES, desc="original", tags=[])
+        lib.catalog_path.unlink()
+        assert not lib.load(force=True).ok
+        assert not lib.save().ok
+        lib.repair()
+        assert lib.image_path(sticker).is_file()
+        assert not lib.catalog_path.exists()
+        restarted = Library(tmp_path)
+        assert not restarted.load().ok
+        assert not restarted.save().ok
+        restarted.repair()
+        assert lib.image_path(sticker).is_file()
+
+    def test_repaired_catalog_restores_normal_operations(self, tmp_path):
+        lib = _library(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES, desc="original", tags=[])
+        original = lib.catalog_path.read_bytes()
+        lib.catalog_path.write_text("{ broken", encoding="utf-8")
+        assert not lib.load(force=True).ok
+        lib.catalog_path.write_bytes(original)
+        assert lib.load().ok and lib.get(sticker.id) is not None
+        assert lib.save().ok
+
+    def test_write_failure_does_not_permanently_block_retry(self, tmp_path, monkeypatch):
+        lib = _library(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES, desc="original", tags=[])
+        with monkeypatch.context() as patch:
+            def fail_replace(*args, **kwargs):
+                raise PermissionError("temporary write failure")
+            patch.setattr(Path, "replace", fail_replace)
+            assert lib.update(sticker.id, desc="changed")[1] == "library_io_error"
+        assert lib.update(sticker.id, desc="changed")[1] == ""
+        assert _library(tmp_path).get(sticker.id).desc == "changed"
 
 
 class TestMutations:

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.20.2
+
+- Protect the catalog after read failures: retain the last good snapshot, reject writes and repair purges until a successful reload, and distinguish a fresh install from a missing index with remaining images.
+- Reserve sends per character across awaits and host threads. Concurrent sends cannot bypass cooldown or deduplication; cancellation and failure release the reservation. Cooldown starts at submission, not before upload.
+- Count all unseen retained user messages on each poll (up to the host's 500-record query limit), with independent role watermarks and equal-timestamp handling. Awareness processes only the latest message per role to avoid replaying stale cues.
+- Add 25 regression cases covering recovery, concurrency, cancellation, message bursts, interleaved roles, and observation counts. Full suite: 480 tests.
+
+The memory bus is still bounded by the host's retention and TTL. Messages expired before polling cannot be recovered by this plugin.
+
 ## 0.20.1
 
 v0.20.1「把两个说不出口的读数补上」——0.20.0 在 Steam 实机跑出来的第一份账（19 轮 / 2 次自发调用 / 0 拒绝）
