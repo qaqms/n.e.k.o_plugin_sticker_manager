@@ -70,6 +70,8 @@ class SendSettings:
 
     # 同一角色卡两次发送之间的最小间隔（秒）。防刷屏，也防模型连着甩图。
     cooldown_sec: float = 20.0
+    # 生成结束后给前端逐段冒字留的兼容缓冲；不是前端/TTS 完成信号。0 = 不额外等待。
+    reply_tail_display_buffer_sec: float = 2.0
     # 静态图走内联（image data part）的上限。payload 整条限 512 KiB、
     # base64 膨胀 4/3，这里再留余量给可能的文字 part 与协议封装。
     # 超过这个尺寸的图改走 ctx.images.upload() 换 URL part。
@@ -174,6 +176,14 @@ class StickerManagerSettings:
                     _as_number(send_raw.get("cooldown_sec"), send_default.cooldown_sec),
                     0.0,
                     3600.0,
+                ),
+                reply_tail_display_buffer_sec=_clamp_float(
+                    _as_number(
+                        send_raw.get("reply_tail_display_buffer_sec"),
+                        send_default.reply_tail_display_buffer_sec,
+                    ),
+                    0.0,
+                    30.0,
                 ),
                 inline_max_bytes=_clamp_int(
                     _as_int(send_raw.get("inline_max_bytes"), send_default.inline_max_bytes),

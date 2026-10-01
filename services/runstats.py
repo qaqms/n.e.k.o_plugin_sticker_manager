@@ -95,6 +95,14 @@ class RunStats:
         self.surface_tier = tier
         self.surface_at = time.time()
 
+    def note_delivery(self, *, ok: bool, reason: str = "") -> None:
+        """A queued tool receipt is not a send; count its eventual outcome once."""
+        if ok:
+            self.sent += 1
+        else:
+            self.refused += 1
+            self.last_reason = reason
+
     # --- 读数 -----------------------------------------------------------------
 
     def snapshot(self, *, turns: int, running_sec: float | None = None) -> dict[str, Any]:

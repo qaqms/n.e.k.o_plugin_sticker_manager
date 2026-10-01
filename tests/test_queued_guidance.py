@@ -1,0 +1,53 @@
+# pyright: reportMissingImports=false
+"""Queued receipts preserve later-turn guidance without claiming delivery."""
+
+from conftest import PNG_BYTES, FakeConfig, FakeHostContext, build_plugin
+from sticker_manager.core.configuration import StickerManagerSettings
+from sticker_manager.core.eagerness import NEXT_STEP_NOTE
+from sticker_manager.services.sender import SendResult
+
+
+def _queued_tool_result(tmp_path, monkeypatch, run_async):
+    plugin, host = build_plugin(
+        FakeHostContext(
+            data_root=tmp_path,
+            config=FakeConfig(data={"sticker_manager": {"enabled": True}}),
+        )
+    )
+    plugin._settings = StickerManagerSettings(enabled=True)
+    plugin._library.load(force=True)
+    sticker, _ = plugin._library.add(data=PNG_BYTES, desc="smile", tags=[])
+
+    async def queue(selected, **kwargs):
+        assert selected.id == sticker.id
+        assert kwargs["source"] == "tool"
+        return SendResult(ok=True, sticker_id=selected.id, desc=selected.desc, queued=True)
+
+    monkeypatch.setattr(plugin._sender, "send", queue)
+    result = run_async(plugin.tool_sticker_send(sticker_id=sticker.id))
+    return plugin, host, sticker, result
+
+
+def test_queued_receipt_is_not_a_completed_send(tmp_path, monkeypatch, run_async):
+    plugin, host, sticker, result = _queued_tool_result(tmp_path, monkeypatch, run_async)
+
+    assert result["ok"] is True
+    assert result["queued"] == sticker.id
+    assert result["sent"] == ""
+    assert host.push.calls == []
+    assert plugin._runstats.tool_calls == 1
+    assert plugin._runstats.sent == 0
+    assert plugin._runstats.refused == 0
+    assert "图已经发出去了" not in result["note"]
+
+
+def test_queued_guidance_only_limits_same_turn_same_image(tmp_path, monkeypatch, run_async):
+    _plugin, _host, _sticker, result = _queued_tool_result(tmp_path, monkeypatch, run_async)
+    note = result["note"]
+
+    assert "仅同一轮同一张图不重复提交" in note
+    assert "本轮回复与显示缓冲结束后" in note
+    assert "继续正常回复，无需等待" in note
+    assert NEXT_STEP_NOTE.removeprefix("图已经发出去了，") in note
+    assert "下一句有情绪想配就 sticker_send 填 group + text" in note
+    assert "不要重复调用发送" not in note

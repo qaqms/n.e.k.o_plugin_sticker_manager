@@ -80,6 +80,7 @@ from .core import (
     validate_optional_text,
 )
 from .services import Awareness, LanlanResolver, Library, RunStats, Sender, ToolWatch, gave_shape
+from .services.turn_end import TurnEndLogs, log_directories
 
 __all__ = ["StickerManagerPlugin"]
 
@@ -163,7 +164,10 @@ class StickerManagerPlugin(NekoPluginBase):
             logger=self.logger,
             on_saved=self._mark_surface_dirty,
         )
-        self._sender = Sender(self, self._library, logger=self.logger)
+        self._sender = Sender(
+            self, self._library, logger=self.logger,
+            turn_end=TurnEndLogs(self, log_directories(self._library.root)),
+        )
         # 工具注册心跳（v0.1.4）：@llm_tool 只在启动时发一次 IPC，main_server 没就绪
         # 或重启后她的两个工具会静默缺席（见 services/tool_watch.py 模块 docstring）。
         # 与总开关无关：注册韧性是宿主层面的在场性，不随业务冻结而应冻结。
@@ -226,6 +230,7 @@ class StickerManagerPlugin(NekoPluginBase):
 
     @lifecycle(id="shutdown")
     async def on_shutdown(self, **_):
+        self._note_deferred_outcomes(self._sender.cancel_pending(settings=self._settings, closing=True))
         # Observe retained turns without injecting a new cue during shutdown.
         try:
             await self._awareness.observe_pending(settings=self._settings)
@@ -248,6 +253,20 @@ class StickerManagerPlugin(NekoPluginBase):
     # ------------------------------------------------------------------
     # 工具注册心跳（v0.1.4）
     # ------------------------------------------------------------------
+
+    @timer_interval(id="sticker_tail", seconds=1, name="sticker_manager reply tail")
+    async def on_sticker_tail(self, **_):
+        try:
+            outcomes = await self._sender.drain(settings=self._settings)
+            self._note_deferred_outcomes(outcomes)
+            return Ok({"completed": len(outcomes)})
+        except Exception:
+            self.logger.warning("sticker_manager reply tail failed", exc_info=True)
+            return Ok({"status": "failed"})
+
+    def _note_deferred_outcomes(self, outcomes):
+        for _source, result in outcomes:
+            self._runstats.note_delivery(ok=result.ok, reason=result.code)
 
     @timer_interval(id="watch", seconds=60, name="sticker_manager watch")
     async def on_watch(self, **_):
@@ -1048,6 +1067,8 @@ class StickerManagerPlugin(NekoPluginBase):
             outcome = f"refused reason={reason}"
         elif result.get("sent"):
             outcome = "sent"
+        elif result.get("queued"):
+            outcome = "queued"
         else:
             outcome = f"ok rows={result.get('count', '?')}" if name == "sticker_list" else "ok"
         self.logger.info(
@@ -1248,7 +1269,7 @@ class StickerManagerPlugin(NekoPluginBase):
             )
             if not result.get("ok"):
                 return Err(SdkError(str(result.get("reason") or "send_failed"), details=result))
-            return Ok({**result, "id": result.get("sent", "")})
+            return Ok({**result, "id": result.get("queued") or result.get("sent", "")})
         lanlan = await self._resolve_lanlan(kwargs)
         sticker, failure = self._pick_for_send(id, lanlan)
         if failure is not None or sticker is None:
@@ -2086,6 +2107,18 @@ class StickerManagerPlugin(NekoPluginBase):
             if hint:
                 out["hint"] = hint
             return out
+        if result.queued:
+            return {
+                "ok": True,
+                "sent": "",
+                "queued": sticker.id,
+                "desc": sticker.catalog_body(self._library.group_descs()),
+                "note": (
+                    "表情包已排队，会在本轮回复与显示缓冲结束后发出。继续正常回复，无需等待；"
+                    "仅同一轮同一张图不重复提交。"
+                    + NEXT_STEP_NOTE.removeprefix("图已经发出去了，")
+                ),
+            }
         return {
             "ok": True,
             "sent": sticker.id,
@@ -2106,6 +2139,8 @@ class StickerManagerPlugin(NekoPluginBase):
             self.logger.warning("config dump failed; keeping previous settings", exc_info=True)
             return self._settings
         self._settings = StickerManagerSettings.from_config(config if isinstance(config, dict) else {})
+        if not self._settings.enabled:
+            self._note_deferred_outcomes(self._sender.cancel_pending(settings=self._settings))
         return self._settings
 
     def _pick_for_send(self, sticker_id: Any, lanlan: str) -> tuple[Sticker | None, Any | None]:

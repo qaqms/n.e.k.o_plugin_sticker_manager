@@ -467,6 +467,9 @@ def build_plugin(
     plugin.logger = host.logger
     plugin.config = host.config
     plugin.bus = host.bus
+    # Legacy transport/gate tests are synchronous; tail-order tests inject
+    # isolated temporary logs and a health stub, never the running Steam host.
+    plugin._sender._turn_end = None
     return plugin, host
 
 

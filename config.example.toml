@@ -18,6 +18,9 @@ enabled = false
 [sticker_manager.send]
 # 同一角色卡两次发送之间的最小间隔（秒）。
 cooldown_sec = 20.0
+# 生成结束后的逐段显示兼容缓冲（秒，0..30），不代表前端或 TTS 真正结束。
+# 0 = 恢复无额外缓冲；旧配置没有此键时自动使用默认值。
+reply_tail_display_buffer_sec = 2.0
 # 静态图走内联通道的字节上限（256 KiB）；超过改走宿主上传换 URL。
 # 整条消息 payload 上限 512 KiB（base64 膨胀 4/3），这里已留余量。
 inline_max_bytes = 262144

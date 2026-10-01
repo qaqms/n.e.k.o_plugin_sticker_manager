@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.20.6
+
+- Reduce the default `send.reply_tail_display_buffer_sec` from 7 to 2 seconds. The 0.20.5 seven-second wait exposed a continuous-input regression: all three observed tool selections were canceled as `turn_superseded` before transport submission, not hidden after a `blind` push.
+- Keep explicit user overrides, including `7.0`, unchanged. Older configurations without this key inherit the shorter default without manual edits.
+- Preserve cancellation on newer input, known response activity, subsequent completion markers and expiry. Do not carry old pending stickers into a later turn; the shorter default only increases the opportunity to send before the next input.
+- Keep this a plugin-only display compatibility buffer, not a precise frontend or TTS completion signal. Longer responses may still display more text after the sticker, and rapid input can still cancel it. Probability, cooldown, deduplication and eagerness remain unchanged.
+
+## 0.20.5
+
+- Add a default 7-second display buffer after the Main log generation-end marker for the host's two-second, sentence-by-sentence chat display. Configure `send.reply_tail_display_buffer_sec` within `0..30`; `0` restores no extra buffer, and existing configurations inherit the new default automatically.
+- Treat this delay as a compatibility estimate, not a frontend completion callback or a TTS playback guarantee. Do not send on elapsed time alone without the generation-end marker.
+- Cancel pending stickers on same-character new user input or a later completion marker so stale images do not enter a new reply. Rapid consecutive chat may therefore cancel the previous turn's sticker.
+- Display queued `sticker_send` tool images with `ai_behavior="blind"` instead of feeding them into a subsequent turn. Keep panel and background Agent `read` behavior unchanged, and scope the queued receipt's no-repeat instruction to the current turn only.
+- Keep probability, submission-time cooldown, deduplication and eagerness unchanged. These changes do not promise a higher sticker frequency.
+
+## 0.20.4
+
+- Queue model-selected stickers until a newly appended, character-specific Main log completion marker. Use the existing read-only loopback health endpoint as a busy guard, not as a completion signal. No host changes or new SDK parameters.
+- Keep panel test sends immediate. Background Agent sends defer while a reply is active or its state is unknown; confirmed idle sends retain their existing direct path.
+- Retain GIF bytes, caption-before-image parts, gates and submission-time cooldown. Queued receipts do not count as successful sends; actual delivery or cancellation updates the ledger and run statistics once.
+- Bound pending sends by role, count and lifetime. Cancel on shutdown, disable, missing/changed logs, ambiguous subsequent turns, deleted/disabled images or inactive zones. Follow size-based log rotation without holding Windows log files open.
+- This is a Steam log compatibility adapter, not an official SDK callback or an audio-playback completion guarantee. Exact correlation during interruption remains limited by the host's lack of turn IDs in this signal.
+
 ## 0.20.3
 
 - Let the background Agent use the send entry with a group, query, or no selector. An explicit generic request selects an available, non-recent image from the active zone; existing panel sends by id and all send gates remain unchanged.

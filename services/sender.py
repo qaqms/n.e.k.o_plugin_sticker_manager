@@ -6,8 +6,8 @@
 2. **上传换 URL**（大图 / 显式配置）：`await ctx.images.upload(data)` 拿回
    `{"type":"image","url":...,"mime":"image/jpeg"}` 的 part 再投递。
 
-投递用 `visibility=["chat"]`（用户在聊天里看到图）+ `ai_behavior="read"`
-（图进她的上下文但不额外起一轮 turn——发图这个动作本身就是她在说话）。
+投递用 `visibility=["chat"]`（用户在聊天里看到图）；即时与 Agent 路径用
+`ai_behavior="read"`，延迟工具图片用 `blind` 避免反灌到下一轮上下文。
 `submitted=True` 只代表已交给传输，不代表宿主已消费（our_life 陷阱 §5）。
 
 冷却是**按角色卡的内存表**：不持久化。跨重启的发送节奏没必要留痕，
@@ -23,6 +23,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
 import threading
 import time
@@ -32,6 +33,7 @@ from typing import Any
 from ..core.catalog import Sticker, detect_image_format
 from ..core.configuration import StickerManagerSettings
 from .library import Library
+from .turn_end import EndTicket, TurnEndLogs
 
 # 稳定错误码（模型/面板各自的文案层翻译它们）
 ERR_NOT_ENABLED = "not_enabled"
@@ -46,6 +48,8 @@ ERR_PROBABILITY = "probability_declined"
 
 # 掷骰用模块级实例：测试里 monkeypatch `sender._RNG` 即可钉死随机序列。
 _RNG = random.Random()
+_TAIL_TIMEOUT_SEC = 300.0
+_MAX_PENDING = 8
 
 
 @dataclass
@@ -55,6 +59,7 @@ class SendResult:
     detail: str = ""
     sticker_id: str = ""
     desc: str = ""
+    queued: bool = False
 
     @classmethod
     def failure(cls, code: str, *, sticker_id: str = "", detail: str = "") -> "SendResult":
@@ -65,10 +70,24 @@ class SendResult:
         return cls(ok=True, sticker_id=sticker.id, desc=sticker.desc)
 
 
+@dataclass
+class PendingSend:
+    sticker: Sticker
+    parts: list[dict[str, Any]]
+    ticket: EndTicket
+    source: str
+    started: float
+    text_len: int
+    display_buffer_sec: float
+    end_observed_at: float | None = None
+
+
 class Sender:
     """发送器。`plugin` 提供 `ctx`（push_message / images）。"""
 
-    def __init__(self, plugin: Any, library: Library, *, logger: Any = None):
+    def __init__(
+        self, plugin: Any, library: Library, *, logger: Any = None, turn_end: TurnEndLogs | None = None
+    ):
         self._plugin = plugin
         self._library = library
         self._logger = logger
@@ -76,6 +95,11 @@ class Sender:
         self._prob_rolls: dict[str, tuple[float, bool]] = {}  # lanlan -> (掷骰时刻, 命中)
         self._inflight: set[str] = set()
         self._inflight_lock = threading.Lock()
+        self._turn_end = turn_end
+        self._pending: dict[str, PendingSend] = {}
+        self._drain_lock = threading.Lock()
+        self._closed = False
+        self._epoch = 0
 
     def _log(self, message: str, *, exc: bool = False) -> None:
         if self._logger is None:
@@ -170,16 +194,24 @@ class Sender:
         moment = time.time() if now is None else now
         # Reservation spans awaits and works across the host's separate event loops.
         with self._inflight_lock:
+            if self._closed:
+                return SendResult.failure("send_stopped", sticker_id=sticker.id)
             if lanlan in self._inflight:
                 return SendResult.failure(ERR_COOLDOWN, sticker_id=sticker.id)
             self._inflight.add(lanlan)
+            epoch = self._epoch
+        handed_off = False
         try:
-            return await self._send_reserved(
-                sticker, lanlan=lanlan, settings=settings, source=source, now=moment, force=force, text=text
+            result = await self._send_reserved(
+                sticker, lanlan=lanlan, settings=settings, source=source, now=moment,
+                force=force, text=text, epoch=epoch,
             )
+            handed_off = result.queued
+            return result
         finally:
-            with self._inflight_lock:
-                self._inflight.discard(lanlan)
+            if not handed_off:
+                with self._inflight_lock:
+                    self._inflight.discard(lanlan)
 
     async def _send_reserved(
         self,
@@ -191,6 +223,7 @@ class Sender:
         now: float,
         force: bool,
         text: str,
+        epoch: int,
     ) -> SendResult:
         moment = now
         started = time.monotonic()
@@ -222,6 +255,18 @@ class Sender:
             return SendResult.failure(ERR_BAD_IMAGE, sticker_id=sticker.id)
         _ext, mime = detected
 
+        ticket = None
+        if self._turn_end is not None and source in {"tool", "agent"}:
+            defer = True
+            if source == "agent":
+                # Background Agent requests need not have an active main reply.
+                states = await asyncio.to_thread(self._turn_end.busy_states)
+                defer = states.get(lanlan) is not False
+            if defer:
+                ticket = self._turn_end.arm(lanlan)
+                if ticket is None:
+                    return SendResult.failure("turn_end_unavailable", sticker_id=sticker.id)
+
         part = await self._build_part(data, mime, settings=settings, text_len=len(text))
         if part is None:
             return SendResult.failure(ERR_TOO_LARGE, sticker_id=sticker.id)
@@ -230,14 +275,46 @@ class Sender:
         # 那句话由她自己的回复通道说更合适——所以我们不降级成"纯文本重发"。
         parts: list[dict[str, Any]] = [{"type": "text", "text": text}] if text else []
         parts.append(part)
-        pushed = self._push(parts, lanlan=lanlan)
+        with self._inflight_lock:
+            if self._closed:
+                return SendResult.failure("send_stopped", sticker_id=sticker.id)
+            if epoch != self._epoch:
+                return SendResult.failure(ERR_NOT_ENABLED, sticker_id=sticker.id)
+            if ticket is not None:
+                if len(self._pending) >= _MAX_PENDING:
+                    return SendResult.failure("send_queue_full", sticker_id=sticker.id)
+                self._pending[lanlan] = PendingSend(
+                    sticker, parts, ticket, source, time.monotonic(), len(text),
+                    settings.send.reply_tail_display_buffer_sec,
+                )
+                self._log(
+                    f"sticker queued: id={sticker.id} source={source} "
+                    f"buffer_sec={settings.send.reply_tail_display_buffer_sec:g}"
+                )
+                return SendResult(ok=True, sticker_id=sticker.id, desc=sticker.desc, queued=True)
+
+            moment += max(0.0, time.monotonic() - started)
+            return self._submit(
+                sticker, parts, lanlan=lanlan, settings=settings,
+                source=source, moment=moment, text_len=len(text),
+            )
+
+    def _submit(
+        self, sticker: Sticker, parts: list[dict[str, Any]], *, lanlan: str,
+        settings: StickerManagerSettings, source: str, moment: float, text_len: int,
+        ai_behavior: str = "read",
+    ) -> SendResult:
+        try:
+            pushed = self._push(parts, lanlan=lanlan, ai_behavior=ai_behavior)
+        except Exception:
+            self._log("push failed", exc=True)
+            return SendResult.failure(ERR_TRANSPORT, sticker_id=sticker.id)
         if not pushed.get("submitted"):
             reason = str(pushed.get("reason", ERR_TRANSPORT))
             self._log(f"push rejected: reason={reason}")
             return SendResult.failure(reason or ERR_TRANSPORT, sticker_id=sticker.id)
 
         # 只有真交给传输了才前进冷却与计数（被拒的投递不该罚她等下一轮）。
-        moment += max(0.0, time.monotonic() - started)
         self._last_sent[lanlan] = moment
         self._library.touch_used(sticker.id, now=moment)
         self._library.append_usage(
@@ -249,15 +326,119 @@ class Sender:
                 "ok": True,
                 # 图文同条留个长度痕（v0.18.0）：**只记长度不记内容**——那句是她生成的话，
                 # 台账的既有纪律是"只放非隐私字段"（时刻/id/角色/来源/成败）。
-                "text_len": len(text),
+                "text_len": text_len,
             },
             keep=settings.storage.usage_history_keep,
         )
         self._log(
             f"sticker sent: id={sticker.id} source={source}"
-            + (f" text_len={len(text)}" if text else "")
+            + (f" text_len={text_len}" if text_len else "")
         )
         return SendResult.success(sticker)
+
+    async def drain(self, *, settings: StickerManagerSettings) -> list[tuple[str, SendResult]]:
+        """Buffer display after generation ends, watching for superseding input.
+
+        The buffer is a configurable compatibility aid, not a frontend completion
+        signal. Each timer tick continues to read new logs and the busy guard.
+        """
+        if self._turn_end is None or not self._drain_lock.acquire(blocking=False):
+            return []
+        outcomes: list[tuple[str, SendResult]] = []
+        try:
+            with self._inflight_lock:
+                snapshot = list(self._pending.items())
+            states = None
+            for lanlan, pending in snapshot:
+                code = ""
+                ready = False
+                if not settings.enabled:
+                    code = ERR_NOT_ENABLED
+                elif time.monotonic() - pending.started >= _TAIL_TIMEOUT_SEC:
+                    code = "turn_end_timeout"
+                else:
+                    ready = await asyncio.to_thread(self._turn_end.poll, pending.ticket)
+                    if pending.ticket.matched and pending.end_observed_at is None:
+                        pending.end_observed_at = time.monotonic()
+                        self._log(
+                            f"sticker tail observed: id={pending.sticker.id} "
+                            f"buffer_sec={pending.display_buffer_sec:g}"
+                        )
+                    if pending.ticket.invalid:
+                        code = "turn_end_lost"
+                    elif pending.ticket.superseded:
+                        code = "turn_superseded"
+                    elif pending.ticket.matched:
+                        if states is None:
+                            states = await asyncio.to_thread(self._turn_end.busy_states)
+                        busy = states.get(lanlan)
+                        if busy is True:
+                            code = "turn_superseded"
+                        elif time.monotonic() - pending.end_observed_at < pending.display_buffer_sec:
+                            ready = False
+                with self._inflight_lock:
+                    if self._pending.get(lanlan) is not pending:
+                        continue
+                    if not code:
+                        loaded = self._library.load()
+                        sticker = self._library.get(pending.sticker.id)
+                        if not loaded.ok:
+                            code = loaded.code
+                        elif sticker is None or not self._library.image_path(sticker).is_file():
+                            code = ERR_MISSING_FILE
+                        elif sticker.disabled:
+                            code = "sticker_disabled"
+                        elif sticker.id not in {s.id for s in self._library.active_pool()}:
+                            code = "sticker_zone_changed"
+                    if not code and not ready:
+                        continue
+                    try:
+                        if code:
+                            result = SendResult.failure(code, sticker_id=pending.sticker.id)
+                        else:
+                            result = self._submit(
+                                sticker, pending.parts, lanlan=lanlan, settings=settings,
+                                source=pending.source, moment=time.time(), text_len=pending.text_len,
+                                ai_behavior="blind" if pending.source == "tool" else "read",
+                            )
+                        if not result.ok:
+                            self.note_attempt_failed(
+                                lanlan=lanlan, sticker_id=pending.sticker.id, code=result.code,
+                                settings=settings, now=time.time(), source=pending.source,
+                            )
+                            end_wait = (
+                                "no-end" if pending.end_observed_at is None
+                                else f"{max(0.0, time.monotonic() - pending.end_observed_at):.2f}"
+                            )
+                            self._log(
+                                f"sticker deferred rejected: id={pending.sticker.id} "
+                                f"reason={result.code} end_wait_sec={end_wait}"
+                            )
+                        outcomes.append((pending.source, result))
+                    finally:
+                        self._pending.pop(lanlan, None)
+                        self._inflight.discard(lanlan)
+            return outcomes
+        finally:
+            self._drain_lock.release()
+
+    def cancel_pending(
+        self, *, settings: StickerManagerSettings, closing: bool = False
+    ) -> list[tuple[str, SendResult]]:
+        outcomes = []
+        with self._inflight_lock:
+            self._closed = self._closed or closing
+            self._epoch += 1
+            for lanlan, pending in list(self._pending.items()):
+                code = "send_stopped" if closing else ERR_NOT_ENABLED
+                self.note_attempt_failed(
+                    lanlan=lanlan, sticker_id=pending.sticker.id, code=code,
+                    settings=settings, now=time.time(), source=pending.source,
+                )
+                outcomes.append((pending.source, SendResult.failure(code, sticker_id=pending.sticker.id)))
+                self._inflight.discard(lanlan)
+            self._pending.clear()
+        return outcomes
 
     async def _build_part(
         self, data: bytes, mime: str, *, settings: StickerManagerSettings, text_len: int = 0
@@ -285,11 +466,13 @@ class Sender:
             return dict(upload)
         return None
 
-    def _push(self, parts: list[dict[str, Any]], *, lanlan: str) -> dict[str, Any]:
+    def _push(
+        self, parts: list[dict[str, Any]], *, lanlan: str, ai_behavior: str = "read"
+    ) -> dict[str, Any]:
         ctx = self._plugin.ctx
         kwargs: dict[str, Any] = {
             "visibility": ["chat"],
-            "ai_behavior": "read",
+            "ai_behavior": ai_behavior,
             "parts": parts,
             "description": "sticker_manager:send",
         }
