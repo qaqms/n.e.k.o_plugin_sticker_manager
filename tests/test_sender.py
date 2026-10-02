@@ -70,8 +70,30 @@ class TestSendChannel:
         run_async(plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0))
         (call,) = host.push.calls
         assert call["visibility"] == ["chat"]
-        assert call["ai_behavior"] == "read"
+        assert call["ai_behavior"] == "blind"
         assert call["target_lanlan"] == "K"
+
+    def test_tool_send_is_immediate_even_when_turn_end_adapter_exists(self, tmp_path, run_async):
+        """A host log marker must not cancel a valid model tool selection."""
+        plugin, host, settings, lib = _setup(tmp_path)
+        sticker, _ = lib.add(data=PNG_BYTES, desc="笑", tags=[])
+
+        class MustNotGate:
+            def busy_states(self):
+                raise AssertionError("tool sends must not query reply state")
+
+            def arm(self, _lanlan):
+                raise AssertionError("tool sends must not arm a deferred ticket")
+
+        plugin._sender._turn_end = MustNotGate()
+        result = run_async(
+            plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0)
+        )
+
+        assert result.ok and not result.queued
+        assert len(host.push.calls) == 1
+        assert plugin._library.get(sticker.id).use_count == 1
+        assert plugin._library.read_usage()[-1]["ok"] is True
 
 
 class TestGuards:

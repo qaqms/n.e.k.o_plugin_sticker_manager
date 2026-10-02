@@ -1,17 +1,8 @@
 # pyright: reportMissingImports=false
-"""v0.18.0「图文同条」的门：图和她那句话一起出去，或者一起不出去。
+"""配文与图片分条：同一次工具调用先投配文，再投独立图片。
 
-来由：主人选了参考那边 `enable_mixed` 的等价物。宿主侧我核过才敢做——
-`parts=[{text},{image}]` 会经 `_ordered_plugin_chat_blocks(include_text=True)`
-渲染成**同一个来源气泡**并按顺序保留（宿主 `app/main_server/character_runtime.py:1154,1380`），
-但**署名一定是插件**：`render_chat_blocks` 明写插件内容"既不是助手也不是用户，
-把它扮成任一方都是读者无法核实的谎"（同文件 1355-1372 与 `main_logic/core/turn.py:1804-1816`）。
-曾经能以她身份上屏的 `passthrough_to_chat_bubble` 仍在树里，但注释写明
-"NO PRODUCTION CALLER remains" 且这条规矩是被有意拆掉的。所以这里做的是什么都能做的那一半：
-**她把话写进工具参数 → 一次调用 → 一条气泡**，动作从两段压成一段，署名如实。
-
-钉得最狠的一条是"一起不出去"（`test_text_never_survives_a_lost_image`）：
-只把话投出去会造出一句没人应答的裸文本，那比不发更糟——也是这条功能最容易做歪的地方。
+图片必须先准备好，准备失败时不能留下裸配文。传输本身没有事务或回滚，
+配文已提交后图片仍可能失败；部分提交必须如实报告而不能算发表情成功。
 """
 
 from __future__ import annotations
@@ -43,7 +34,7 @@ def _setup(tmp_path, *, send_overrides=None):
 
 
 class TestMixedParts:
-    def test_text_and_image_share_one_push_in_order(self, tmp_path, run_async):
+    def test_text_and_image_use_separate_pushes_in_order(self, tmp_path, run_async):
         plugin, host, settings = _setup(tmp_path)
         sticker, _ = plugin._library.add(data=PNG_BYTES, desc="笑", tags=[])
         result = run_async(
@@ -51,22 +42,31 @@ class TestMixedParts:
                 sticker, lanlan="K", settings=settings, source="tool", now=1000.0, text="就这？"
             )
         )
-        assert result.ok
-        (call,) = host.push.calls  # 只有一条 push：没有"图一条、话一条"
-        parts = call["parts"]
-        assert [p["type"] for p in parts] == ["text", "image"]
-        assert parts[0]["text"] == "就这？"
-        assert parts[1]["data"] == PNG_BYTES
+        assert result.ok and result.text_submitted
+        caption_call, image_call = host.push.calls
+        assert caption_call["parts"] == [{"type": "text", "text": "就这？"}]
+        assert image_call["parts"] == [{"type": "image", "data": PNG_BYTES, "mime": "image/png"}]
+        for call in host.push.calls:
+            assert call["target_lanlan"] == "K"
+            assert call["visibility"] == ["chat"] and call["ai_behavior"] == "blind"
+        assert plugin._library.get(sticker.id).use_count == 1
+        (usage,) = plugin._library.read_usage()
+        assert usage["ok"] and usage["text_len"] == len("就这？")
+        sent_at = plugin._sender._last_sent["K"]
+        assert plugin._sender.cooldown_remaining("K", settings, now=sent_at) == settings.send.cooldown_sec
 
     def test_without_text_the_old_shape_is_untouched(self, tmp_path, run_async):
         # 反向样本：默认路径被改动过（比如无条件塞一个空 text part）就该红——
         # 老形状是主人实机验收过 6 版的东西。
         plugin, host, settings = _setup(tmp_path)
         sticker, _ = plugin._library.add(data=PNG_BYTES, desc="笑", tags=[])
-        run_async(plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0))
+        result = run_async(
+            plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0)
+        )
+        assert result.ok and not result.text_submitted
         (call,) = host.push.calls
         assert [p["type"] for p in call["parts"]] == ["image"]
-        assert call["visibility"] == ["chat"] and call["ai_behavior"] == "read"
+        assert call["visibility"] == ["chat"] and call["ai_behavior"] == "blind"
 
     def test_sender_forwards_the_words_verbatim(self, tmp_path, run_async):
         # 归位：sender 拿到什么就投什么（不改写她的措辞），trim 是工具入口的事。
@@ -82,13 +82,12 @@ class TestMixedParts:
         sticker, _ = plugin._library.add(data=PNG_BYTES, desc="笑", tags=[])
         result = run_async(plugin.tool_sticker_send(sticker_id=sticker.id, text="  嗯  "))
         assert result.get("ok") is True, result
-        assert host.push.calls[-1]["parts"][0]["text"] == "嗯"
+        assert host.push.calls[0]["parts"] == [{"type": "text", "text": "嗯"}]
+        assert [part["type"] for part in host.push.calls[1]["parts"]] == ["image"]
 
 
-class TestAllOrNothing:
-    def test_text_never_survives_a_lost_image(self, tmp_path, run_async):
-        # 图放不下（动图超预算）时，那句话也不许单独出去：裸投一句没人应答的话，
-        # 比这条不发更糟。
+class TestImagePreparation:
+    def test_image_preparation_failure_never_submits_caption(self, tmp_path, run_async):
         plugin, host, settings = _setup(tmp_path)
         big_gif = GIF_BYTES + b"\x00" * (300 * 1024)
         sticker, _ = plugin._library.add(data=big_gif, desc="大动图", tags=[])
@@ -98,17 +97,13 @@ class TestAllOrNothing:
             )
         )
         assert not result.ok and result.code == "sticker_too_large"
+        assert not result.text_submitted
         assert host.push.calls == []
 
-    def test_caption_counts_against_the_inline_budget(self, tmp_path, run_async):
-        """内联尺量的是**整条载荷**，不是只看图字节。
-
-        用动图测才对：静态图超预算会改走上传换 URL（那是另一条通道、另一个尺），
-        只有 gif 是"内联不下就如实拒发"（陷阱 1：上传会把它压平成一帧 JPEG）。
-        反向样本：`_build_part` 里忘了减 `text_len`，第二段就会拿到 ok=True。
-        """
+    def test_caption_does_not_reduce_the_independent_image_budget(self, tmp_path, run_async):
+        """两条消息的预算独立，GIF 保持内联原字节，不通过上传压平动画。"""
         plugin, host, settings = _setup(tmp_path, send_overrides={"inline_max_bytes": 200_000})
-        gif = GIF_BYTES + b"\x00" * 190_000  # 单看字节放得下；加上一句话就放不下
+        gif = GIF_BYTES + b"\x00" * 190_000
         sticker, _ = plugin._library.add(data=gif, desc="紧巴巴", tags=[])
         tight = run_async(plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0))
         assert tight.ok and len(host.push.calls) == 1
@@ -118,8 +113,10 @@ class TestAllOrNothing:
                 sticker, lanlan="K", settings=settings, source="tool", now=1099.0, text="x" * 20_000
             )
         )
-        assert not crowded.ok and crowded.code == "sticker_too_large"
-        assert len(host.push.calls) == 1, "超预算那条一次都不该投"
+        assert crowded.ok and crowded.text_submitted
+        assert len(host.push.calls) == 3
+        assert host.push.calls[1]["parts"] == [{"type": "text", "text": "x" * 20_000}]
+        assert host.push.calls[2]["parts"] == [{"type": "image", "data": gif, "mime": "image/gif"}]
         assert host.images.calls == [], "gif 不许为了塞进去改走上传通道"
 
 
@@ -132,11 +129,13 @@ class TestToolSurfaceForText:
         assert host.push.calls == []
 
     def test_the_standing_surface_teaches_the_one_call_shape(self):
-        # 常驻面上要有这句（她得知道"一次调用就能把话说完"），但它不许变成新的禁令。
+        # One group call adds an independent image; optional caption remains separate.
         text = build_send_tool_description("・困与睡（9 张） — 深夜用。", "natural")
-        assert "text" in text and "一起出去" in text
+        assert "text" in text and "配文与图片分条发送" in text
+        assert "text 留空即可" in text and "图片独立发送" in text
+        assert "一起出去" not in text
         for banned in ("会拒", "别连试", "只有主人点名", "force", "挡下", "最近不重复", "冷却"):
-            assert banned not in text, f"图文同条的描述里混进了禁令词：{banned}"
+            assert banned not in text, f"配文分条的描述里混进了禁令词：{banned}"
 
 
 class TestLedgerHonesty:

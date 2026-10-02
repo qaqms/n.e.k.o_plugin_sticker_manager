@@ -31,11 +31,16 @@ def test_agent_group_and_text_use_shared_sender(tmp_path, run_async):
     sticker = _add(plugin, group="happy")
     result = run_async(plugin.send_entry(group="happy", text="hello"))
     assert result.is_ok() and result.value["id"] == sticker.id
-    assert host.push.calls[0]["parts"][0] == {"type": "text", "text": "hello"}
+    assert host.push.calls[0]["parts"] == [{"type": "text", "text": "hello"}]
+    assert [part["type"] for part in host.push.calls[1]["parts"]] == ["image"]
+    assert all(call["ai_behavior"] == "read" for call in host.push.calls)
+    assert plugin._runstats.sent == 1
+    assert plugin._library.get(sticker.id).use_count == 1
+    assert len(plugin._library.read_usage()) == 1
     second = run_async(plugin.send_entry(group="happy"))
     assert not second.is_ok()
     assert str(second.error) in {"send_cooldown", "recent_repeat"}
-    assert len(host.push.calls) == 1
+    assert len(host.push.calls) == 2
 
 
 def test_agent_query_uses_existing_resolution(tmp_path, run_async):

@@ -76,6 +76,17 @@ def test_missing_uses_nested_tools_by_role_shape() -> None:
     assert missing_tool_names(payload, ["sticker_list", "sticker_send"]) == ["sticker_send"]
 
 
+def test_role_specific_absence_is_not_masked_by_another_role() -> None:
+    payload = {
+        "ok": True,
+        "tools_by_role": {
+            "YUI": [{"name": "sticker_list"}],
+            "ATLS": [{"name": "sticker_list"}, {"name": "sticker_send"}],
+        },
+    }
+    assert missing_tool_names(payload, ["sticker_list", "sticker_send"], role="YUI") == ["sticker_send"]
+
+
 def test_missing_accepts_flat_fallback_shape() -> None:
     payload = {"role_a": [{"name": "sticker_list"}, {"name": "b"}]}
     assert missing_tool_names(payload, ["sticker_list", "sticker_send"]) == ["sticker_send"]
@@ -93,8 +104,8 @@ def test_empty_declared_returns_empty() -> None:
 
 
 def test_interval_constant_is_pinned() -> None:
-    # 与 fc / our_life 实测过的兜底同量级；改动它要有理由，这里钉住默认值。
-    assert TOOL_WATCH_INTERVAL_SEC == 300.0
+    # 10 秒覆盖 API 重载后到下一轮主聊天之间的短缺席窗口。
+    assert TOOL_WATCH_INTERVAL_SEC == 10.0
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +149,9 @@ def test_unreachable_skips_reissue_but_keeps_clock(run_async: Any) -> None:
     assert run_async(watch.maybe_run(now=1000.0))["status"] == "unreachable"
     assert plugin.reemitted == []
     # 时钟已推进：main_server 长期没起时不会每拍追打
-    assert run_async(watch.maybe_run(now=1010.0))["status"] == "waiting"
-    assert len(urls) == 1
+    assert run_async(watch.maybe_run(now=1009.0))["status"] == "waiting"
+    assert run_async(watch.maybe_run(now=1010.0))["status"] == "unreachable"
+    assert len(urls) == 2
 
 
 def test_repairs_only_missing_by_name(run_async: Any) -> None:
@@ -147,7 +159,7 @@ def test_repairs_only_missing_by_name(run_async: Any) -> None:
     payload = {"tools_by_role": {"r": [{"name": "sticker_list"}]}}
     watch, _urls = _watch(plugin, payload)
     result = run_async(watch.maybe_run(now=1000.0))
-    assert result["status"] == "repaired"
+    assert result["status"] == "recovering"
     assert result["missing"] == ["sticker_send"]  # 排序稳定
     assert result["reissued"] == 1
     assert _names(plugin.reemitted) == ["sticker_send"]
@@ -158,9 +170,9 @@ def test_repairs_only_missing_by_name(run_async: Any) -> None:
 def test_single_tool_failure_does_not_stop_the_rest(run_async: Any) -> None:
     plugin = FakePlugin(["a", "b", "c"])
     plugin.raise_for = {"b"}
-    watch, _urls = _watch(plugin, {"tools_by_role": {}})
+    watch, _urls = _watch(plugin, {"tools_by_role": {"r": []}})
     result = run_async(watch.maybe_run(now=1000.0))
-    assert result["status"] == "repaired"
+    assert result["status"] == "recovering"
     assert result["reissued"] == 2
     assert _names(plugin.reemitted) == ["a", "c"]
 
@@ -169,9 +181,9 @@ def test_missing_protected_surface_degrades_to_zero(run_async: Any) -> None:
     # 宿主哪天改名/收口 protected 面：心跳失效，不崩、不误伤其余流程。
     plugin = FakePlugin(["a"], with_notify=False)
     del plugin._llm_tools
-    watch, _urls = _watch(plugin, {"tools_by_role": {}})
+    watch, _urls = _watch(plugin, {"tools_by_role": {"r": []}})
     result = run_async(watch.maybe_run(now=1000.0))
-    assert result["status"] == "repaired"
+    assert result["status"] == "repair_pending"
     assert result["reissued"] == 0
 
 
@@ -183,6 +195,19 @@ def test_fetch_exception_is_swallowed(run_async: Any) -> None:
 
     watch = ToolWatch(plugin, fetch=fetch)
     assert run_async(watch.maybe_run(now=1000.0))["status"] == "watch_failed"
+
+
+def test_source_mismatch_is_treated_as_missing(run_async: Any) -> None:
+    plugin = FakePlugin(["sticker_send"])
+    plugin.plugin_id = "sticker_manager"
+    payload = {
+        "ok": True,
+        "tools_by_role": {"YUI": [{"name": "sticker_send", "source": "plugin:other"}]},
+    }
+    watch, _urls = _watch(plugin, payload)
+    result = run_async(watch.maybe_run(now=1000.0))
+    assert result["status"] == "recovering"
+    assert result["missing_by_role"] == {"YUI": ["sticker_send"]}
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +260,7 @@ def test_gap_seconds_accumulate_only_from_a_healthy_baseline(run_async: Any) -> 
     watch = _scripted_watch(plugin, [full, gone])
     assert run_async(watch.maybe_run(now=1000.0))["status"] == "healthy"
     repaired = run_async(watch.maybe_run(now=1000.0 + TOOL_WATCH_INTERVAL_SEC))
-    assert repaired["status"] == "repaired" and repaired["gaps"] == 1
+    assert repaired["status"] == "recovering" and repaired["gaps"] == 1
     # 上界语义：真实缺席起点在两次巡检之间，不可知；报的是"距上次确认在场"的秒数。
     assert repaired["gap_seconds_max"] == TOOL_WATCH_INTERVAL_SEC
     assert watch.gap_seconds_max == TOOL_WATCH_INTERVAL_SEC
@@ -246,7 +271,7 @@ def test_first_sweep_missing_leaves_the_duration_unknown(run_async: Any) -> None
     plugin = FakePlugin(["sticker_send"])
     watch = _scripted_watch(plugin, [{"tools_by_role": {"r": []}}])
     repaired = run_async(watch.maybe_run(now=5000.0))
-    assert repaired["status"] == "repaired" and repaired["gaps"] == 1
+    assert repaired["status"] == "recovering" and repaired["gaps"] == 1
     assert repaired["gap_seconds_max"] == 0.0
 
 
@@ -259,10 +284,10 @@ def test_repair_alone_is_not_proof_of_presence(run_async: Any) -> None:
     first = run_async(watch.maybe_run(now=1300.0))
     second = run_async(watch.maybe_run(now=1600.0))  # 补挂后没再确认过：秒数不再涨
     assert first["gap_seconds_max"] == 300.0 and second["gap_seconds_max"] == 300.0
-    assert second["gaps"] == 2
+    assert second["gaps"] == 1
     run_async(watch.maybe_run(now=1900.0))  # healthy → 重新建立基线
     third = run_async(watch.maybe_run(now=2200.0))
-    assert third["gaps"] == 3 and third["gap_seconds_max"] == 600.0
+    assert third["gaps"] == 2 and third["gap_seconds_max"] == 600.0
 
 
 def test_unreachable_is_neither_healthy_nor_a_gap(run_async: Any) -> None:

@@ -110,6 +110,17 @@ class TestStandingDescription:
         text = build_send_tool_description("", "natural")
         assert "纯文字" in text and "只发图" in text
 
+    def test_normal_reply_and_optional_caption_use_separate_surfaces(self):
+        for tier in TOOL_NOTE:
+            text = build_send_tool_description(_ONE_CATEGORY, tier)
+            assert "sticker_send(group=分类名)" in text
+            assert "正常文字回复照常说" in text and "图片独立发送" in text
+            assert "text 留空即可" in text
+            assert "只有额外配文才填 text" in text
+            assert "配文与图片分条发送" in text
+            assert "配文不要在正文重复" in text
+            assert "图文一条" not in text and "一起出去" not in text
+
     def test_empty_catalog_says_so_instead_of_encouraging(self):
         # 没有可发的分类还鼓励她发，只会换来一堆失败调用。
         assert "暂时还没有可发的分类" in build_send_tool_description("", "eager")

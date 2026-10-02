@@ -38,7 +38,8 @@ def test_queued_receipt_is_not_a_completed_send(tmp_path, monkeypatch, run_async
     assert plugin._runstats.tool_calls == 1
     assert plugin._runstats.sent == 0
     assert plugin._runstats.refused == 0
-    assert "图已经发出去了" not in result["note"]
+    assert "表情包已提交到聊天" not in result["note"]
+    assert "配文已提交" not in result["note"]
 
 
 def test_queued_guidance_only_limits_same_turn_same_image(tmp_path, monkeypatch, run_async):
@@ -48,6 +49,10 @@ def test_queued_guidance_only_limits_same_turn_same_image(tmp_path, monkeypatch,
     assert "仅同一轮同一张图不重复提交" in note
     assert "本轮回复与显示缓冲结束后" in note
     assert "继续正常回复，无需等待" in note
-    assert NEXT_STEP_NOTE.removeprefix("图已经发出去了，") in note
-    assert "下一句有情绪想配就 sticker_send 填 group + text" in note
+    assert NEXT_STEP_NOTE.removeprefix("表情包已提交到聊天，") in note
+    assert "后续互动想配图时仍可调用 sticker_send(group=分类名)" in note
+    assert "group + text" not in note
+    assert "继续正常文字回复" in note
+    assert "text 留空即可" in note
+    assert "不复述额外配文" in note
     assert "不要重复调用发送" not in note

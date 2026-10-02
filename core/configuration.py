@@ -70,6 +70,8 @@ class SendSettings:
 
     # 同一角色卡两次发送之间的最小间隔（秒）。防刷屏，也防模型连着甩图。
     cooldown_sec: float = 20.0
+    # 默认即时投递工具选图；显式打开才沿用日志驱动的回复后排队。
+    defer_tool_sends: bool = False
     # 生成结束后给前端逐段冒字留的兼容缓冲；不是前端/TTS 完成信号。0 = 不额外等待。
     reply_tail_display_buffer_sec: float = 2.0
     # 静态图走内联（image data part）的上限。payload 整条限 512 KiB、
@@ -126,7 +128,7 @@ class AwarenessSettings:
     # （尺在 `core/eagerness.effective_inject_interval_n`，同门实机在跑的就是 3）。
     # 主人要自己定死就写个具体数字——这一键的存在就是"能自定义"那半句话的落点。
     inject_interval_n: int = 0
-    # 相邻两次注入的最小间隔（秒）：连珠炮对话防刷屏。两种模式都吃这把地板。
+    # 相邻两次注入的最小间隔（秒，0..60）：0 关闭时间限制，轮数门槛仍生效。
     min_interval_sec: float = 60.0
     # v0.20.0 事件门控点名：这句用户话里有情绪反应时，不等轮次攒满就点名一次。
     # 判据是 `core/awareness.emotional_signal` 的本地词表——陷阱 30 不许为这件事去连模型。
@@ -172,6 +174,9 @@ class StickerManagerSettings:
         return cls(
             enabled=_as_bool(section.get("enabled"), False),
             send=SendSettings(
+                defer_tool_sends=_as_bool(
+                    send_raw.get("defer_tool_sends"), send_default.defer_tool_sends,
+                ),
                 cooldown_sec=_clamp_float(
                     _as_number(send_raw.get("cooldown_sec"), send_default.cooldown_sec),
                     0.0,
@@ -250,14 +255,14 @@ class StickerManagerSettings:
                     0,
                     50,
                 ),
-                # 地板可以到 0（连珠炮也不拦），但上限不超过一小时——再长就该走降级时钟了。
+                # 面板与配置共享 0..60 秒范围；0 关闭时间限制。
                 min_interval_sec=_clamp_float(
                     _as_number(
                         awareness_raw.get("min_interval_sec"),
                         awareness_default.min_interval_sec,
                     ),
                     0.0,
-                    3600.0,
+                    60.0,
                 ),
                 # 非布尔一律回默认（与 enabled 同一把 `_as_bool` 尺）。
                 event_gated=_as_bool(

@@ -83,11 +83,10 @@ class TestCoreSelection:
         assert len(text) < 300, f"注入正文涨回目录复读机了：{len(text)} 字"
 
     def test_text_still_carries_the_tier_guidance(self):
-        # 轮 C 的使用规则与轮 D 的两条软提示仍在中段（它们是档位的注入侧，不是目录）。
+        # Reminder retains willingness; actual refusal responses own retry rules.
         text = build_awareness_text([_st("a", desc="笑", use=1)])
         assert "安慰对方" in text and "宁缺毋滥" in text
-        assert "最近不重复" in text  # 去重软提示（轮 D①）
-        assert "别重试" in text  # 概率闸软提示：被拒不许二次撞闸（轮 D②）
+        assert "最近不重复" not in text and "别重试" not in text
 
     def test_event_pointer_leads_with_the_landing_line(self):
         """v0.20.0：事件门控那一支要有一句"就是现在这句"的落点，计数那一支不许有。

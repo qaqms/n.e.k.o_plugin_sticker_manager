@@ -73,18 +73,20 @@ class TestReadIn:
 
 
 class TestInjectionText:
-    def test_three_tiers_differ_in_will_but_share_the_rhythm(self):
+    def test_three_tiers_differ_in_will_without_preemptive_refusal_rules(self):
         texts = {tier: _text(tier) for tier in EAGERNESS_LEVELS}
         assert len({text for text in texts.values()}) == 3
         for tier, text in texts.items():
-            assert "别重试、也别换一张接着试" in text, f"{tier} 丢了发送层的事实"
+            for banned in ("别重试", "最近不重复", "概率", "节奏闸"):
+                assert banned not in text, f"{tier} 提醒预先告知拒绝规则"
             assert "sticker_send" in text
 
     def test_natural_keeps_the_old_sentence_verbatim(self):
         # 默认档不许偷偷改老行为——这句是 v0.13.0 起她就看到的措辞。
         assert "宁缺毋滥" in _text("natural") and "多数时候纯文字就够了" not in _text("natural")
         assert "多数时候纯文字就够了" in _text("reserved")
-        assert "别在心里过三遍才发" in _text("eager")
+        assert "贴切就优先配一张" in _text("eager")
+        assert "文字说清也别省掉" in _text("eager")
 
     def test_unlisted_tier_degrades_to_natural(self):
         assert _text("wild") == _text("natural")
@@ -134,12 +136,17 @@ class TestTierDrivesThreeSurfaces:
 
     def test_eager_says_dont_wait_to_be_asked(self):
         # 主人报的原话是"每次都是我提醒她才知道调用"——eager 档必须正面回应这一点。
-        assert "不用等他点名要图" in TRIGGER_CRITERIA["eager"]
+        assert "不用等用户点名要图" in TRIGGER_CRITERIA["eager"]
 
-    def test_injection_names_the_tool_and_the_two_args(self):
+    def test_injection_names_the_tool_and_optional_caption_without_merging(self):
         text = build_awareness_text([Sticker(id="a", file="a.png", desc="甲", tags=[])], eagerness="eager")
         assert "sticker_send" in text and "group" in text and "text" in text
-        assert len(text) < 320, f"注入正文又长回目录复读机了：{len(text)} 字"
+        assert "sticker_send(group=分类名)" in text
+        assert "text 留空即可" in text
+        assert "正常文字回复照常说" in text and "图片独立发送" in text
+        assert "没有合适的就纯文字" in text
+        assert "一起发出去" not in text
+        assert len(text) < 220, f"注入正文又长回目录复读机了：{len(text)} 字"
 
     def test_success_result_tells_her_what_next(self, tmp_path, run_async):
         plugin, _host = _settings(tmp_path, send={"eagerness": "eager"})

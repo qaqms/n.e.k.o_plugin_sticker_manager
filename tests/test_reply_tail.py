@@ -54,6 +54,7 @@ def _setup(tmp_path, *, data=GIF_BYTES, cooldown=20, buffer=0.0):
     plugin._settings = StickerManagerSettings(
         enabled=True, send=SendSettings(
             recent_dedup_count=0, cooldown_sec=cooldown, reply_tail_display_buffer_sec=buffer,
+            defer_tool_sends=True,
         )
     )
     library = plugin._library
@@ -78,6 +79,33 @@ def _drain(plugin):
     return plugin._sender.drain(settings=plugin._settings)
 
 
+@pytest.mark.parametrize("busy", [True, False, None])
+@pytest.mark.parametrize("missing_log", [True, False])
+def test_default_tool_submission_survives_new_input_and_tail_ticks(
+    tmp_path, run_async, busy, missing_log,
+):
+    plugin, host, sticker, log, signals = _setup(tmp_path, buffer=7.0)
+    plugin._settings = replace(
+        plugin._settings, send=replace(plugin._settings.send, defer_tool_sends=False),
+    )
+    signals.states = {} if busy is None else {"K": busy}
+    if missing_log:
+        log.unlink()
+    result = run_async(_send(plugin, sticker))
+    assert result.ok and not result.queued
+    assert len(host.push.calls) == 1
+    assert host.push.calls[0]["ai_behavior"] == "blind"
+    assert signals.health_reads == 0
+    _append(log, _input() + _end())
+    for _ in range(3):
+        run_async(plugin.on_sticker_tail())
+    assert len(host.push.calls) == 1
+    assert plugin._library.get(sticker.id).use_count == 1
+    usage = plugin._library.read_usage()
+    assert len(usage) == 1 and usage[0]["ok"] is True
+    assert not plugin._sender._pending
+
+
 @pytest.fixture
 def monotonic_clock(monkeypatch):
     clock = [100.0]
@@ -88,7 +116,7 @@ def monotonic_clock(monkeypatch):
 def test_new_end_releases_after_reply_and_preserves_gif_and_caption(tmp_path, run_async):
     plugin, host, sticker, log, signals = _setup(tmp_path)
     result = run_async(_send(plugin, sticker, text="private caption"))
-    assert result.ok and result.queued
+    assert result.ok and result.queued and not result.text_submitted
     assert not host.push.calls
     assert not plugin._library.read_usage()
     assert not plugin._sender._last_sent
@@ -96,21 +124,20 @@ def test_new_end_releases_after_reply_and_preserves_gif_and_caption(tmp_path, ru
     assert signals.health_reads == 0  # Idle health alone cannot release a send.
     _append(log, _end())
     ((source, delivered),) = run_async(_drain(plugin))
-    assert source == "tool" and delivered.ok and not delivered.queued
-    (call,) = host.push.calls
-    assert call["parts"] == [
-        {"type": "text", "text": "private caption"},
-        {"type": "image", "data": GIF_BYTES, "mime": "image/gif"},
-    ]
-    assert call["visibility"] == ["chat"] and call["ai_behavior"] == "blind"
-    assert call["target_lanlan"] == "K"
+    assert source == "tool" and delivered.ok and not delivered.queued and delivered.text_submitted
+    caption_call, image_call = host.push.calls
+    assert caption_call["parts"] == [{"type": "text", "text": "private caption"}]
+    assert image_call["parts"] == [{"type": "image", "data": GIF_BYTES, "mime": "image/gif"}]
+    for call in host.push.calls:
+        assert call["visibility"] == ["chat"] and call["ai_behavior"] == "blind"
+        assert call["target_lanlan"] == "K"
     assert not host.images.calls
     (usage,) = plugin._library.read_usage()
     assert usage["ok"] and usage["text_len"] == len("private caption")
     assert "private caption" not in json.dumps(usage)
     assert plugin._library.get(sticker.id).use_count == 1
     assert not run_async(_drain(plugin))
-    assert len(host.push.calls) == 1
+    assert len(host.push.calls) == 2
 
 
 @pytest.mark.parametrize("extra", [
@@ -303,7 +330,9 @@ def test_failed_deferred_transport_does_not_count_success(tmp_path, run_async, r
 
 def test_tool_receipt_and_timer_count_real_delivery_once(tmp_path, run_async):
     plugin, host, sticker, log, _signals = _setup(tmp_path)
-    result = run_async(plugin.tool_sticker_send(sticker_id=sticker.id, _ctx={"lanlan_name": "K"}))
+    result = run_async(plugin.tool_sticker_send(
+        sticker_id=sticker.id, text="caption", _ctx={"lanlan_name": "K"},
+    ))
     assert result["ok"] and result["queued"] == sticker.id and not result["sent"]
     assert plugin._runstats.tool_calls == 1 and plugin._runstats.sent == 0
     assert not host.push.calls
@@ -311,7 +340,9 @@ def test_tool_receipt_and_timer_count_real_delivery_once(tmp_path, run_async):
     run_async(plugin.on_sticker_tail())
     run_async(plugin.on_sticker_tail())
     assert plugin._runstats.sent == 1 and plugin._runstats.tool_calls == 1
-    assert len(host.push.calls) == 1
+    assert len(host.push.calls) == 2
+    assert plugin._library.get(sticker.id).use_count == 1
+    assert len(plugin._library.read_usage()) == 1
 
 
 def test_disable_then_reenable_does_not_replay_pending(tmp_path, run_async):
@@ -512,17 +543,17 @@ def test_buffer_waits_seven_seconds_from_first_observed_end_without_reset(
         assert not host.push.calls
     monotonic_clock[0] = 117.0
     ((source, result),) = run_async(_drain(plugin))
-    assert source == "tool" and result.ok and not result.queued
+    assert source == "tool" and result.ok and not result.queued and result.text_submitted
     assert signals.health_reads == 5
-    assert host.push.calls[0]["parts"] == [
-        {"type": "text", "text": "caption"},
+    assert host.push.calls[0]["parts"] == [{"type": "text", "text": "caption"}]
+    assert host.push.calls[1]["parts"] == [
         {"type": "image", "data": GIF_BYTES, "mime": "image/gif"},
     ]
-    assert host.push.calls[0]["ai_behavior"] == "blind"
+    assert all(call["ai_behavior"] == "blind" for call in host.push.calls)
     assert not plugin._sender._pending and not plugin._sender._inflight
     assert len(plugin._library.read_usage()) == 1
     assert not run_async(_drain(plugin))
-    assert len(host.push.calls) == 1
+    assert len(host.push.calls) == 2
 
 
 def test_zero_buffer_releases_on_first_observed_end(tmp_path, run_async, monotonic_clock):
@@ -538,7 +569,7 @@ def test_new_same_role_input_cancels_and_releases_reservation(
     tmp_path, run_async, monotonic_clock, before_end,
 ):
     plugin, host, sticker, log, _signals = _setup(tmp_path, buffer=7.0)
-    assert run_async(_send(plugin, sticker)).queued
+    assert run_async(_send(plugin, sticker, text="caption")).queued
     if not before_end:
         _append(log, _end())
         assert not run_async(_drain(plugin))
@@ -546,11 +577,13 @@ def test_new_same_role_input_cancels_and_releases_reservation(
     _append(log, _input())
     ((source, result),) = run_async(_drain(plugin))
     assert source == "tool" and result.code == "turn_superseded" and not result.ok
+    assert not result.text_submitted
     assert not host.push.calls and not plugin._sender._last_sent
     assert not plugin._sender._inflight and not plugin._sender._pending
     assert plugin._library.get(sticker.id).use_count == 0
     (usage,) = plugin._library.read_usage()
     assert usage["ok"] is False and usage["code"] == "turn_superseded"
+    assert "text_submitted" not in usage
     _append(log, _end())
     assert not run_async(_drain(plugin))
     assert run_async(_send(plugin, sticker)).queued
@@ -666,14 +699,14 @@ def test_buffer_does_not_reroll_probability(tmp_path, run_async, monotonic_clock
             return 0.0
 
     monkeypatch.setattr(sender_module, "_RNG", Random())
-    assert run_async(_send(plugin, sticker)).queued
+    assert run_async(_send(plugin, sticker, text="caption")).queued
     _append(log, _end())
     assert not run_async(_drain(plugin))
     monotonic_clock[0] += 3.0
     assert not run_async(_drain(plugin))
     monotonic_clock[0] += 4.0
     assert run_async(_drain(plugin))[0][1].ok
-    assert len(rolls) == 1 and len(host.push.calls) == 1
+    assert len(rolls) == 1 and len(host.push.calls) == 2
 
 
 def test_force_bypasses_probability_before_and_after_buffer(
@@ -750,7 +783,7 @@ def test_buffered_configuration_preserves_panel_and_agent_read_contract(
 ):
     plugin, host, sticker, log, signals = _setup(tmp_path, buffer=7.0)
     signals.states["K"] = busy
-    result = run_async(_send(plugin, sticker, source=source))
+    result = run_async(_send(plugin, sticker, source=source, text="caption"))
     assert result.ok and result.queued is queued
     if queued:
         assert not host.push.calls
@@ -759,8 +792,10 @@ def test_buffered_configuration_preserves_panel_and_agent_read_contract(
         assert not run_async(_drain(plugin))
         monotonic_clock[0] += 7.0
         assert run_async(_drain(plugin))[0][1].ok
-    assert len(host.push.calls) == 1
-    assert host.push.calls[0]["ai_behavior"] == "read"
+    assert len(host.push.calls) == 2
+    assert all(call["ai_behavior"] == "read" for call in host.push.calls)
+    assert host.push.calls[0]["parts"] == [{"type": "text", "text": "caption"}]
+    assert [part["type"] for part in host.push.calls[1]["parts"]] == ["image"]
 
 
 def test_timer_counts_buffered_supersession_once_not_as_success(
@@ -907,3 +942,47 @@ def test_cancellation_before_end_logs_no_end_wait(tmp_path, run_async, caplog):
             "reason=turn_superseded end_wait_sec=no-end"
         ) for message in caplog.messages
     )
+
+
+@pytest.mark.parametrize("raises", [False, True])
+def test_deferred_pair_partial_failure_logs_and_does_not_retry(
+    tmp_path, run_async, monotonic_clock, caplog, raises,
+):
+    plugin, host, sticker, log, _signals = _setup(tmp_path, buffer=2.0)
+    caplog.set_level("INFO", logger="sticker_manager.test")
+    queued = run_async(_send(plugin, sticker, text="private caption"))
+    assert queued.queued and not queued.text_submitted
+    calls = []
+
+    def push(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            return {"submitted": True}
+        if raises:
+            raise RuntimeError("transport")
+        return {"submitted": False, "reason": "backpressure"}
+
+    host.push_message = push
+    _append(log, _end())
+    assert not run_async(_drain(plugin))
+    monotonic_clock[0] += 2.0
+    ((source, result),) = run_async(_drain(plugin))
+    assert source == "tool" and not result.ok and result.text_submitted
+    assert result.code == ("transport_unavailable" if raises else "backpressure")
+    assert len(calls) == 2 and all(call["ai_behavior"] == "blind" for call in calls)
+    assert not plugin._sender._pending and not plugin._sender._inflight
+    assert not plugin._sender._last_sent
+    assert plugin._library.get(sticker.id).use_count == 0
+    (usage,) = plugin._library.read_usage()
+    assert usage["ok"] is False and usage["code"] == result.code and usage["text_submitted"]
+    assert "private caption" not in json.dumps(usage)
+    assert any(
+        message == (
+            f"sticker deferred rejected: id={sticker.id} reason={result.code} "
+            "end_wait_sec=2.00 text_submitted=True"
+        ) for message in caplog.messages
+    )
+    assert "private caption" not in caplog.text
+    _append(log, _end())
+    assert not run_async(_drain(plugin))
+    assert len(calls) == 2 and len(plugin._library.read_usage()) == 1

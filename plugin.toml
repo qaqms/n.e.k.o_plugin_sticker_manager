@@ -13,7 +13,7 @@ keywords = [
     "meme",
     "gallery",
 ]
-version = "0.20.6"
+version = "0.20.15"
 type = "plugin"
 entry = "plugin.plugins.sticker_manager:StickerManagerPlugin"
 
@@ -61,7 +61,9 @@ enabled = false
 [sticker_manager.send]
 # 同一角色卡两次发送之间的最小间隔（秒）。防刷屏，也防模型连着甩图。
 cooldown_sec = 20.0
-# 生成结束后的逐段显示兼容缓冲（秒，0..30），不代表前端或 TTS 真正结束。
+# 工具选图默认即时发送；true 沿用回复后排队，下一轮输入可能取消待发图。
+defer_tool_sends = false
+# 仅排队发送：生成结束后的逐段显示兼容缓冲（秒，0..30），不代表前端或 TTS 真正结束。
 # 0 = 恢复无额外缓冲；旧配置没有此键时自动使用默认值。
 reply_tail_display_buffer_sec = 2.0
 # 静态图走内联通道的字节上限；超过改走宿主上传换 URL（gif 例外：
@@ -103,7 +105,7 @@ inject_mode = "interval_n"
 # interval_n 档下每 N 条用户轮注一次。v0.19.0：**0 = 跟随「配表情积极度」档位**
 # （矜持 12 / 自然 6 / 爱发 3 轮，同门实机在跑的就是 3）；写正数 = 您自己定死，档位不再插手。
 inject_interval_n = 0
-# 相邻两次注入的最小间隔（秒）：连珠炮对话防刷屏，两种模式都吃这把地板。
+# 相邻两次提醒的最小间隔（秒，0..60），面板可调；0 关闭时间限制，轮数门槛仍生效。
 min_interval_sec = 60.0
 # 事件门控点名（v0.20.0）：这句用户话里有情绪反应时，不等轮次攒满就点名一次。
 # 判据是本地情绪词表 + 反应符号（不为这件事调用模型），上面的地板对它照样生效。

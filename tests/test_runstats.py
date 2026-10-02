@@ -93,6 +93,18 @@ class TestRunStatsCounters:
         assert (snap["tool_calls"], snap["refused"], snap["sent"]) == (2, 1, 1)
         assert snap["last_reason"] == "recent_repeat"
 
+    def test_send_entry_counts_are_separate_from_list_lookups_and_deliveries(self):
+        stats = RunStats()
+        stats.note_tool_call(name="sticker_list", gave="none", result={"ok": True, "count": 2})
+        stats.note_tool_call(name="sticker_send", gave="group", result={"ok": True, "queued": "a"})
+        stats.note_delivery(ok=True)
+        stats.note_tool_call(name="agent_send", gave="none", result={"ok": False, "reason": "cooldown"})
+        snap = stats.snapshot(turns=3)
+        assert (snap["tool_calls"], snap["sticker_send_calls"], snap["agent_send_calls"]) == (3, 1, 1)
+        assert (snap["sent"], snap["refused"]) == (1, 1)
+        fresh = RunStats().snapshot(turns=0)
+        assert fresh["sticker_send_calls"] == fresh["agent_send_calls"] == 0
+
 
 class TestToolCallTrace:
     def test_blocked_call_leaves_its_reason_in_the_log(self, tmp_path, run_async):
@@ -118,6 +130,7 @@ class TestToolCallTrace:
         result = run_async(plugin.tool_sticker_send(group="困与睡"))
         assert result.get("ok") is True, result
         assert plugin._runstats.sent == 1
+        assert plugin._runstats.sticker_send_calls == 1 and plugin._runstats.agent_send_calls == 0
         assert plugin.logger.text().count("tool call: name=sticker_send") == 1
         assert "outcome=sent" in plugin.logger.text()
 
@@ -127,6 +140,7 @@ class TestToolCallTrace:
         sticker = plugin._library.all()[0]
         run_async(plugin.send_entry(id=sticker.id))
         assert plugin._runstats.tool_calls == 0
+        assert plugin._runstats.sticker_send_calls == plugin._runstats.agent_send_calls == 0
         assert "tool call:" not in plugin.logger.text()
 
 
@@ -159,6 +173,7 @@ class TestRunLedgerLog:
         line = [text for text in plugin.logger.lines if text.startswith("run ledger:")]
         assert len(line) == 1, plugin.logger.text()
         assert "calls=1" in line[0] and "turns=" in line[0]
+        assert "sticker_send_calls=1 agent_send_calls=0" in line[0]
 
     def test_same_numbers_do_not_repeat_themselves(self, tmp_path, run_async):
         # 陷阱 31 的同一把尺：留痕只报变化，否则 363 行里 313 行是同一件事。
@@ -194,6 +209,27 @@ class TestRunLedgerLog:
         line = plugin.logger.text().splitlines()[-1]
         assert "sig_text=7/2 hits=1" in line, line
         assert "tool_gaps=3(≤900s) unreachable=4" in line, line
+
+    def test_ledger_reports_registry_scope_and_pending_confirmation(self, tmp_path, monkeypatch):
+        plugin, _host = self._wired(tmp_path)
+        state = {
+            "status": "recovering",
+            "checked_at": 10_000.0,
+            "age_sec": 0.0,
+            "missing_by_role": {"K": ["sticker_send"]},
+            "reissues": 1,
+            "confirmations": 0,
+        }
+        monkeypatch.setattr(plugin._tool_watch, "snapshot", lambda **_: dict(state))
+        plugin._maybe_log_run_ledger(now=10_000.0)
+        line = plugin.logger.text().splitlines()[-1]
+        assert "tool_registry=recovering" in line
+        assert "registry_checked_at=10000.0 registry_age_sec=0.0" in line
+        assert "missing_roles=1 reissues=1 confirmations=0" in line
+        state.update(status="healthy", missing_by_role={}, confirmations=1)
+        plugin._maybe_log_run_ledger(now=10_500.0)
+        assert plugin.logger.text().count("run ledger:") == 2
+        assert "tool_registry=healthy" in plugin.logger.text().splitlines()[-1]
 
     @staticmethod
     def _wired(tmp_path):
@@ -236,6 +272,7 @@ class TestPanelReadings:
         payload = run_async(plugin.dashboard_context())
         run = payload["run"]
         assert run["tool_calls"] == 1
+        assert run["sticker_send_calls"] == run["agent_send_calls"] == 0
         for key in ("turns", "sent", "refused", "last_call", "surface_categories"):
             assert key in run, f"面板少了 {key} 这一格读数"
 

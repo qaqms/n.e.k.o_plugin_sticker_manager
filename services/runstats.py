@@ -50,6 +50,8 @@ class RunStats:
         self._now = now if callable(now) else time.monotonic
         self.started_at = time.time()
         self.tool_calls = 0
+        self.sticker_send_calls = 0
+        self.agent_send_calls = 0
         self.sent = 0
         self.refused = 0
         # 最近一次拒因与调用形状：面板上摆一行，比四个 0 更能说明"断在哪一环"。
@@ -78,6 +80,10 @@ class RunStats:
         既不是发出也不是拦下，两类都不能虚增，否则读数就成了噪声。
         """
         self.tool_calls += 1
+        if name == "sticker_send":
+            self.sticker_send_calls += 1
+        elif name == "agent_send":
+            self.agent_send_calls += 1
         reason = "" if result.get("ok") else str(result.get("reason") or "unknown")
         shape = f"{name}({gave}" + (f" group={group}" if group else "") + (f" q_len={query_len}" if query_len else "") + ")"
         self.last_call = shape
@@ -113,6 +119,8 @@ class RunStats:
         return {
             "turns": turns,
             "tool_calls": self.tool_calls,
+            "sticker_send_calls": self.sticker_send_calls,
+            "agent_send_calls": self.agent_send_calls,
             "sent": self.sent,
             "refused": self.refused,
             "last_call": self.last_call,

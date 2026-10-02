@@ -1,108 +1,123 @@
-"""LLM 工具注册韧性：周期巡检 + 缺席重注册（v0.1.4）。
-
-**病灶（宿主源码核实，our_life v0.5.0 同文成文）**：``@llm_tool`` 只在插件启动时
-经 SDK 发一次 ``LLM_TOOL_REGISTER`` IPC，fire-and-forget；那一刻 ``main_server``
-没起来（"宿主起得比插件晚"）则注册在 user_plugin_server→main_server 一跳被
-warning 掉且**不重试**（``plugin/server/messaging/llm_tool_registry.py`` 的
-``register_remote_tool`` docstring 自己写着 "The plugin can re-register later"）。
-``main_server`` 的 tool_registry 是 ``LLMSessionManager`` 的内存属性，它重启即全丢。
-两种时序下她都会**静默失去** ``sticker_list / sticker_send``——整条发表情通道
-失效，且没有任何人会主动发现。
-
-官方钦定的解法（``docs/zh-CN/plugins/tool-calling.md``「main_server 重启会发生什么」）：
-"定期 ``GET /api/tools`` 检查自己的工具是否还在，不在就重新 register"。
-``our_life`` v0.5.0 与 ``forever_companion`` 的 host_coord（300s）已证明这条是
-承重结构而非可选优化。
-
-三条纪律（与 our_life 逐字对齐——两处是刻意的跨仓重复，插件碰不到别人的 services）：
-
-1. **不可达 = 什么都不做**：main_server 还没起来时"全部缺席"是预期现象，
-   盲重注册只是每轮两发注定失败的 POST；只有"可达、且逐个点名缺席"才补挂。
-2. **补挂走 IPC 重发**（宿主侧 replace 语义、重复注册幂等），**不**走公开
-   ``register_llm_tool`` 重调——名字已在 SDK 的 ``_llm_tools`` 里会撞
-   ``EntryConflictError``；而"先 unregister 再 register"有本地条目已删、
-   远端重注册又失败的窗口，比原地补挂更糟。``_notify_llm_tool_registered``
-   是基类 protected 面：一律 ``getattr`` 取用，宿主哪天改名时降级为
-   "心跳失效 + 日志一条"，不是崩溃。
-3. **永不炸 tick**：查询失败 / 形状不认识 / 单个补挂抛错，全部降级为
-   "这一拍什么也没发生"。形状不认识时按"全场无工具"处理——后果只是
-   重发一轮注册（幂等、回环、每 5 分钟最多两次 POST），比"真缺席却不动"安全。
-
-间隔固定为模块常量（300s），不进配置：它是可靠性机制的心跳参数，
-不是行为参数——与发送冷却只在内存（sender 的刻意选择）同等待遇。
-"""
+"""主聊天工具注册表的轻量巡检、恢复与诊断。"""
 
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
+import threading
+import urllib.parse
 import urllib.request
-from typing import Any, Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any, Callable
 
 __all__ = ["TOOL_WATCH_INTERVAL_SEC", "ToolWatch", "missing_tool_names"]
 
-# 巡检间隔（秒）：与 fc / our_life 实测过的兜底同量级。
-# 太短 → main_server 正常时也每拍多一发回环 GET；太长 → "她没工具"的窗口拉长。
-TOOL_WATCH_INTERVAL_SEC = 300.0
-
-# 回环 GET 的超时（秒）：loopback 上 4s 已经算"对面不对劲"，别拿它卡 tick。
-_HTTP_TIMEOUT_SEC = 4.0
+TOOL_WATCH_INTERVAL_SEC = 10.0
+_REISSUE_INTERVAL_SEC = 5.0
+_PREFLIGHT_CACHE_SEC = 2.0
+_HTTP_TIMEOUT_SEC = 2.0
 
 
-def missing_tool_names(payload: Any, declared: Iterable[str]) -> list[str]:
-    """从 ``GET /api/tools`` 的响应里数出**缺席**的 declared 工具名（纯函数）。
+def _groups(payload: Any) -> Mapping[str, Any] | None:
+    if not isinstance(payload, Mapping) or payload.get("ok") is False:
+        return None
+    groups = payload.get("tools_by_role")
+    if groups is None:
+        if not payload or not all(
+            isinstance(value, Iterable) and not isinstance(value, (str, bytes, Mapping))
+            for value in payload.values()
+        ):
+            return None
+        groups = payload
+    if not isinstance(groups, Mapping) or not groups:
+        return None
+    for tools in groups.values():
+        if not isinstance(tools, Iterable) or isinstance(tools, (str, bytes, Mapping)):
+            return None
+    return groups
 
-    实际形状（tool_router.py + our_life 实测）：
-    ``{"ok": true, "tools_by_role": {"<role>": [{"name": ...}, ...]}}``；
-    ``tools_by_role`` 缺席时把顶层当平铺 ``{role: [tools]}`` 兼容一次。
-    认不出的形状按"一个工具都不在"处理（见模块 docstring 纪律 3），
-    所以本函数返回**排序后的稳定列表**，调用方可直接逐名补挂。
+
+def _missing(
+    tools: Iterable[Any],
+    wanted: set[str],
+    *,
+    expected_source: str = "",
+) -> list[str]:
+    present = {
+        str(entry.get("name")).strip()
+        for entry in tools
+        if (
+            isinstance(entry, Mapping)
+            and entry.get("name")
+            and (
+                not expected_source
+                or not entry.get("source")
+                or str(entry.get("source")) == expected_source
+            )
+        )
+    }
+    return sorted(wanted - present)
+
+
+def missing_tool_names(
+    payload: Any,
+    declared: Iterable[str],
+    *,
+    role: str | None = None,
+) -> list[str]:
+    """Return declared tools missing from a role or from all returned roles.
+
+    Unknown response shapes retain the historical conservative result (all names
+    missing). ``ToolWatch`` validates the shape before it decides to reissue.
     """
-    wanted = sorted({name for raw in declared if (name := str(raw).strip())})
+    wanted = {name for raw in declared if (name := str(raw).strip())}
     if not wanted:
         return []
+    groups = _groups(payload)
+    if groups is None:
+        return sorted(wanted)
+    if role is not None:
+        tools = groups.get(role)
+        return sorted(wanted) if tools is None else _missing(tools, wanted)
     present: set[str] = set()
-    if isinstance(payload, Mapping):
-        groups = payload.get("tools_by_role")
-        if not isinstance(groups, Mapping):
-            # 平铺兜底：顶层本身可能就是 {role: [tool, ...]}。
-            groups = payload
-        for tools in groups.values():
-            if isinstance(tools, Iterable) and not isinstance(tools, (str, bytes)):
-                for entry in tools:
-                    if isinstance(entry, Mapping) and entry.get("name"):
-                        present.add(str(entry["name"]))
-    return [name for name in wanted if name not in present]
+    for tools in groups.values():
+        present.update(
+            str(entry.get("name")).strip()
+            for entry in tools
+            if isinstance(entry, Mapping) and entry.get("name")
+        )
+    return sorted(wanted - present)
 
 
 async def _default_fetch(url: str) -> dict[str, Any] | None:
-    """stdlib urllib 拉一次 ``GET /api/tools``；任何失败返回 None（=不可达）。
-
-    运行期才 import 宿主 ``config`` 拿端口（独立仓/测试环境没有它，回落 48911），
-    与 our_life 同一形态。测试用注入的 fetch 替身，完全不碰网络。
-    """
     port = 48911
     try:
         from config import MAIN_SERVER_PORT
 
         port = int(MAIN_SERVER_PORT)
-    except Exception:  # noqa: BLE001 - 独立仓态/测试态：缺省端口即可
+    except Exception:  # noqa: BLE001
         pass
     base = f"http://127.0.0.1:{port}{url}"
 
     def _do() -> dict[str, Any]:
         with urllib.request.urlopen(base, timeout=_HTTP_TIMEOUT_SEC) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-            return payload if isinstance(payload, dict) else {}
+            value = json.loads(resp.read().decode("utf-8"))
+            return value if isinstance(value, dict) else {}
 
     try:
         return await asyncio.to_thread(_do)
-    except Exception:  # noqa: BLE001 - 不可达/超时/坏 JSON 统一降级为 None
+    except Exception:  # noqa: BLE001
         return None
 
 
 class ToolWatch:
-    """挂在 timer 拍上的低频巡检器。``maybe_run`` 每拍调用，内部按间隔自节流。"""
+    """Cross-event-loop-safe registry checker.
+
+    Host timer callbacks can run in separate threads/event loops, so the
+    in-flight guard is a regular non-blocking ``threading.Lock`` rather than
+    an ``asyncio.Lock``.
+    """
 
     def __init__(
         self,
@@ -114,34 +129,42 @@ class ToolWatch:
     ):
         self._plugin = plugin
         self._logger = logger
-        # fetch 可注入（测试离线）；缺省走回环 GET。
         self._fetch = fetch or _default_fetch
-        self._interval = max(30.0, float(interval_sec))
-        # 0.0 = 进程起来第一拍（timer 秒数后）立刻巡检，不等满一个间隔——
-        # "宿主起得比插件晚"的竞态窗口要的是早发现。
+        self._interval = max(1.0, float(interval_sec))
         self._last_run_at = 0.0
-        # 缺席窗口记账（v0.20.1，纯观测）。为什么要有它：主人的实机日志里出现过
-        # "23:55:17 补挂了 2 个缺席工具"——那之前她**根本没有** `sticker_send` 可调，
-        # 而这条通道只在补挂那一刻吼一行，丢了多久、期间吃掉几轮全都看不出来。
-        # 尺的诚实性：巡检是 300s 一次，缺席的**真实起点不可知**，所以我们只能报上界
-        # （上次确认全在场 → 本次发现缺席之间的秒数）。字段名一律带 `_max_sec`，
-        # 绝不写成 `gap_sec`——把上界当读数就是仪器说谎（陷阱 30 同族）。
+        self._last_reissue_at = 0.0
+        self._lock = threading.Lock()
+        self._inflight = False
+        self._role_states: dict[str, dict[str, Any]] = {}
+        self._last_status = "unknown"
+        self._last_checked_at: float | None = None
+        self._last_missing_by_role: dict[str, list[str]] = {}
+        self._last_missing: list[str] = []
+        self._last_reissued = 0
+        self.checks = 0
+        self.reissues = 0
+        self.confirmations = 0
         self.gaps = 0
         self.gap_seconds_max = 0.0
         self.unreachable = 0
         self.last_healthy_at: float | None = None
         self.last_gap_at = 0.0
+        self._healthy_baseline: dict[str, float] = {}
+        self._gap_open: set[str] = set()
+
+    def _expected_source(self) -> str:
+        plugin_id = str(getattr(self._plugin, "plugin_id", "") or "").strip()
+        return f"plugin:{plugin_id}" if plugin_id else ""
 
     def _log(self, message: str, *args: Any, exc: bool = False) -> None:
         if self._logger is None:
             return
         try:
             (self._logger.exception if exc else self._logger.info)(message, *args)
-        except Exception:  # noqa: BLE001 - 日志面坏掉不许影响巡检
+        except Exception:  # noqa: BLE001
             pass
 
     def _declared_names(self) -> list[str]:
-        """本插件声明的工具名：走公开 ``list_llm_tools``，形状不认识就当没有。"""
         lister = getattr(self._plugin, "list_llm_tools", None)
         if not callable(lister):
             return []
@@ -149,86 +172,286 @@ class ToolWatch:
             tools = lister()
         except Exception:  # noqa: BLE001
             return []
-        names = [
-            str(entry.get("name"))
-            for entry in (tools or [])
-            if isinstance(entry, Mapping) and entry.get("name")
-        ]
-        return sorted(set(names))
+        return sorted(
+            {
+                str(entry.get("name")).strip()
+                for entry in (tools or [])
+                if isinstance(entry, Mapping) and entry.get("name")
+            }
+        )
 
-    def _reissue(self, missing: list[str]) -> int:
-        """逐名重发 ``LLM_TOOL_REGISTER``（replace 幂等）。返回成功发出的条数。
+    @staticmethod
+    def _url(role: str | None) -> str:
+        if role is None:
+            return "/api/tools"
+        return f"/api/tools?{urllib.parse.urlencode({'role': role})}"
 
-        单名失败不许吃掉其余名字；基类 protected 面缺席（宿主改名/收口）时
-        整体降级为 0 并记一条日志——心跳失效是体验退化，不是事故。
-        """
+    async def _fetch_payload(self, url: str) -> Any:
+        result = self._fetch(url)
+        return await result if inspect.isawaitable(result) else result
+
+    def _begin(self) -> bool:
+        with self._lock:
+            if self._inflight:
+                return False
+            self._inflight = True
+            return True
+
+    def _end(self) -> None:
+        with self._lock:
+            self._inflight = False
+
+    def _update_gap(self, role: str, missing: list[str], now: float) -> None:
+        if not missing:
+            if role in self._gap_open:
+                self.confirmations += 1
+            self._gap_open.discard(role)
+            self._healthy_baseline[role] = now
+            self.last_healthy_at = now
+            return
+        if role not in self._gap_open:
+            self.gaps += 1
+            self.last_gap_at = now
+            baseline = self._healthy_baseline.get(role)
+            if baseline is not None:
+                self.gap_seconds_max += max(0.0, now - baseline)
+            self._gap_open.add(role)
+
+    @staticmethod
+    def _state(
+        role: str,
+        *,
+        status: str,
+        checked_at: float | None,
+        missing: list[str] | None = None,
+        confirmed: bool = False,
+        cached: bool = False,
+        now: float | None = None,
+    ) -> dict[str, Any]:
+        age = (
+            round(max(0.0, float(now) - float(checked_at)), 3)
+            if now is not None and isinstance(checked_at, (int, float))
+            and not isinstance(checked_at, bool)
+            else None
+        )
+        return {
+            "status": status,
+            "scope": "registry",
+            "role": role,
+            "checked_at": checked_at,
+            "age_sec": age,
+            "missing": list(missing or []),
+            "confirmed": bool(confirmed),
+            "cached": bool(cached),
+        }
+
+    async def _reissue(self, names: list[str], *, now: float) -> int:
+        if not names or now - self._last_reissue_at < _REISSUE_INTERVAL_SEC:
+            return 0
         store = getattr(self._plugin, "_llm_tools", None)
         notify = getattr(self._plugin, "_notify_llm_tool_registered", None)
         if not isinstance(store, dict) or not callable(notify):
-            self._log("sticker_manager tool watch: SDK re-emit surface unavailable, skipping")
             return 0
         sent = 0
-        for name in missing:
-            meta = store.get(name)
-            if meta is None:
+        for name in names:
+            metadata = store.get(name)
+            if metadata is None:
                 continue
             try:
-                notify(meta)
+                result = notify(metadata)
+                if inspect.isawaitable(result):
+                    await result
                 sent += 1
-            except Exception:  # noqa: BLE001 - 单工具失败不影响其余
+            except Exception:  # noqa: BLE001
                 self._log("sticker_manager tool watch: re-emit failed for {}", name, exc=True)
+        if sent:
+            self._last_reissue_at = now
+            self.reissues += sent
         return sent
 
-    async def maybe_run(self, *, now: float) -> dict[str, Any]:
-        """机会式一拍巡检。返回值只为可观测性（timer 不消费、测试消费）。
-
-        任何内部异常都在本方法内消化成 ``{"status": "watch_failed"}``：
-        注册韧性坏掉不许连带任何其它东西（本插件的 timer 只有它，更要兜住——
-        timer_interval 无 watchdog，异常漏出去只记日志但会把这一表标黄）。
-        """
-        if now - self._last_run_at < self._interval:
-            return {"status": "waiting"}
+    async def _check(self, *, now: float, role: str | None) -> dict[str, Any]:
         declared = self._declared_names()
         if not declared:
-            # 装饰器工具还没收集上（startup 未完成 / SDK 形状不认识）：
-            # 没有核对对象，也不推进时钟——收集齐了下一拍就查。
-            return {"status": "no_tools"}
-        self._last_run_at = now
+            return {"status": "no_tools", "scope": "registry", "role": role, "confirmed": False}
+        if not self._begin():
+            return {"status": "busy", "scope": "registry", "role": role, "confirmed": False}
         try:
-            payload = await self._fetch("/api/tools")
+            payload = await self._fetch_payload(self._url(role))
             if payload is None:
-                # 不可达：等下一轮。不盲重注册（纪律 1），也不把时钟退回去——
-                # 退回去会让"main_server 长期没起"变成每拍一发 GET 的追打。
-                # 记账上这段是"状态未知"，不许算成健康也不许算成缺席。
                 self.unreachable += 1
-                return {"status": "unreachable"}
-            missing = missing_tool_names(payload, declared)
-            if not missing:
-                self.last_healthy_at = now
-                return {"status": "healthy", "gap_seconds_max": round(self.gap_seconds_max, 1)}
-            self.gaps += 1
-            self.last_gap_at = now
-            # 只有拿到过健康基线才累加上界：开机第一次巡检就发现缺席时，
-            # "从什么时候开始缺"确实不知道（main_server 可能比插件晚起），硬记一个数就是编。
-            gap_max = 0.0 if self.last_healthy_at is None else max(0.0, now - self.last_healthy_at)
-            self.gap_seconds_max += gap_max
-            self.last_healthy_at = None  # 补挂≠确认在场，等下一次 healthy 才重建基线
-            reissued = self._reissue(missing)
-            self._log(
-                "sticker_manager tool watch: re-registered {} missing llm tool(s): {}"
-                " (absent {}s since last healthy, gaps={})",
-                reissued,
-                ", ".join(missing),
-                "≤{:.0f}".format(gap_max) if gap_max else "起点未知",
-                self.gaps,
-            )
-            return {
-                "status": "repaired",
-                "missing": missing,
-                "reissued": reissued,
-                "gaps": self.gaps,
-                "gap_seconds_max": round(self.gap_seconds_max, 1),
+                if role is not None:
+                    self._role_states[role] = self._state(
+                        role, status="unreachable", checked_at=None, now=now
+                    )
+                    self._healthy_baseline.pop(role, None)
+                return {
+                    "status": "unreachable",
+                    "scope": "registry",
+                    "role": role,
+                    "confirmed": False,
+                    "cached": False,
+                }
+            groups = _groups(payload)
+            if groups is None:
+                if role is not None:
+                    self._role_states[role] = self._state(
+                        role, status="unknown", checked_at=None, now=now
+                    )
+                    self._healthy_baseline.pop(role, None)
+                return {
+                    "status": "unknown",
+                    "scope": "registry",
+                    "role": role,
+                    "confirmed": False,
+                    "cached": False,
+                }
+
+            checked_at = float(now)
+            self.checks += 1
+            wanted = set(declared)
+            expected_source = self._expected_source()
+            if role is not None:
+                if role not in groups:
+                    state = self._state(role, status="unknown", checked_at=None, now=now)
+                    with self._lock:
+                        self._role_states[role] = state
+                        self._healthy_baseline.pop(role, None)
+                    return state
+                missing = _missing(groups[role], wanted, expected_source=expected_source)
+                reissued = await self._reissue(missing, now=now)
+                status = "healthy" if not missing else (
+                    "recovering" if reissued else "repair_pending"
+                )
+                state = self._state(
+                    role,
+                    status=status,
+                    checked_at=checked_at,
+                    missing=missing,
+                    confirmed=not missing,
+                    now=now,
+                )
+                with self._lock:
+                    self._update_gap(role, missing, now)
+                    self._role_states[role] = state
+                return state
+
+            by_role = {
+                str(name): _missing(tools, wanted, expected_source=expected_source)
+                for name, tools in groups.items()
             }
-        except Exception:  # noqa: BLE001 - 永不炸 tick（纪律 3）
+            all_missing = sorted({
+                name for missing in by_role.values() for name in missing
+            })
+            reissued = await self._reissue(all_missing, now=now)
+            with self._lock:
+                self._last_checked_at = checked_at
+                self._last_missing_by_role = {
+                    name: missing for name, missing in by_role.items() if missing
+                }
+                self._last_missing = list(all_missing)
+                self._last_reissued = reissued
+                for name, missing in by_role.items():
+                    self._update_gap(name, missing, now)
+                    status = "healthy" if not missing else (
+                        "recovering" if reissued else "repair_pending"
+                    )
+                    self._role_states[name] = self._state(
+                        name,
+                        status=status,
+                        checked_at=checked_at,
+                        missing=missing,
+                        confirmed=not missing,
+                        now=now,
+                    )
+                self._last_status = "healthy" if not all_missing else (
+                    "recovering" if reissued else "repair_pending"
+                )
+            if all_missing:
+                self._log(
+                    "sticker_manager tool watch: missing roles={} reissued={} tools={}",
+                    len(self._last_missing_by_role),
+                    reissued,
+                    ", ".join(all_missing),
+                )
+            return self.snapshot(now=now)
+        except Exception:  # noqa: BLE001
+            self._last_status = "watch_failed"
             self._log("sticker_manager tool watch failed", exc=True)
-            return {"status": "watch_failed"}
+            return {
+                "status": "watch_failed",
+                "scope": "registry",
+                "role": role,
+                "confirmed": False,
+            }
+        finally:
+            self._end()
+
+    async def maybe_run(self, *, now: float) -> dict[str, Any]:
+        with self._lock:
+            if now - self._last_run_at < self._interval:
+                return {"status": "waiting"}
+            self._last_run_at = now
+        return await self._check(now=now, role=None)
+
+    async def before_reminder(self, *, role: str, now: float) -> dict[str, Any]:
+        target = str(role or "").strip()
+        if not target:
+            return {"status": "unknown", "scope": "registry", "role": target, "confirmed": False}
+        with self._lock:
+            cached = dict(self._role_states.get(target, {}))
+        checked_at = cached.get("checked_at") if isinstance(cached, Mapping) else None
+        if (
+            isinstance(cached, Mapping)
+            and isinstance(checked_at, (int, float))
+            and not isinstance(checked_at, bool)
+            and now - float(checked_at) <= _PREFLIGHT_CACHE_SEC
+            and cached.get("status") not in {"unknown", "unreachable", "busy"}
+        ):
+            result = dict(cached)
+            result["cached"] = True
+            result["age_sec"] = round(max(0.0, now - float(checked_at)), 3)
+            return result
+        result = await self._check(now=now, role=target)
+        result = dict(result)
+        result["cached"] = False
+        return result
+
+    def snapshot(self, *, now: float) -> dict[str, Any]:
+        with self._lock:
+            checked_at = self._last_checked_at
+            status = self._last_status
+            missing_by_role = {
+                role: list(missing)
+                for role, missing in self._last_missing_by_role.items()
+            }
+            missing = list(self._last_missing)
+            reissued = self._last_reissued
+            checks = self.checks
+            confirmations = self.confirmations
+            gaps = self.gaps
+            gap_seconds_max = self.gap_seconds_max
+            unreachable = self.unreachable
+            last_healthy_at = self.last_healthy_at
+            last_gap_at = self.last_gap_at
+        age = (
+            round(max(0.0, now - checked_at), 3)
+            if isinstance(checked_at, (int, float)) and not isinstance(checked_at, bool)
+            else None
+        )
+        return {
+            "status": status,
+            "scope": "registry",
+            "checked_at": checked_at,
+            "age_sec": age,
+            "missing_by_role": missing_by_role,
+            "missing": missing,
+            "reissued": reissued,
+            "checks": checks,
+            "reissues": self.reissues,
+            "confirmations": confirmations,
+            "gaps": gaps,
+            "gap_seconds_max": round(gap_seconds_max, 1),
+            "unreachable": unreachable,
+            "last_healthy_at": last_healthy_at,
+            "last_gap_at": last_gap_at,
+        }

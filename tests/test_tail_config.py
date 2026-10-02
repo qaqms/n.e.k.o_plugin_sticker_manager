@@ -37,6 +37,23 @@ def test_tail_buffer_defaults_are_synchronized():
 )
 def test_existing_configuration_inherits_display_buffer(config):
     assert StickerManagerSettings.from_config(config).send.reply_tail_display_buffer_sec == 2.0
+    assert StickerManagerSettings.from_config(config).send.defer_tool_sends is False
+
+
+@pytest.mark.parametrize("value", [None, "true", "false", 0, 1, [], {}])
+def test_invalid_tool_deferral_defaults_to_immediate(value):
+    settings = StickerManagerSettings.from_config(
+        {"sticker_manager": {"send": {"defer_tool_sends": value}}}
+    )
+    assert settings.send.defer_tool_sends is False
+
+
+@pytest.mark.parametrize("value", [True, False])
+def test_explicit_tool_deferral_override(value):
+    settings = StickerManagerSettings.from_config(
+        {"sticker_manager": {"send": {"defer_tool_sends": value}}}
+    )
+    assert settings.send.defer_tool_sends is value
 
 
 def test_existing_eager_configuration_keeps_its_gates_and_inherits_shorter_buffer():
@@ -46,6 +63,7 @@ def test_existing_eager_configuration_keeps_its_gates_and_inherits_shorter_buffe
     assert settings.reply_tail_display_buffer_sec == 2.0
     assert settings.eagerness == "eager"
     assert settings.cooldown_sec == 20.0
+    assert settings.defer_tool_sends is False
 
 
 def test_explicit_seven_second_override_is_preserved():

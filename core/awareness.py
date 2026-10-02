@@ -43,6 +43,13 @@ _EMOTION_WORDS = (
 )
 # 副信号：成串的标点是"这句有反应"的形状证据（单个问号是提问、单个句号是陈述，都不算）。
 _REACTION_RE = re.compile(r"…{2,}|[!！]+|[~～]{2,}|[？?]{2,}|哈{3,}")
+# Match conversational actions as short utterances, not words inside editing/search requests.
+_INTERACTION_RE = re.compile(
+    r"(?:来|再|给你|给我|要|想|求|让我|我来|可以|继续)?"
+    r"(?:摸摸(?:头|你的头|你)?|摸头|不摸了|别摸了|贴贴|蹭蹭|亲亲|撒娇)"
+    r"(?:一下下|一下|好不好|你|我|了|啦|呀|嘛|吧|哦|喵|吗){0,3}"
+)
+_INTERACTION_TRIM = " \t\r\n，,。.!！?？~～…（）()「」『』“”\"'、"
 
 
 def emotional_signal(text: str) -> bool:
@@ -56,6 +63,8 @@ def emotional_signal(text: str) -> bool:
         return False
     lowered = body.lower()
     if any(word in lowered for word in _EMOTION_WORDS):
+        return True
+    if _INTERACTION_RE.fullmatch(body.strip(_INTERACTION_TRIM)):
         return True
     return bool(_REACTION_RE.search(body))
 
@@ -98,13 +107,13 @@ def injection_due_for_turn(
 _HEADER = "【表情包】你的收藏间里有 {count} 张表情包。"
 # 事件门控点名的落点句（v0.20.0）：形状照同门 `emotion_sense` 的 `（语气感知提醒）`——
 # 先陈述刚发生的事（这句有情绪），再点名工具，最后留退路（不贴切就别配）。
-_EVENT_LEDE = "（表情包点名）刚才这句是有情绪在里面的，先想一下这句配不配图。"
+_EVENT_LEDE = "（表情包点名）最近的对话有互动或情绪反应，回复时想一下配不配图。"
 # v0.17.0：**目录与常货行从注入里退场**。它们搬去了常驻面（`core/tool_surface.py`
 # 拼进 `sticker_send` 的工具描述，每轮都在场），注入只剩"想起来"这一件事。
 # 理由不是省字——是载体错了：`ai_behavior="read"` 是排干即弃的一次性 cue，文字模式
 # 等下一个用户话轮、语音模式要等下一次自然热切换（宿主 lifecycle.py 明写"哪怕隔好几个
 # 话轮"）。把目录写进这种 cue，等于把地图塞进一张会过期的便条。
-# 意愿段与节奏段都在 `core/eagerness.py`（v0.15.0 收口）：那里同时管"注入怎么说"和
+# 意愿段在 `core/eagerness.py`：那里同时管"注入怎么说"和
 # "工具描述怎么说"，两处许可强度必须同向，所以不许在这边再抄一份。
 # v0.19.0：这句从"去看说明"改成**点名工具 + 说清现在就能做**。同门的经验是三面叠加
 # （描述给判据 + 事件门控的点名提醒 + 返回值指挥下一步），只靠常驻面那一条推不动她
@@ -122,7 +131,7 @@ def build_awareness_text(
     再点名工具，最后留退路）。计数兜底那一支不带这句 lede，免得把"每 6 轮例行点名"
     伪装成"这句有情绪"。
 
-    v0.17.0 起它只有三句：库有多大 + 点名怎么做 + 按档位的意愿/节奏。
+    v0.20.11 起只保留库大小、group 路径与档位意愿；拒绝规则留在实际失败回执。
     轮 F 那版还会附套图分类概览与最近常用前 N 行——那是把一次性 cue 当目录载体用，
     实机账本（10 次注入 / 2 次发图）之后换成了常驻面。
     v0.14.0：意愿段按「配表情积极度」选档，不在册的档位退到 natural（与配置读入同一条尺）。

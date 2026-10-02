@@ -12,9 +12,11 @@ import {
   Inline,
   KeyValue,
   Select,
+  Slider,
   Stack,
   Text,
   useState,
+  useEffect,
 } from "@neko/plugin-ui";
 import { callAction, extractCode } from "../shared";
 import type { Surface } from "../shared";
@@ -24,6 +26,36 @@ export function AwarenessCard(props: { surface: Surface }) {
   const t = surface.t;
   const state = surface.state || {};
   const [awarenessNote, setAwarenessNote] = useState("");
+  const configuredInterval = state.awareness?.min_interval_sec ?? 60;
+  const [intervalDraft, setIntervalDraft] = useState(configuredInterval);
+  const [intervalSaving, setIntervalSaving] = useState(false);
+  useEffect(() => {
+    setIntervalDraft(configuredInterval);
+  }, [configuredInterval]);
+
+  const saveInterval = async () => {
+    if (intervalSaving || intervalDraft === configuredInterval) return;
+    setIntervalSaving(true);
+    setAwarenessNote("");
+    try {
+      const result = await callAction(surface, "set_reminder_interval", {
+        min_interval_sec: intervalDraft,
+      });
+      if (result) {
+        setIntervalDraft(result.min_interval_sec);
+        setAwarenessNote(t("panel.awareness.interval.saved", {
+          defaultValue: "提醒间隔已保存",
+        }));
+      }
+      await surface.api.refresh();
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error ?? "failed");
+      const code = extractCode(raw);
+      setAwarenessNote(t(`panel.error.${code}`, { defaultValue: code }));
+    } finally {
+      setIntervalSaving(false);
+    }
+  };
 
   const ping = async () => {
     setAwarenessNote("");
@@ -60,10 +92,10 @@ export function AwarenessCard(props: { surface: Surface }) {
   };
 
   const awareness = state.awareness || {};
-  // 节奏读数：只展示、不在面板上改——旋钮在配置文件（本轮定的是"先不加旋钮"）。
+  // 轮数门槛仍随档位/配置，时间限制可独立调整。
   const cadenceKey = `panel.awareness.cadence.${String(awareness.inject_mode || "interval_n")}`;
   const cadence = t(cadenceKey, {
-    defaultValue: "每 {n} 轮 · 已攒 {since} 轮",
+    defaultValue: "提醒门槛 {n} 轮 · 距上次提醒 {since} 轮",
   })
     .replace("{n}", String(awareness.inject_interval_n || 1))
     .replace("{since}", String(awareness.turns_since ?? 0));
@@ -113,6 +145,43 @@ export function AwarenessCard(props: { surface: Surface }) {
               setEagerness(String(next || "natural"));
             }}
           />
+        </Field>
+        <Field
+          label={t("panel.awareness.min_interval_sec", {
+            defaultValue: "提醒最小间隔（秒）",
+          })}
+        >
+          <Stack gap={8}>
+            <Slider
+              value={intervalDraft}
+              min={0}
+              max={60}
+              step={1}
+              showValue={true}
+              disabled={intervalSaving}
+              onChange={setIntervalDraft}
+            />
+            <Inline gap={16} align="center" wrap>
+              <Text>
+                {intervalDraft === 0
+                  ? t("panel.awareness.interval.off", {
+                      defaultValue: "无时间限制",
+                    })
+                  : t("panel.awareness.interval.seconds", {
+                      defaultValue: "最少间隔 {seconds} 秒",
+                    }).replace("{seconds}", String(intervalDraft))}
+              </Text>
+              <Button
+                tone="default"
+                disabled={intervalSaving || intervalDraft === configuredInterval}
+                onClick={saveInterval}
+              >
+                {intervalSaving
+                  ? t("panel.awareness.interval.saving", { defaultValue: "保存中" })
+                  : t("panel.awareness.interval.save", { defaultValue: "保存" })}
+              </Button>
+            </Inline>
+          </Stack>
         </Field>
         <Inline gap={16} align="center" wrap>
           <KeyValue

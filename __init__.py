@@ -10,9 +10,9 @@ v0.1.0「能收能发」：主人在面板里收藏表情包（上传、写描�
 发送走 `push_message` 的 image part（≤ 内联预算直发原字节，大图换 URL part），
 每次成败都记进使用台账，面板能看到"她最近爱用什么"。
 
-v0.1.4「不再静默缺席」：工具注册心跳（services/tool_watch）——main_server 重启或
-晚于插件启动时，她的 `sticker_list` / `sticker_send` 会静默缺席，巡检器每 5 分钟
-点名补挂。
+v0.20.14「不再静默缺席」：工具注册恢复（services/tool_watch）——main_server 重启或
+晚于插件启动时，她的 `sticker_list` / `sticker_send` 可能静默缺席；巡检器每 10 秒
+逐角色核对，明确缺席时补挂，并在后续查询确认恢复。
 
 v0.2.0「她得记得自己有表情」：三件事——① 存在感注入（services/awareness，挂在
 60s watch 拍上的低频静默提示，治"她想不起来有表情"）；② 套图分组（Sticker.group，
@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import math
 import random
 import time
 from pathlib import Path
@@ -175,9 +176,10 @@ class StickerManagerPlugin(NekoPluginBase):
         # 目标解析（v0.14.1）：她在跟谁说话。面板动作派发的 `_ctx` 里只有 run_id，
         # 普通话轮又不写 conversations 存储——只读 ctx/总线会让面板按钮全报 no_target。
         self._lanlan = LanlanResolver(self, logger=self.logger)
-        # 存在感注入（v0.2.0）：与 tool_watch 共用 60s 拍，内部按角色卡时钟自节流。
-        # 与总开关是「与」关系——[sticker_manager].enabled=false 时不注。
-        self._awareness = Awareness(self, self._library, logger=self.logger, resolver=self._lanlan)
+        # 提醒前核对目标角色的注册表；未知状态只记账，不改变提醒资格。
+        self._awareness = Awareness(
+            self, self._library, logger=self.logger, resolver=self._lanlan, tool_watch=self._tool_watch
+        )
         # 本次运行读数（v0.17.1 观测轮）：只记账不参与任何决策，进程重启归零。
         self._runstats = RunStats()
         # 运行账本的日志面（v0.20.0）：上一次报出去的指纹 + 时刻。见 `_maybe_log_run_ledger`。
@@ -268,9 +270,9 @@ class StickerManagerPlugin(NekoPluginBase):
         for _source, result in outcomes:
             self._runstats.note_delivery(ok=result.ok, reason=result.code)
 
-    @timer_interval(id="watch", seconds=60, name="sticker_manager watch")
+    @timer_interval(id="watch", seconds=10, name="sticker_manager watch")
     async def on_watch(self, **_):
-        # 每 60s 递一下工具注册心跳器，内部按更长间隔自节流。
+        # 独立巡检每 10s 一拍，提醒关闭时也能恢复重建后丢失的工具。
         # timer 每拍跑在新 event loop 且无 watchdog：异常必须自己兜住（陷阱 §3）。
         try:
             watch = await self._tool_watch.maybe_run(now=time.time())
@@ -322,6 +324,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="add",
+        metadata={"agent_auto": False},
         name=tr("entries.add.name", default="收藏一张表情包"),
         description=tr(
             "entries.add.description",
@@ -422,6 +425,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="update",
+        metadata={"agent_auto": False},
         name=tr("entries.update.name", default="修改表情包"),
         description=tr(
             "entries.update.description",
@@ -523,6 +527,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="remove",
+        metadata={"agent_auto": False},
         name=tr("entries.remove.name", default="删除表情包"),
         description=tr("entries.remove.description", default="从库里删掉这张图和它的记录（不可恢复）"),
         input_schema={
@@ -555,6 +560,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="group_set_desc",
+        metadata={"agent_auto": False},
         name=tr("entries.group_set_desc.name", default="给套图分类写一句说明"),
         description=tr(
             "entries.group_set_desc.description",
@@ -609,6 +615,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="group_create",
+        metadata={"agent_auto": False},
         name=tr("entries.group_create.name", default="新建一个表情分类"),
         description=tr(
             "entries.group_create.description",
@@ -655,6 +662,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="group_remove",
+        metadata={"agent_auto": False},
         name=tr("entries.group_remove.name", default="删掉一个分类（连带删它里的图）"),
         description=tr(
             "entries.group_remove.description",
@@ -701,6 +709,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="zone_create",
+        metadata={"agent_auto": False},
         name=tr("entries.zone_create.name", default="新建一个上层区"),
         description=tr(
             "entries.zone_create.description",
@@ -743,6 +752,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="zone_rename",
+        metadata={"agent_auto": False},
         name=tr("entries.zone_rename.name", default="改区名"),
         description=tr(
             "entries.zone_rename.description",
@@ -776,6 +786,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="zone_set_desc",
+        metadata={"agent_auto": False},
         name=tr("entries.zone_set_desc.name", default="给区写一句说明"),
         description=tr(
             "entries.zone_set_desc.description",
@@ -815,6 +826,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="zone_activate",
+        metadata={"agent_auto": False},
         name=tr("entries.zone_activate.name", default="激活一个区"),
         description=tr(
             "entries.zone_activate.description",
@@ -847,6 +859,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="zone_remove",
+        metadata={"agent_auto": False},
         name=tr("entries.zone_remove.name", default="拆掉一个区（连带拆它全部分类与图）"),
         description=tr(
             "entries.zone_remove.description",
@@ -887,6 +900,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="zone_restore_official",
+        metadata={"agent_auto": False},
         name=tr("entries.zone_restore_official.name", default="恢复官方收藏区"),
         description=tr(
             "entries.zone_restore_official.description",
@@ -913,6 +927,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="batch_update",
+        metadata={"agent_auto": False},
         name=tr("entries.batch_update.name", default="批量编辑一批表情包"),
         description=tr(
             "entries.batch_update.description",
@@ -998,6 +1013,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="batch_remove",
+        metadata={"agent_auto": False},
         name=tr("entries.batch_remove.name", default="批量删除表情包"),
         description=tr(
             "entries.batch_remove.description",
@@ -1098,12 +1114,14 @@ class StickerManagerPlugin(NekoPluginBase):
         # · 信号面：`pointer=0/N` 分不清"这句没情绪"与"`turn.text` 读成空串"（总线形状变了），
         #   所以把有文本/空文本/命中三个次数并排打（只记次数，原话永不落盘）。
         # · 工具面：她**根本没有** `sticker_send` 的窗口由 `ToolWatch` 巡检发现，
-        #   `gaps>0` 就是那段时间的调用注定为 0；秒数带 `_max` 语义——巡检 300s 一次，
-        #   真实缺席起点不可知，这里报的是**上界**，不许当精确时长读。
+        #   缺失只是查询时的注册表观测；gaps=0 不保证所有话轮都有工具。
+        #   秒数带 `_max` 语义，真实缺席起点不可知，不许当精确时长读。
         aware = self._awareness
         gaps = getattr(self._tool_watch, "gaps", 0)
         gap_seconds_max = float(getattr(self._tool_watch, "gap_seconds_max", 0.0) or 0.0)
         unreachable = getattr(self._tool_watch, "unreachable", 0)
+        tool_state = self._tool_watch.snapshot(now=now)
+        missing_roles = tuple(sorted(tool_state.get("missing_by_role", {})))
         fingerprint = (
             stats["turns"],
             stats["tool_calls"],
@@ -1115,6 +1133,8 @@ class StickerManagerPlugin(NekoPluginBase):
             aware.signal_hits,
             gaps,
             unreachable,
+            tool_state.get("status"),
+            missing_roles,
         )
         if not final and fingerprint == self._ledger_fingerprint:
             return
@@ -1126,11 +1146,17 @@ class StickerManagerPlugin(NekoPluginBase):
         self.logger.info(
             f"run ledger: turns={stats['turns']} calls={stats['tool_calls']}"
             f" sent={stats['sent']} refused={stats['refused']}"
+            f" sticker_send_calls={stats['sticker_send_calls']} agent_send_calls={stats['agent_send_calls']}"
             f" last_reason={stats['last_reason'] or '-'}"
             f" last_call={stats['last_call'] or '-'}"
             f" pointer={triggers.get('signal', 0)}/{triggers.get('count', 0)}"
             f" sig_text={aware.turn_texts}/{aware.turn_empty} hits={aware.signal_hits}"
             f" tool_gaps={gaps}(≤{gap_seconds_max:.0f}s) unreachable={unreachable}"
+            f" tool_registry={tool_state.get('status', 'unknown')}"
+            f" registry_checked_at={tool_state.get('checked_at')}"
+            f" registry_age_sec={tool_state.get('age_sec')}"
+            f" missing_roles={len(missing_roles)}"
+            f" reissues={tool_state.get('reissues', 0)} confirmations={tool_state.get('confirmations', 0)}"
             f" surface_cats={stats['surface_categories']} tier={stats['surface_tier'] or '-'}"
             + (" final=True" if final else "")
         )
@@ -1232,6 +1258,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="send",
+        metadata={"agent_auto": False},
         name=tr("entries.send.name", default="把这张表情发到聊天"),
         description=tr(
             "entries.send.description",
@@ -1245,12 +1272,20 @@ class StickerManagerPlugin(NekoPluginBase):
                 "id": {"type": "string", "description": tr("fields.id", default="表情包 id")},
                 "group": {"type": "string", "description": "要发送的表情分类（可选）"},
                 "query": {"type": "string", "description": "想表达的情绪或场景关键词（可选）"},
-                "text": {"type": "string", "maxLength": SEND_TEXT_MAX_CHARS, "description": "随图发送的配文（可选）"},
+                "text": {
+                    "type": "string",
+                    "maxLength": SEND_TEXT_MAX_CHARS,
+                    "description": (
+                        "额外配文（可选）：先单独发文字，再单独发图片。"
+                        "正常文字回复时仍可调用 sticker_send(group=分类名) 配一张独立表情包，text 无需填写；"
+                        "只有额外配文才填 text，配文不要在正文重复"
+                    ),
+                },
             },
             "required": [],
             "additionalProperties": False,
         },
-        llm_result_fields=["note", "id", "reason", "candidates", "hint"],
+        llm_result_fields=["note", "id", "reason", "candidates", "hint", "text_submitted"],
         timeout=30.0,
     )
     async def send_entry(
@@ -1289,6 +1324,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="list",
+        metadata={"agent_auto": False},
         name=tr("entries.list.name", default="搜索表情包"),
         description=tr("entries.list.description", default="按关键词在库里搜（描述/标签/id 子串匹配），返回条目列表"),
         input_schema={
@@ -1319,6 +1355,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="preview",
+        metadata={"agent_auto": False},
         name=tr("entries.preview.name", default="取一张表情包的预览"),
         description=tr(
             "entries.preview.description",
@@ -1405,6 +1442,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="history",
+        metadata={"agent_auto": False},
         name=tr("entries.history.name", default="最近的表情包使用记录"),
         description=tr(
             "entries.history.description", default="返回发送台账尾部若干条（时刻/用了哪张/谁/成败），不含对话原文"
@@ -1429,6 +1467,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="switch",
+        metadata={"agent_auto": False},
         name=tr("entries.switch.name", default="开关表情包管理"),
         description=tr(
             "entries.switch.description",
@@ -1462,6 +1501,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="set_eagerness",
+        metadata={"agent_auto": False},
         name=tr("entries.set_eagerness.name", default="设置配表情积极度"),
         description=tr(
             "entries.set_eagerness.description",
@@ -1495,6 +1535,51 @@ class StickerManagerPlugin(NekoPluginBase):
         return Ok({"note": "eagerness_set", "eagerness": self._settings.send.eagerness})
 
     @ui.action(
+        id="set_reminder_interval",
+        label=tr("actions.set_reminder_interval.label", default="Save reminder interval"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="set_reminder_interval",
+        metadata={"agent_auto": False},
+        name=tr("entries.set_reminder_interval.name", default="设置提醒最小间隔"),
+        description=tr(
+            "entries.set_reminder_interval.description",
+            default="提醒间隔可设为 0 到 60 秒；0 关闭时间限制，不改变轮数门槛与发送规则",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "min_interval_sec": {
+                    "type": "number", "minimum": 0, "maximum": 60,
+                    "description": tr("fields.min_interval_sec", default="提醒最小间隔（秒）"),
+                },
+            },
+            "required": ["min_interval_sec"],
+        },
+        llm_result_fields=["note", "min_interval_sec"],
+    )
+    async def set_reminder_interval_entry(self, min_interval_sec: float = 60.0, **_):
+        if (
+            isinstance(min_interval_sec, bool)
+            or not isinstance(min_interval_sec, (int, float))
+            or not 0 <= min_interval_sec <= 60
+            or not math.isfinite(min_interval_sec)
+        ):
+            return Err(SdkError("invalid_value"))
+        try:
+            await self.config.set("sticker_manager.awareness.min_interval_sec", float(min_interval_sec))
+        except Exception:
+            self.logger.warning("failed to persist [sticker_manager.awareness].min_interval_sec", exc_info=True)
+            return Err(SdkError("config_unavailable"))
+        await self._reload_settings()
+        return Ok({
+            "note": "reminder_interval_set",
+            "min_interval_sec": self._settings.awareness.min_interval_sec,
+        })
+
+    @ui.action(
         id="repair",
         label=tr("actions.repair.label", default="Repair"),
         tone="warning",
@@ -1502,6 +1587,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="repair",
+        metadata={"agent_auto": False},
         name=tr("entries.repair.name", default="库体检与自修复"),
         description=tr(
             "entries.repair.description",
@@ -1526,6 +1612,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="import_inbox",
+        metadata={"agent_auto": False},
         name=tr("entries.import_inbox.name", default="导入收件箱里的图片"),
         description=tr(
             "entries.import_inbox.description",
@@ -1579,6 +1666,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="import_upload_start",
+        metadata={"agent_auto": False},
         name=tr("entries.import_upload_start.name", default="开始上传套图包"),
         description=tr(
             "entries.import_upload_start.description",
@@ -1612,6 +1700,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="import_upload_chunk",
+        metadata={"agent_auto": False},
         name=tr("entries.import_upload_chunk.name", default="上传一个分块"),
         description=tr(
             "entries.import_upload_chunk.description",
@@ -1660,6 +1749,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="import_upload_finish",
+        metadata={"agent_auto": False},
         name=tr("entries.import_upload_finish.name", default="完成上传并导入套图包"),
         description=tr(
             "entries.import_upload_finish.description",
@@ -1709,6 +1799,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="export_pack",
+        metadata={"agent_auto": False},
         name=tr("entries.export_pack.name", default="导出套图包"),
         description=tr(
             "entries.export_pack.description",
@@ -1735,6 +1826,7 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     @plugin_entry(
         id="awareness_now",
+        metadata={"agent_auto": False},
         name=tr("entries.awareness_now.name", default="立刻注一条存在感"),
         description=tr(
             "entries.awareness_now.description",
@@ -1915,12 +2007,12 @@ class StickerManagerPlugin(NekoPluginBase):
         parameters={
             "type": "object",
             "properties": {
-                "sticker_id": {"type": "string", "description": "表情包的 id（首选）"},
-                "query": {"type": "string", "description": "没有 id 时给关键词（想表达的态度/场景，会按梗义筛）"},
                 "group": {
                     "type": "string",
-                    "description": "只给套图分组名：组内随机选一张（适合“这组调性对，具体哪张你定”）",
+                    "description": "日常配图优先只填这个：从下方目录选分类名，组内自动选一张，无需先查列表。",
                 },
+                "sticker_id": {"type": "string", "description": "仅指定某一张图时填写；日常配图只填 group 即可。"},
+                "query": {"type": "string", "description": "按梗义检索想表达的态度或场景；已知分类时只填 group 即可。"},
                 "force": {
                     "type": "boolean",
                     "description": "仅当主人明确点名要再看/再发这张时置 true：跳过最近不重复与概率闸（冷却仍生效）",
@@ -1928,8 +2020,8 @@ class StickerManagerPlugin(NekoPluginBase):
                 "text": {
                     "type": "string",
                     "description": (
-                        f"想跟着这张图一起说的一句话（≤{SEND_TEXT_MAX_CHARS} 字）：填了就图文一条发出去，"
-                        "填了这句就别在调用前把同样的话再说一遍（会变成两条）。留空 = 只发图。"
+                        f"额外配文（可选，≤{SEND_TEXT_MAX_CHARS} 字）。普通回复照常说，此项留空只发图；"
+                        "非空时先单独发配文，再单独发图片，配文不要在正文重复。"
                     ),
                 },
             },
@@ -2074,9 +2166,8 @@ class StickerManagerPlugin(NekoPluginBase):
                 "ok": False,
                 "reason": "no_match" if (has_id or has_query or has_group) else "id_or_query_required",
             }
-        # 图文同条（v0.18.0）：她把要说的话写进 `text`，图和这句话一起从插件这一条气泡出去。
-        # 只 trim 不改写——她给的措辞就是她给的措辞。上限拦的是"把整段回复塞进参数"，
-        # 那种话走她自己的回复通道更合适（署名也不同）。
+        # text 保留调用兼容，只用于额外配文；普通回复走她自己的回复通道。
+        # 只 trim 不改写，配文与图片在 sender 中分两次提交。
         caption = text.strip() if isinstance(text, str) else ""
         if len(caption) > SEND_TEXT_MAX_CHARS:
             return {
@@ -2101,11 +2192,15 @@ class StickerManagerPlugin(NekoPluginBase):
                 settings=self._settings,
                 now=time.time(),
                 source=_source,
+                **({"text_submitted": True} if result.text_submitted else {}),
             )
             out: dict[str, Any] = {"ok": False, "reason": result.code, "tried": sticker.id}
             hint = _SEND_HINTS.get(result.code)
             if hint:
                 out["hint"] = hint
+            if result.text_submitted:
+                out["text_submitted"] = True
+                out["hint"] = "配文已提交，但图片未提交成功。不要重复发送这段配文，继续正常回复。"
             return out
         if result.queued:
             return {
@@ -2116,7 +2211,7 @@ class StickerManagerPlugin(NekoPluginBase):
                 "note": (
                     "表情包已排队，会在本轮回复与显示缓冲结束后发出。继续正常回复，无需等待；"
                     "仅同一轮同一张图不重复提交。"
-                    + NEXT_STEP_NOTE.removeprefix("图已经发出去了，")
+                    + NEXT_STEP_NOTE.removeprefix("表情包已提交到聊天，")
                 ),
             }
         return {

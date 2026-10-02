@@ -1,6 +1,6 @@
 """存在感注入的有状态层（v0.2.0）：什么时候注、注给谁、怎么兜底。
 
-链路（v0.16.0 起挂在 10s `turns` 拍上；60s `watch` 拍只管 tool_watch）：
+链路（v0.16.0 起挂在 10s `turns` 拍上；独立 `watch` 拍只管 tool_watch）：
 
 1. **什么时候**：**由用户开的新一轮触发**（`services/turns.py` 轮询 `bus.memory` 的
    `user_message`），按 `inject_mode` 决定这轮注不注——每轮都注，或攒够 N 轮注一次；
@@ -53,10 +53,12 @@ class Awareness:
         logger: Any = None,
         resolver: LanlanResolver | None = None,
         turns: TurnWatcher | None = None,
+        tool_watch: Any = None,
     ):
         self._plugin = plugin
         self._library = library
         self._logger = logger
+        self._tool_watch = tool_watch
         # 目标解析交给 LanlanResolver（入口 ctx → 宿主权威 → 粘滞 → 总线）；
         # 缺席时自建一个，形状与老调用点完全兼容。
         self._resolver = resolver or LanlanResolver(plugin, logger=logger)
@@ -77,6 +79,7 @@ class Awareness:
         self.turn_empty = 0
         self.signal_hits = 0
         self.last_turn_chars = 0
+        self.last_tool_check: dict[str, Any] = {}
 
     # ------------------------------------------------------------------
     # 时钟与快照
@@ -119,6 +122,14 @@ class Awareness:
         turns_since = counts.get(self.last_target) if self.last_target else None
         if turns_since is None:
             turns_since = max(counts.values(), default=0)
+        tool_check = dict(self.last_tool_check)
+        checked_at = tool_check.get("checked_at")
+        if tool_check:
+            tool_check["age_sec"] = (
+                round(max(0.0, now - checked_at), 3)
+                if isinstance(checked_at, (int, float)) and not isinstance(checked_at, bool)
+                else None
+            )
         return {
             "status": self.last_status,
             "target": self.last_target,
@@ -128,6 +139,7 @@ class Awareness:
             # 面板显示的是**生效值**（档位驱动的 3/6/12 或主人写死的数），
             # 回 0 会让人以为"每 0 轮一次"——那是把哨兵值当读数，仪器说谎的一种。
             "inject_interval_n": self.interval_n(settings),
+            "min_interval_sec": awareness.min_interval_sec,
             # v0.20.0：点名是谁开的这一枪（signal = 那句用户话带情绪，见 emotional_signal）。
             "last_trigger": self.last_trigger,
             "trigger_counts": dict(self.trigger_counts),
@@ -135,6 +147,7 @@ class Awareness:
             "turn_texts": self.turn_texts,
             "turn_empty": self.turn_empty,
             "signal_hits": self.signal_hits,
+            "tool_watch": tool_check,
             "turns_since": turns_since,
             "turns_since_inject": counts,
             "min_next_wait_sec": min(
@@ -251,11 +264,12 @@ class Awareness:
         )
         if not text:
             return {"status": "empty_library"}
+        tool_check = await self._before_reminder(target=target, now=now)
         pushed = self._push(text, target)
         if not pushed.get("submitted"):
             reason = str(pushed.get("reason", "push_rejected"))
             self._log(f"awareness push rejected: reason={reason}")
-            return {"status": "push_rejected", "reason": reason}
+            return {"status": "push_rejected", "reason": reason, "tool_watch": tool_check}
         self._last_injected[target] = now
         # 计数只在真注成功之后清零：被地板/空库挡掉的那些轮不消耗配额，
         # 否则"每 3 轮注一次"会静默退化成"每 4、5 轮注一次"。
@@ -281,6 +295,7 @@ class Awareness:
             "target": target,
             "chars": len(text),
             "trigger": trigger,
+            "tool_watch": tool_check,
         }
 
     # ------------------------------------------------------------------
@@ -289,6 +304,27 @@ class Awareness:
 
     async def _active_lanlan(self) -> str:
         return await self._resolver.resolve()
+
+    async def _before_reminder(self, *, target: str, now: float) -> dict[str, Any]:
+        checker = getattr(self._tool_watch, "before_reminder", None)
+        if not callable(checker):
+            return {}
+        try:
+            result = await checker(role=target, now=now)
+            if not isinstance(result, dict):
+                result = {"status": "unknown", "scope": "registry", "role": target}
+        except Exception:  # noqa: BLE001 - 观测失败不改变提醒触发与投递
+            result = {"status": "watch_failed", "scope": "registry", "role": target}
+        self.last_tool_check = dict(result)
+        self._log(
+            f"awareness tool preflight: scope=registry target={target}"
+            f" status={result.get('status', 'unknown')}"
+            f" confirmed={bool(result.get('confirmed', False))}"
+            f" cached={bool(result.get('cached', False))}"
+            f" checked_at={result.get('checked_at')} age_sec={result.get('age_sec')}"
+            f" missing_count={len(result.get('missing') or [])}"
+        )
+        return result
 
     def _observe_turn(self, turn: UserTurn, settings: Any) -> bool:
         self.last_turn_chars = len(str(turn.text or ""))

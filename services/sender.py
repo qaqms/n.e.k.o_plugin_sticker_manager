@@ -6,8 +6,9 @@
 2. **上传换 URL**（大图 / 显式配置）：`await ctx.images.upload(data)` 拿回
    `{"type":"image","url":...,"mime":"image/jpeg"}` 的 part 再投递。
 
-投递用 `visibility=["chat"]`（用户在聊天里看到图）；即时与 Agent 路径用
-`ai_behavior="read"`，延迟工具图片用 `blind` 避免反灌到下一轮上下文。
+投递用 `visibility=["chat"]`（用户在聊天里看到图）；工具选图无论即时还是排队都用
+`ai_behavior="blind"`，避免自产配文与图片反灌到下一轮上下文；
+面板与 Agent 路径保留 `ai_behavior="read"`。
 `submitted=True` 只代表已交给传输，不代表宿主已消费（our_life 陷阱 §5）。
 
 冷却是**按角色卡的内存表**：不持久化。跨重启的发送节奏没必要留痕，
@@ -60,14 +61,22 @@ class SendResult:
     sticker_id: str = ""
     desc: str = ""
     queued: bool = False
+    text_submitted: bool = False
 
     @classmethod
-    def failure(cls, code: str, *, sticker_id: str = "", detail: str = "") -> "SendResult":
-        return cls(ok=False, code=code, sticker_id=sticker_id, detail=detail)
+    def failure(
+        cls, code: str, *, sticker_id: str = "", detail: str = "", text_submitted: bool = False,
+    ) -> "SendResult":
+        return cls(
+            ok=False, code=code, sticker_id=sticker_id, detail=detail,
+            text_submitted=text_submitted,
+        )
 
     @classmethod
-    def success(cls, sticker: Sticker) -> "SendResult":
-        return cls(ok=True, sticker_id=sticker.id, desc=sticker.desc)
+    def success(cls, sticker: Sticker, *, text_submitted: bool = False) -> "SendResult":
+        return cls(
+            ok=True, sticker_id=sticker.id, desc=sticker.desc, text_submitted=text_submitted,
+        )
 
 
 @dataclass
@@ -184,12 +193,10 @@ class Sender:
     ) -> SendResult:
         """投递一张表情包并记账。source 为 tool / agent / panel，不面向用户。
 
-        `text` 非空时**图与这句话合成一条气泡**（v0.18.0 图文同条）：宿主对一次 push
-        走同一条渲染路径，`parts=[{text},{image}]` 会按顺序变成同一个来源气泡
-        （宿主 `app/main_server/character_runtime.py:1154,1380` → `_ordered_plugin_chat_blocks`
-        带 `include_text=True`）。**署名仍是插件**——宿主明确规定插件内容不许穿她的身份
-        （同文件 1355-1372 的注释与 `turn.py:1804-1816`），所以这句话是她写进工具参数、
-        由我们代发的，不是她的回复气泡。
+        `text` 非空时先投配文消息，再投独立图片消息，仍共用一次排队、节奏判定与计数。
+        先准备图片，准备失败时不投配文；传输没有事务或回滚，配文提交后图片仍可能失败，
+        此时通过 `text_submitted` 如实报告部分提交，不重发，也不算发表情成功。
+        两条消息署名仍是插件，不冒充她自己的回复气泡。
         """
         moment = time.time() if now is None else now
         # Reservation spans awaits and works across the host's separate event loops.
@@ -256,10 +263,13 @@ class Sender:
         _ext, mime = detected
 
         ticket = None
-        if self._turn_end is not None and source in {"tool", "agent"}:
-            defer = True
+        if self._turn_end is not None and (
+            source == "agent" or (source == "tool" and settings.send.defer_tool_sends)
+        ):
+            # Tool ordering is opt-in: log-based waiting can lose selections
+            # on the next input. Background Agent requests retain their guard.
+            defer = source == "tool"
             if source == "agent":
-                # Background Agent requests need not have an active main reply.
                 states = await asyncio.to_thread(self._turn_end.busy_states)
                 defer = states.get(lanlan) is not False
             if defer:
@@ -267,12 +277,11 @@ class Sender:
                 if ticket is None:
                     return SendResult.failure("turn_end_unavailable", sticker_id=sticker.id)
 
-        part = await self._build_part(data, mime, settings=settings, text_len=len(text))
+        part = await self._build_part(data, mime, settings=settings)
         if part is None:
             return SendResult.failure(ERR_TOO_LARGE, sticker_id=sticker.id)
 
-        # 图文一体：要么一起出去，要么一起不发。只把话投出去会造出"她说了句没人应答的话"，
-        # 那句话由她自己的回复通道说更合适——所以我们不降级成"纯文本重发"。
+        # 图片准备完成后才允许投配文；有配文的两条消息共用这次预约与排队。
         parts: list[dict[str, Any]] = [{"type": "text", "text": text}] if text else []
         parts.append(part)
         with self._inflight_lock:
@@ -302,19 +311,33 @@ class Sender:
     def _submit(
         self, sticker: Sticker, parts: list[dict[str, Any]], *, lanlan: str,
         settings: StickerManagerSettings, source: str, moment: float, text_len: int,
-        ai_behavior: str = "read",
     ) -> SendResult:
-        try:
-            pushed = self._push(parts, lanlan=lanlan, ai_behavior=ai_behavior)
-        except Exception:
-            self._log("push failed", exc=True)
-            return SendResult.failure(ERR_TRANSPORT, sticker_id=sticker.id)
-        if not pushed.get("submitted"):
-            reason = str(pushed.get("reason", ERR_TRANSPORT))
-            self._log(f"push rejected: reason={reason}")
-            return SendResult.failure(reason or ERR_TRANSPORT, sticker_id=sticker.id)
+        # Tool results already describe the selection. Reading our own image
+        # again would make the next text-chat turn switch to a vision model.
+        ai_behavior = "blind" if source == "tool" else "read"
+        text_submitted = False
+        for part in parts:
+            partial = " text_submitted=True" if text_submitted else ""
+            detail = "caption submitted; image not submitted" if text_submitted else ""
+            try:
+                pushed = self._push([part], lanlan=lanlan, ai_behavior=ai_behavior)
+            except Exception:
+                self._log(f"push failed{partial}", exc=True)
+                return SendResult.failure(
+                    ERR_TRANSPORT, sticker_id=sticker.id, detail=detail,
+                    text_submitted=text_submitted,
+                )
+            if not pushed.get("submitted"):
+                reason = str(pushed.get("reason", ERR_TRANSPORT))
+                self._log(f"push rejected: reason={reason}{partial}")
+                return SendResult.failure(
+                    reason or ERR_TRANSPORT, sticker_id=sticker.id, detail=detail,
+                    text_submitted=text_submitted,
+                )
+            if part["type"] == "text":
+                text_submitted = True
 
-        # 只有真交给传输了才前进冷却与计数（被拒的投递不该罚她等下一轮）。
+        # 只有图片真交给传输了才前进冷却与计数，配文单独提交不算成功。
         self._last_sent[lanlan] = moment
         self._library.touch_used(sticker.id, now=moment)
         self._library.append_usage(
@@ -324,17 +347,17 @@ class Sender:
                 "lanlan": lanlan or "",
                 "source": source,
                 "ok": True,
-                # 图文同条留个长度痕（v0.18.0）：**只记长度不记内容**——那句是她生成的话，
+                # 配文只留长度痕：**只记长度不记内容**——那句是她生成的话，
                 # 台账的既有纪律是"只放非隐私字段"（时刻/id/角色/来源/成败）。
                 "text_len": text_len,
             },
             keep=settings.storage.usage_history_keep,
         )
         self._log(
-            f"sticker sent: id={sticker.id} source={source}"
+            f"sticker sent: id={sticker.id} source={source} ai_behavior={ai_behavior}"
             + (f" text_len={text_len}" if text_len else "")
         )
-        return SendResult.success(sticker)
+        return SendResult.success(sticker, text_submitted=text_submitted)
 
     async def drain(self, *, settings: StickerManagerSettings) -> list[tuple[str, SendResult]]:
         """Buffer display after generation ends, watching for superseding input.
@@ -399,12 +422,12 @@ class Sender:
                             result = self._submit(
                                 sticker, pending.parts, lanlan=lanlan, settings=settings,
                                 source=pending.source, moment=time.time(), text_len=pending.text_len,
-                                ai_behavior="blind" if pending.source == "tool" else "read",
                             )
                         if not result.ok:
                             self.note_attempt_failed(
                                 lanlan=lanlan, sticker_id=pending.sticker.id, code=result.code,
                                 settings=settings, now=time.time(), source=pending.source,
+                                text_submitted=result.text_submitted,
                             )
                             end_wait = (
                                 "no-end" if pending.end_observed_at is None
@@ -413,6 +436,7 @@ class Sender:
                             self._log(
                                 f"sticker deferred rejected: id={pending.sticker.id} "
                                 f"reason={result.code} end_wait_sec={end_wait}"
+                                + (" text_submitted=True" if result.text_submitted else "")
                             )
                         outcomes.append((pending.source, result))
                     finally:
@@ -441,14 +465,13 @@ class Sender:
         return outcomes
 
     async def _build_part(
-        self, data: bytes, mime: str, *, settings: StickerManagerSettings, text_len: int = 0
+        self, data: bytes, mime: str, *, settings: StickerManagerSettings,
     ) -> dict[str, Any] | None:
         """构造 push_message 的 image part；无法投递时返回 None。
 
-        `text_len` 是同条气泡里那句话的字符数：内联预算按**整条载荷**算，不是只看图字节
-        ——宿主的消息面单条上限（512KiB）扣的是拼完之后的总量。
+        配文是独立消息，不占用图片的内联预算。
         """
-        inline_budget = settings.send.inline_max_bytes - max(0, text_len)
+        inline_budget = settings.send.inline_max_bytes
         if mime == "image/gif" and not settings.send.animated_via_upload:
             # gif 只能内联；内联不下就是真放不下（上传会毁掉动画，宁可拒绝）。
             if len(data) > inline_budget:
@@ -484,17 +507,18 @@ class Sender:
         return {"submitted": False, "reason": ERR_TRANSPORT}
 
     def note_attempt_failed(
-        self, *, lanlan: str, sticker_id: str, code: str, settings, now: float, source: str = "tool"
+        self, *, lanlan: str, sticker_id: str, code: str, settings, now: float,
+        source: str = "tool", text_submitted: bool = False,
     ) -> None:
         """失败的发送也进台账（ok=False），面板"她最近想用但没成"看得见。"""
-        self._library.append_usage(
-            {
-                "at": now,
-                "id": sticker_id,
-                "lanlan": lanlan or "",
-                "source": source,
-                "ok": False,
-                "code": code,
-            },
-            keep=settings.storage.usage_history_keep,
-        )
+        entry = {
+            "at": now,
+            "id": sticker_id,
+            "lanlan": lanlan or "",
+            "source": source,
+            "ok": False,
+            "code": code,
+        }
+        if text_submitted:
+            entry["text_submitted"] = True
+        self._library.append_usage(entry, keep=settings.storage.usage_history_keep)

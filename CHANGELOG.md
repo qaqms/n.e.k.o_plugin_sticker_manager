@@ -1,5 +1,144 @@
 # Changelog
 
+## 0.20.15
+
+- Refine only the eager tier's main-chat decision, trigger and reminder wording.
+  Name ordinary light conversation, celebration, affection, comfort, playful
+  complaints and sleepy goodnights as opportunities for a fitting sticker.
+- Prefer one matching category without waiting for an explicit image request
+  or treating an already complete text reply as a reason to skip the image.
+  Select the category for the speaker's intended response, not by copying the
+  other person's mood. Keep text-only replies for serious tasks or when no
+  category fits; do not require a sticker on every turn.
+- Keep natural/reserved wording, default configuration, reminder eligibility
+  and timing, send gates, tool schemas, immediate blind delivery, tool recovery
+  and Agent isolation unchanged. No host or installed user files are modified.
+- This is a prompt-only behavior trial, not a guaranteed increase in model
+  tool-call frequency. Compare normal new conversations with stable API
+  settings; do not count retained history or background tasks as main calls.
+
+## 0.20.14
+
+- Check main-chat tool registrations every 10 seconds, independently of reminder
+  eligibility. Inspect each character separately so another character's healthy
+  registry cannot mask missing `sticker_list` or `sticker_send`.
+- Re-emit only missing SDK tool metadata through the existing registration path,
+  with bounded retries and no unregister/register gap. Treat unreachable,
+  unsuccessful or unrecognized responses as unknown, not as proof of absence.
+- Keep recovery pending until a later registry query confirms the tools are
+  present. Separate missing episodes, reissue attempts and confirmations in
+  diagnostic logs; zero detected gaps is not proof of continuous availability.
+- Before a reminder is submitted, check its target character and record the
+  registry status, observation time and cache age without conversation content.
+  Diagnostic failure does not suppress the existing reminder.
+- Preserve eagerness, reminder cadence and wording, send gates, immediate blind
+  main-tool delivery, user configuration, the library and Agent auto-routing
+  isolation. This repairs a registration-recovery blind spot, not a guarantee
+  that the model will choose to call a registered tool.
+- The October 2 rollback test registered tools before API configuration saves
+  rebuilt the host's character managers. Subsequent zero-call windows strongly
+  suggest lost registrations, but existing logs do not expose the actual model
+  request. No host code or Steam installation is changed.
+
+## 0.20.13
+
+- Mark all 28 panel and management entries with the supported
+  `metadata.agent_auto=false` opt-out. The host's automatic Agent assessment
+  no longer selects these entries on hosts honoring that metadata; UI actions
+  and explicit API dispatch remain available.
+- Keep `sticker_list` and `sticker_send` registered for the main conversation,
+  with their existing names, schemas, group-first guidance and eagerness tiers.
+  Do not misuse character-scoping `role` as a main/Agent audience switch.
+- Steam logs confirmed background tasks dispatched `entry=send` even for light
+  interaction, rather than a main-tool call internally handing off to Agent.
+  The old generic send handler remains callable for compatibility, but is no
+  longer offered as an automatic background fallback.
+- Preserve immediate main-tool delivery and blind own-image display from
+  0.20.9/0.20.12. The 0.20.3-to-0.20.8 package comparison found unchanged
+  awareness timing and willingness tiers; forced deferred delivery was the
+  confirmed lost-submission regression. Do not roll back the entire plugin,
+  alter user configuration or inflate sticker counts with automatic random sends.
+- Older hosts ignoring the Agent opt-out, or offering dynamic `__llm_tool__`
+  entries to Agent, still need host-side support for that audience boundary.
+  No host or Steam installation is modified. Actual main-tool frequency and
+  absence of task HUD dispatch still require a fresh Steam conversation test.
+
+## 0.20.12
+
+- Submit main-tool stickers with `visibility=["chat"]` and `ai_behavior="blind"`
+  for both immediate and deferred delivery. The selected sticker remains visible,
+  and its id/description remain in the tool result; the plugin no longer feeds its
+  own image and optional caption into the next model input.
+- The October 2 Steam test showed a successful tool send followed by an own-plugin
+  image input and a switch from `free-model` to `free-vision-model`. This removes
+  that confirmed feedback path, not a demonstrated cause of all low tool-call frequency.
+  Subsequent visual follow-ups rely on sticker metadata unless the user supplies an image.
+- Keep panel and background Agent `read` delivery, passive reminder `read` delivery,
+  immediate tool submission, separate caption/image messages, willingness prompts,
+  reminder cadence, the 0-to-60-second setting and all send gates unchanged.
+- Include the actual `ai_behavior` in successful-submission logs. This is a local
+  transport receipt, not confirmation of host rendering or model consumption.
+- Validate host bridge routing and add source-specific feedback regression coverage.
+  Actual frequency improvement still requires a fresh Steam conversation and user testing.
+
+## 0.20.11
+
+- Recognize bounded, complete light-interaction utterances such as head pats and
+  affectionate reactions in the local awareness gate. Do not match the same words
+  embedded in editing/search requests. The time floor and event-gate switch still apply.
+- Make the main `sticker_send` schema consistently group-first, use the actual
+  `sticker_id` argument name, and shorten ordinary reply/optional-caption guidance.
+  Natural and eager descriptions now include light conversation and the speaker's attitude.
+- Remove contradictory, preemptive send-gate warnings from awareness reminders.
+  Retry guidance remains in actual refusal results; cooldown, deduplication and
+  probability enforcement are unchanged.
+- Report `sticker_send_calls` and `agent_send_calls` independently in runtime snapshots
+  and ledgers. These count entry invocations, not every upstream model decision.
+- Preserve background Agent fallback, immediate main-tool delivery, caption/image
+  separation and the persisted 0-to-60-second reminder setting. Agent-dispatched
+  sends can still appear in the host task HUD.
+- This repairs observed trigger gaps and prompt inconsistencies, not a demonstrated
+  model-frequency regression. Steam tool payloads are not observable in the available
+  logs; actual call-frequency improvement still requires user import and testing.
+
+## 0.20.10
+
+- Add a panel slider for the minimum reminder interval, with an explicit save action,
+  a 0-to-60-second range and persisted configuration. Zero removes only the time limit;
+  turn thresholds, emotional triggers and send gates remain unchanged.
+- Keep the existing 60-second default and accept existing in-range overrides. Clamp
+  configuration values above 60 seconds to the new maximum; reject invalid action values.
+- Clarify the cadence readout as a reminder threshold and turns since the last reminder,
+  rather than implying a sticker is sent every N turns.
+
+## 0.20.9
+
+- Restore immediate submission for model `sticker_send` tool calls.
+- Keep reply-tail completion buffering for background Agent sends, where the host may
+  already be generating a response. Explicit `send.defer_tool_sends=true` opts tool calls
+  back into the old ordering and cancellation behavior; the default is false, including
+  existing configurations without the key.
+- Preserve cooldown, recent deduplication, probability, GIF bytes, independent caption/image
+  delivery, and panel-send behavior.
+- This avoids losing valid tool selections when a new user input arrives before the host's
+  best-effort completion log marker; no host code or SDK contract is changed.
+- Immediate tool sends retain `ai_behavior="read"` and may appear before remaining reply
+  text. This fixes a proven lost-submission path, not the model's decision to call a tool.
+
+## 0.20.8
+
+- Clarify potentially ambiguous guidance after a zero-call sample on 0.20.7: a normal text reply can still call `sticker_send(group=category)` to add an independent sticker, without filling `text`.
+- Reserve optional `text` for extra captions and avoid repeating those captions in the ordinary reply. Keep independent image delivery and caption compatibility unchanged.
+- Preserve willingness tiers, decision checkpoints, trigger criteria, reminder cadence, send gates and the two-second default display buffer. This is a wording clarification, not a proven fix for model non-use or a guarantee of restored sticker frequency.
+
+## 0.20.7
+
+- Send stickers as standalone image messages. Keep the optional `text` argument compatible: a nonempty extra caption is submitted first as its own text message, followed by a separate image message; an empty caption still submits only one image.
+- Keep ordinary assistant replies in the assistant's own response channel. Tool descriptions, awareness guidance and result notes treat `text` as optional extra caption content and discourage repeating it in the ordinary reply.
+- Validate and construct the image before any caption submission, but do not claim a transaction across the two pushes. If the caption is accepted and the image fails, preserve the image failure reason and report `text_submitted=true` without resending the caption automatically.
+- Count successful image submission, cooldown and deduplication once per sticker, not once per bubble. Partial failure remains one failed attempt with no image-success credit or cooldown advancement. Ledger and timing logs retain lengths and flags, not caption text.
+- Preserve the two-second default compatibility buffer, GIF bytes, source labels, send gates, eager cadence and plugin-only host integration.
+
 ## 0.20.6
 
 - Reduce the default `send.reply_tail_display_buffer_sec` from 7 to 2 seconds. The 0.20.5 seven-second wait exposed a continuous-input regression: all three observed tool selections were canceled as `turn_superseded` before transport submission, not hidden after a `blind` push.
