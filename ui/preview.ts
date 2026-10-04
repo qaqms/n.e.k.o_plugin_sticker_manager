@@ -30,6 +30,10 @@ function cacheKey(kind: string, id: string): string {
 const PREVIEW_CONCURRENCY = 2;
 let previewActive = 0;
 const previewWaiters: Array<() => Promise<void>> = [];
+type PreviewRequest = {
+  listeners: Set<(dataUrl: string) => void>;
+};
+const previewRequests = new Map<string, PreviewRequest>();
 
 function pumpPreviewQueue() {
   while (previewActive < PREVIEW_CONCURRENCY && previewWaiters.length > 0) {
@@ -46,9 +50,65 @@ function pumpPreviewQueue() {
   }
 }
 
-function queuePreview(task: () => Promise<void>) {
-  previewWaiters.push(task);
+function queuePreview(task: () => Promise<void>, priority: boolean = false) {
+  if (priority) previewWaiters.unshift(task);
+  else previewWaiters.push(task);
   pumpPreviewQueue();
+}
+
+function requestPreview(
+  surface: Surface,
+  id: string,
+  kind: string,
+  priority: boolean,
+  complete: (dataUrl: string) => void,
+): () => void {
+  const key = cacheKey(kind, id);
+  // A reopened detail joins its unfinished request instead of fetching the same chunks twice.
+  const existing = previewRequests.get(key);
+  if (existing) {
+    existing.listeners.add(complete);
+    return () => {
+      existing.listeners.delete(complete);
+    };
+  }
+  const request: PreviewRequest = { listeners: new Set([complete]) };
+  previewRequests.set(key, request);
+  queuePreview(async () => {
+    if (request.listeners.size === 0) {
+      previewRequests.delete(key);
+      return;
+    }
+    let dataUrl = "";
+    try {
+      let offset = 0;
+      let mime = "";
+      const parts: string[] = [];
+      for (let guard = 0; guard < 16; guard += 1) {
+        const args: Record<string, any> = { id, offset };
+        if (kind === "thumb") args.kind = "thumb";
+        const result = await callAction(surface, "preview", args);
+        if (!result) break;
+        mime = String(result.mime || mime);
+        parts.push(String(result.chunk_base64 || ""));
+        if (result.done) {
+          dataUrl = `data:${mime};base64,${parts.join("")}`;
+          break;
+        }
+        const next = Number(result.next_offset || 0);
+        if (next <= offset) break;
+        offset = next;
+      }
+    } catch {
+      dataUrl = "";
+    }
+    previewCache[key] = dataUrl;
+    previewRequests.delete(key);
+    request.listeners.forEach((listener) => listener(dataUrl));
+  }, priority);
+  return () => {
+    request.listeners.delete(complete);
+  };
 }
 
 const tileHandlers: Map<any, () => void> = new Map();
@@ -101,69 +161,63 @@ export function useStickerPreview(
   const [loading, setLoading] = useState<boolean>(
     previewCache[key] === undefined,
   );
+  const [attempt, setAttempt] = useState(0);
   const boxRef = useRef<any>(null);
+  const pendingRef = useRef({ key, pending: false });
+  const retryKeyRef = useRef("");
 
   useEffect(() => {
     let alive = true;
+    let releaseRequest = () => {};
+    const manual = retryKeyRef.current === key;
+    retryKeyRef.current = "";
+    pendingRef.current = { key, pending: previewCache[key] === undefined };
     setPreview(previewCache[key] || "");
     setLoading(previewCache[key] === undefined);
     if (previewCache[key] !== undefined) {
       return undefined;
     }
-    const load = async (): Promise<void> => {
-      let dataUrl = "";
-      try {
-        let offset = 0;
-        let mime = "";
-        const parts: string[] = [];
-        for (let guard = 0; guard < 16; guard += 1) {
-          const args: Record<string, any> = { id: id, offset: offset };
-          // 只有要缩略图时才带 kind：留空=原图，老形状一字不变（服务端 kind 缺省即走原路）。
-          if (kind === "thumb") {
-            args.kind = "thumb";
-          }
-          const result = await callAction(surface, "preview", args);
-          if (!result) {
-            break;
-          }
-          mime = String(result.mime || mime);
-          parts.push(String(result.chunk_base64 || ""));
-          if (result.done) {
-            dataUrl = `data:${mime};base64,${parts.join("")}`;
-            break;
-          }
-          const next = Number(result.next_offset || 0);
-          if (next <= offset) {
-            break; // 协议不推进：当作坏图，不原地踏步
-          }
-          offset = next;
-        }
-      } catch {
-        dataUrl = "";
-      }
-      previewCache[key] = dataUrl;
-      if (alive) {
+    const load = () => {
+      if (!alive) return;
+      releaseRequest = requestPreview(surface, id, kind, auto, (dataUrl) => {
+        if (!alive) return;
+        pendingRef.current.pending = false;
         setPreview(dataUrl);
         setLoading(false);
-      }
+      });
     };
-    if (auto) {
-      // 聚焦卡开在眼前：直接排队拉，不必等视口观察。
-      queuePreview(load);
+    if (auto || manual) {
+      // 用户点开的原图先于未开始的缩略图；并发与分段协议不变。
+      load();
       return () => {
         alive = false;
+        releaseRequest();
       };
     }
-    // 墙上的格子：滚进视口（提前 240px）才排队；排队期间被卸载也无碍——load 幂等。
-    const stop = observePreview(boxRef.current, () => {
-      queuePreview(load);
-    });
+    // 墙上的格子：滚进视口（提前 240px）才排队；卸载后未开始的任务跳过。
+    const stop = observePreview(boxRef.current, load);
     return () => {
       alive = false;
       stop();
+      releaseRequest();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [id, kind]);
+  }, [id, kind, attempt]);
 
-  return { preview, loading, boxRef };
+  const retry = () => {
+    if (pendingRef.current.key !== key || pendingRef.current.pending || preview) return;
+    pendingRef.current.pending = true;
+    retryKeyRef.current = key;
+    delete previewCache[key];
+    setLoading(true);
+    setAttempt((current) => current + 1);
+  };
+  const onError = () => {
+    if (pendingRef.current.key !== key || pendingRef.current.pending || !preview) return;
+    if (previewCache[key] === preview) previewCache[key] = "";
+    setPreview("");
+    setLoading(false);
+  };
+
+  return { preview, loading, boxRef, retry, onError };
 }

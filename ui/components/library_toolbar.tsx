@@ -14,6 +14,8 @@ export function LibraryToolbar(props: {
   creating: boolean;
   uploading: boolean;
   collectBusy: boolean;
+  disabled?: boolean;
+  searchDisabled?: boolean;
   newName: string;
   setNewName: (next: string) => void;
   newDesc: string;
@@ -32,17 +34,24 @@ export function LibraryToolbar(props: {
   const t = props.surface.t;
   return (
     <Stack gap={10}>
-      <Inline gap={8} align="center" wrap>
-        <Input
-          value={props.query}
-          onChange={props.setQuery}
-          placeholder={t("panel.search", {
-            defaultValue: "按描述 / 标签 / id 过滤",
-          })}
-        />
+      <div className="sticker-search">
+        <label style={{ minWidth: 0 }}>
+          <span className="sticker-sr-only">
+            {t("panel.library.search", { defaultValue: "搜索表情包" })}
+          </span>
+          <Input
+            type="search"
+            value={props.query}
+            disabled={props.searchDisabled}
+            onChange={props.setQuery}
+            placeholder={t("panel.search", { defaultValue: "按描述 / 标签 / id 过滤" })}
+          />
+        </label>
         {/* 轮 I：分类是第一等对象——先建分类，后面的区块头才有地方收图。 */}
         <Button
+          className="sticker-new-category"
           tone="primary"
+          disabled={props.disabled}
           onClick={() => {
             props.onToggleCreating();
           }}
@@ -50,8 +59,9 @@ export function LibraryToolbar(props: {
           {t("panel.group.new_button", { defaultValue: "新建分类" })}
         </Button>
         <Button
+          className="sticker-import"
           tone="primary"
-          disabled={props.uploading}
+          disabled={props.disabled || props.uploading}
           onClick={() => {
             props.onPickZip();
           }}
@@ -64,6 +74,7 @@ export function LibraryToolbar(props: {
           ref={props.zipInputRef}
           type="file"
           accept=".zip,application/zip"
+          disabled={props.disabled}
           style={{ display: "none" }}
           onChange={(event: any) => {
             const file =
@@ -74,23 +85,25 @@ export function LibraryToolbar(props: {
             event.target.value = "";
           }}
         />
-        <Button
-          tone="info"
-          onClick={() => {
-            props.onExport();
+      </div>
+      <details className="sticker-menu">
+        <summary
+          aria-disabled={!!props.disabled}
+          onClick={(event: any) => {
+            if (props.disabled) event.preventDefault();
           }}
         >
-          {t("panel.export.button", { defaultValue: "导出套图包" })}
-        </Button>
-        <Button
-          tone="warning"
-          onClick={() => {
-            props.onRepair();
-          }}
-        >
-          {t("panel.repair.button", { defaultValue: "体检与修复" })}
-        </Button>
-      </Inline>
+          {t("panel.library.manage", { defaultValue: "图库管理" })}
+        </summary>
+        <div className="sticker-menu-actions">
+          <Button disabled={props.disabled} onClick={props.onExport}>
+            {t("panel.export.button", { defaultValue: "导出套图包" })}
+          </Button>
+          <Button disabled={props.disabled} onClick={props.onRepair}>
+            {t("panel.repair.button", { defaultValue: "体检与修复" })}
+          </Button>
+        </div>
+      </details>
       {props.creating ? (
         <Stack gap={6}>
           <Field
@@ -101,6 +114,7 @@ export function LibraryToolbar(props: {
           >
             <Input
               value={props.newName}
+              disabled={props.disabled}
               onChange={props.setNewName}
               placeholder={t("panel.group.new_name_ph", {
                 defaultValue: "例如：晚安与早安",
@@ -108,13 +122,13 @@ export function LibraryToolbar(props: {
             />
           </Field>
           <Field
-            label={t("panel.group.new_desc", {
-              defaultValue:
-                "什么时候用这一组（可留空，之后在块头「编辑说明」补）",
+            label={t("panel.group.description", {
+              defaultValue: "分类说明",
             })}
           >
             <Input
               value={props.newDesc}
+              disabled={props.disabled}
               onChange={props.setNewDesc}
               placeholder={t("panel.group.new_desc_ph", {
                 defaultValue: "例如：她困了、要睡了、或在装睡",
@@ -124,6 +138,7 @@ export function LibraryToolbar(props: {
           <Inline gap={6}>
             <Button
               tone="primary"
+              disabled={props.disabled}
               onClick={() => {
                 props.onCreate();
               }}
@@ -132,6 +147,7 @@ export function LibraryToolbar(props: {
             </Button>
             <Button
               tone="default"
+              disabled={props.disabled}
               onClick={() => {
                 props.onCancelCreate();
               }}
@@ -147,7 +163,7 @@ export function LibraryToolbar(props: {
         type="file"
         accept="image/png,image/jpeg,image/gif,image/webp"
         multiple
-        disabled={props.collectBusy}
+        disabled={props.disabled || props.collectBusy}
         style={{ display: "none" }}
         onChange={(event: any) => {
           props.onImageFiles(event.target && event.target.files);

@@ -1,304 +1,222 @@
-// 存在感注入卡（v0.10.1 拆分自 panel.tsx）：读 context 的 awareness 读数 +
-// 调试入口 `awareness_now`（绕节奏不绕开关）。ping 的反馈文案是本地状态，
-// 整块自治，不进库卡模型——两件事没有对偶，别硬并。
-//
-// 联动纪律（陷阱 16）：注入必须随总开关冻结；心跳相反不冻结。这里只是读数与按钮，
-// 尺在 Python 侧（services/awareness.py）。
-
+// Sending preferences and diagnostics share actions, not a wall of explanatory text.
 import {
+  Alert,
   Button,
-  Card,
   Field,
   Inline,
-  KeyValue,
   Select,
   Slider,
   Stack,
   Text,
-  useState,
   useEffect,
+  useRef,
+  useState,
 } from "@neko/plugin-ui";
 import { callAction, extractCode } from "../shared";
 import type { Surface } from "../shared";
 
-export function AwarenessCard(props: { surface: Surface }) {
+export function AwarenessCard(props: {
+  surface: Surface;
+  mode: "settings" | "status";
+  disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
+  onRefreshFailed?: () => void;
+  onRefreshRecovered?: () => void;
+}) {
   const surface = props.surface;
   const t = surface.t;
   const state = surface.state || {};
-  const [awarenessNote, setAwarenessNote] = useState("");
-  const configuredInterval = state.awareness?.min_interval_sec ?? 60;
+  const awareness = state.awareness || {};
+  const runState = state.run || {};
+  const configuredInterval = awareness.min_interval_sec ?? 60;
   const [intervalDraft, setIntervalDraft] = useState(configuredInterval);
-  const [intervalSaving, setIntervalSaving] = useState(false);
+  const [note, setNote] = useState("");
+  const [failed, setFailed] = useState(false);
+  const [pending, setPending] = useState("");
+  const busyRef = useRef(false);
+  const disabled = !!props.disabled || !!pending;
   useEffect(() => {
     setIntervalDraft(configuredInterval);
   }, [configuredInterval]);
 
-  const saveInterval = async () => {
-    if (intervalSaving || intervalDraft === configuredInterval) return;
-    setIntervalSaving(true);
-    setAwarenessNote("");
+  const run = async (action: string, args: Record<string, unknown>) => {
+    if (busyRef.current || props.disabled) return;
+    busyRef.current = true;
+    setPending(action);
+    props.onBusyChange?.(true);
+    setNote("");
+    setFailed(false);
     try {
-      const result = await callAction(surface, "set_reminder_interval", {
-        min_interval_sec: intervalDraft,
-      });
-      if (result) {
-        setIntervalDraft(result.min_interval_sec);
-        setAwarenessNote(t("panel.awareness.interval.saved", {
-          defaultValue: "提醒间隔已保存",
-        }));
+      const result = await callAction(surface, action, args);
+      if (action === "set_reminder_interval") {
+        if (result?.min_interval_sec !== undefined) setIntervalDraft(result.min_interval_sec);
+        setNote(t("panel.awareness.interval.saved", { defaultValue: "提醒间隔已保存" }));
+      } else if (action === "awareness_now" && result) {
+        const status = String(result.status || "");
+        setNote(t(`panel.awareness.status.${status}`, { defaultValue: status }));
       }
-      await surface.api.refresh();
+      try {
+        await surface.api.refresh();
+        props.onRefreshRecovered?.();
+      } catch {
+        props.onRefreshFailed?.();
+      }
     } catch (error) {
       const raw = error instanceof Error ? error.message : String(error ?? "failed");
       const code = extractCode(raw);
-      setAwarenessNote(t(`panel.error.${code}`, { defaultValue: code }));
+      setFailed(true);
+      setNote(t(`panel.error.${code}`, { defaultValue: code }));
     } finally {
-      setIntervalSaving(false);
+      busyRef.current = false;
+      setPending("");
+      props.onBusyChange?.(false);
     }
   };
-
-  const ping = async () => {
-    setAwarenessNote("");
-    try {
-      const result = await callAction(surface, "awareness_now", {});
-      if (result) {
-        setAwarenessNote(
-          t(`panel.awareness.status.${String(result.status || "")}`, {
-            defaultValue: String(result.status || ""),
-          }),
-        );
-      }
-      await surface.api.refresh();
-    } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      const code = extractCode(raw);
-      setAwarenessNote(t(`panel.error.${code}`, { defaultValue: code }));
-    }
-  };
-
-  const setEagerness = async (next: string) => {
-    setAwarenessNote("");
-    try {
-      await callAction(surface, "set_eagerness", { eagerness: next });
-      // 档位是配置：写成功后 refresh 让 Select 回填服务端真值（不拿本地乐观值）。
-      await surface.api.refresh();
-    } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      const code = extractCode(raw);
-      setAwarenessNote(t(`panel.error.${code}`, { defaultValue: code }));
-    }
-  };
-
-  const awareness = state.awareness || {};
-  // 轮数门槛仍随档位/配置，时间限制可独立调整。
-  const cadenceKey = `panel.awareness.cadence.${String(awareness.inject_mode || "interval_n")}`;
-  const cadence = t(cadenceKey, {
+  const cadence = t(`panel.awareness.cadence.${String(awareness.inject_mode || "interval_n")}`, {
     defaultValue: "提醒门槛 {n} 轮 · 距上次提醒 {since} 轮",
   })
     .replace("{n}", String(awareness.inject_interval_n || 1))
     .replace("{since}", String(awareness.turns_since ?? 0));
-  const driverKey = `panel.awareness.driver.${String(awareness.driver || "")}`;
+  const statusItems = [
+    {
+      key: "status",
+      label: t("panel.awareness.status", { defaultValue: "最近一次" }),
+      value: t(`panel.awareness.status.${String(awareness.status || "")}`, {
+        defaultValue: awareness.status || "—",
+      }),
+    },
+    {
+      key: "target",
+      label: t("panel.awareness.target", { defaultValue: "注给" }),
+      value: awareness.target || "—",
+    },
+    {
+      key: "next",
+      label: t("panel.awareness.next", { defaultValue: "下次最快" }),
+      value: `${Math.ceil(awareness.min_next_wait_sec || 0)}s`,
+    },
+    {
+      key: "cadence",
+      label: t("panel.awareness.cadenceLabel", { defaultValue: "节奏" }),
+      value: cadence,
+    },
+    {
+      key: "driver",
+      label: t("panel.awareness.driverLabel", { defaultValue: "驱动" }),
+      value: t(`panel.awareness.driver.${String(awareness.driver || "")}`, {
+        defaultValue: awareness.driver || "—",
+      }),
+    },
+  ];
+  const runItems = [
+    { key: "turns", label: t("panel.run.turns", { defaultValue: "她的话轮" }), value: String(runState.turns || 0) },
+    { key: "calls", label: t("panel.run.calls", { defaultValue: "她调用工具" }), value: String(runState.tool_calls || 0) },
+    { key: "sent", label: t("panel.run.sent", { defaultValue: "发出成功" }), value: String(runState.sent || 0) },
+    { key: "refused", label: t("panel.run.refused", { defaultValue: "被拦下" }), value: String(runState.refused || 0) },
+    {
+      key: "surface",
+      label: t("panel.run.surface", { defaultValue: "常驻目录" }),
+      value: String(runState.surface_categories || 0) + t("panel.run.surface.unit", { defaultValue: " 类" }),
+    },
+  ];
+  const libraryItems = [
+    { key: "total", label: t("panel.stat.total", { defaultValue: "收藏" }), value: String(state.counts?.total || 0) },
+    { key: "available", label: t("panel.stat.available", { defaultValue: "可用" }), value: String(state.counts?.enabled || 0) },
+    { key: "sent", label: t("panel.stat.sent", { defaultValue: "累计发出" }), value: String(state.counts?.sent_total || 0) },
+    { key: "groups", label: t("panel.category.filter", { defaultValue: "分类" }), value: String(state.counts?.groups || 0) },
+  ];
+  const readouts = (items: Array<{ key: string; label: string; value: string }>) => (
+    <dl className="sticker-readouts">
+      {items.map((item) => (
+        <div key={item.key}>
+          <dt>{item.label}</dt>
+          <dd>{item.value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
 
   return (
-    <Card title={t("panel.awareness.title", { defaultValue: "存在感注入" })}>
-      <Stack gap={8}>
-        <Text>
-          {t("panel.awareness.note", {
-            defaultValue:
-              "在她每开新一轮时静默递一句『你有一间表情收藏间，想配就发一张』：你看不到、她不会因此开口。分类目录在 sticker_send 的说明里，每轮都在场。",
-          })}
-        </Text>
-        <Field
-          label={t("panel.awareness.eagerness", {
-            defaultValue: "配表情积极度",
-          })}
-          help={t("panel.awareness.eagerness.help", {
-            defaultValue:
-              "她有多主动配图。这一档同时管三件事：每几轮点名提醒一次（矜持 12 / 自然 6 / 爱发 3）、工具描述里判据的强弱、以及提醒的措辞。冷却、最近不重复、概率闸一口都不吃这一档。想自己定节奏就在配置里把 inject_interval_n 写成具体数字（0 = 跟随档位）。",
-          })}
-        >
-          <Select
-            value={String(state.eagerness || "natural")}
-            options={[
-              {
-                value: "reserved",
-                label: t("panel.eagerness.reserved", {
-                  defaultValue: "矜持：没有正合适的就不发",
-                }),
-              },
-              {
-                value: "natural",
-                label: t("panel.eagerness.natural", {
-                  defaultValue: "自然：贴切就发（默认）",
-                }),
-              },
-              {
-                value: "eager",
-                label: t("panel.eagerness.eager", {
-                  defaultValue: "爱发：情绪对得上就配一张",
-                }),
-              },
-            ]}
-            onChange={(next: any) => {
-              setEagerness(String(next || "natural"));
-            }}
-          />
-        </Field>
-        <Field
-          label={t("panel.awareness.min_interval_sec", {
-            defaultValue: "提醒最小间隔（秒）",
-          })}
-        >
-          <Stack gap={8}>
-            <Slider
-              value={intervalDraft}
-              min={0}
-              max={60}
-              step={1}
-              showValue={true}
-              disabled={intervalSaving}
-              onChange={setIntervalDraft}
+    <div className="sticker-settings">
+      {note ? <Alert tone={failed ? "danger" : "info"} message={note} /> : null}
+      {props.mode === "settings" ? (
+        <Stack gap={16}>
+          <Field label={t("panel.awareness.eagerness", { defaultValue: "配表情积极度" })}>
+            <Select
+              disabled={disabled}
+              value={String(state.eagerness || "natural")}
+              options={[
+                { value: "reserved", label: t("panel.eagerness.reserved", { defaultValue: "矜持：没有正合适的就不发" }) },
+                { value: "natural", label: t("panel.eagerness.natural", { defaultValue: "自然：贴切就发（默认）" }) },
+                { value: "eager", label: t("panel.eagerness.eager", { defaultValue: "爱发：情绪对得上就配一张" }) },
+              ]}
+              onChange={(next: any) => {
+                run("set_eagerness", { eagerness: String(next || "natural") });
+              }}
             />
-            <Inline gap={16} align="center" wrap>
-              <Text>
-                {intervalDraft === 0
-                  ? t("panel.awareness.interval.off", {
-                      defaultValue: "无时间限制",
-                    })
-                  : t("panel.awareness.interval.seconds", {
+          </Field>
+          <Field label={t("panel.awareness.min_interval_sec", { defaultValue: "提醒最小间隔（秒）" })}>
+            <Stack gap={8}>
+              <Slider
+                value={intervalDraft}
+                min={0}
+                max={60}
+                step={1}
+                showValue
+                disabled={disabled}
+                onChange={setIntervalDraft}
+              />
+              <Inline gap={12} wrap>
+                <Text>
+                  {intervalDraft === 0
+                    ? t("panel.awareness.interval.off", { defaultValue: "无时间限制" })
+                    : t("panel.awareness.interval.seconds", {
                       defaultValue: "最少间隔 {seconds} 秒",
                     }).replace("{seconds}", String(intervalDraft))}
-              </Text>
-              <Button
-                tone="default"
-                disabled={intervalSaving || intervalDraft === configuredInterval}
-                onClick={saveInterval}
-              >
-                {intervalSaving
-                  ? t("panel.awareness.interval.saving", { defaultValue: "保存中" })
-                  : t("panel.awareness.interval.save", { defaultValue: "保存" })}
-              </Button>
-            </Inline>
-          </Stack>
-        </Field>
-        <Inline gap={16} align="center" wrap>
-          <KeyValue
-            items={[
-              {
-                key: "status",
-                label: t("panel.awareness.status", {
-                  defaultValue: "最近一次",
-                }),
-                value: t(
-                  `panel.awareness.status.${String((state.awareness && state.awareness.status) || "")}`,
-                  {
-                    defaultValue:
-                      (state.awareness && state.awareness.status) || "—",
-                  },
-                ),
-              },
-              {
-                key: "target",
-                label: t("panel.awareness.target", {
-                  defaultValue: "注给",
-                }),
-                value: (state.awareness && state.awareness.target) || "—",
-              },
-              {
-                key: "next",
-                label: t("panel.awareness.next", {
-                  defaultValue: "下次最快",
-                }),
-                value:
-                  String(
-                    Math.ceil(
-                      (state.awareness &&
-                        state.awareness.min_next_wait_sec) ||
-                        0,
-                    ),
-                  ) + "s",
-              },
-              {
-                key: "cadence",
-                label: t("panel.awareness.cadenceLabel", {
-                  defaultValue: "节奏",
-                }),
-                value: cadence,
-              },
-              {
-                key: "driver",
-                label: t("panel.awareness.driverLabel", {
-                  defaultValue: "驱动",
-                }),
-                value: t(driverKey, { defaultValue: awareness.driver || "—" }),
-              },
-            ]}
-          />
-          <Button
-            tone="default"
-            onClick={() => {
-              ping();
-            }}
-          >
-            {t("panel.awareness.button", {
-              defaultValue: "现在注一条（调试）",
-            })}
-          </Button>
-        </Inline>
-        {awarenessNote ? <Text>{awarenessNote}</Text> : null}
-        {/* v0.17.1 观测轮：本次运行的四把读数。只读，不放任何旋钮。
-            分母是"开机到现在"，所以标题必须写"本次运行"——写成"今日"就是假账。 */}
-        <Text>
-          {t("panel.run.title", {
-            defaultValue: "本次运行（重启插件归零）",
-          })}
-        </Text>
-        <Inline gap={16} align="center" wrap>
-          <KeyValue
-            items={[
-              {
-                key: "turns",
-                label: t("panel.run.turns", { defaultValue: "她的话轮" }),
-                value: String((state.run && state.run.turns) || 0),
-              },
-              {
-                key: "calls",
-                label: t("panel.run.calls", { defaultValue: "她调用工具" }),
-                value: String((state.run && state.run.tool_calls) || 0),
-              },
-              {
-                key: "sent",
-                label: t("panel.run.sent", { defaultValue: "发出成功" }),
-                value: String((state.run && state.run.sent) || 0),
-              },
-              {
-                key: "refused",
-                label: t("panel.run.refused", { defaultValue: "被拦下" }),
-                value: String((state.run && state.run.refused) || 0),
-              },
-              {
-                key: "surface",
-                label: t("panel.run.surface", { defaultValue: "常驻目录" }),
-                value:
-                  String((state.run && state.run.surface_categories) || 0) +
-                  t("panel.run.surface.unit", { defaultValue: " 类" }),
-              },
-            ]}
-          />
-        </Inline>
-        {state.run && state.run.last_call ? (
-          <Text>
-            {t("panel.run.last", { defaultValue: "最近一次" }) +
-              "：" +
-              String(state.run.last_call) +
-              (state.run.last_reason
-                ? " → " + String(state.run.last_reason)
-                : "")}
-          </Text>
-        ) : null}
-      </Stack>
-    </Card>
+                </Text>
+                <Button
+                  disabled={disabled || intervalDraft === configuredInterval}
+                  onClick={() => {
+                    run("set_reminder_interval", { min_interval_sec: intervalDraft });
+                  }}
+                >
+                  {pending === "set_reminder_interval"
+                    ? t("panel.awareness.interval.saving", { defaultValue: "保存中" })
+                    : t("panel.awareness.interval.save", { defaultValue: "保存" })}
+                </Button>
+              </Inline>
+            </Stack>
+          </Field>
+        </Stack>
+      ) : (
+        <Stack gap={16}>
+          <h2 className="sticker-section-title">
+            {t("panel.library.overview", { defaultValue: "图库概况" })}
+          </h2>
+          {readouts(libraryItems)}
+          <h2 className="sticker-section-title">
+            {t("panel.awareness.title", { defaultValue: "存在感注入" })}
+          </h2>
+          {readouts(statusItems)}
+          <Inline gap={8}>
+            <Button disabled={disabled} onClick={() => { run("awareness_now", {}); }}>
+              {pending === "awareness_now"
+                ? t("panel.awareness.checking", { defaultValue: "检查中…" })
+                : t("panel.awareness.button", { defaultValue: "现在注一条（调试）" })}
+            </Button>
+          </Inline>
+          <h2 className="sticker-section-title">
+            {t("panel.run.title", { defaultValue: "本次运行（重启插件归零）" })}
+          </h2>
+          {readouts(runItems)}
+          {runState.last_call ? (
+            <Text>
+              {t("panel.run.last", { defaultValue: "最近一次" }) + "：" + runState.last_call +
+                (runState.last_reason ? " · " + runState.last_reason : "")}
+            </Text>
+          ) : null}
+        </Stack>
+      )}
+    </div>
   );
 }

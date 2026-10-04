@@ -1,5 +1,33 @@
 # Changelog
 
+## 0.20.17
+
+- Make the library the default workspace, with separate sending settings and
+  runtime status views, category navigation and compact management controls.
+- Expand zone management and category descriptions on demand to keep the
+  narrow-screen workspace focused on images.
+- Keep batch actions and feedback available while browsing; distinguish hidden
+  selections and process large selections in batches of at most 200 IDs.
+- Freeze the target zone for category creation and imports, preserve failed
+  drafts, prevent duplicate management requests and distinguish refresh errors
+  from successful writes.
+- Add explicit image retry and decode-error handling, keyboard-accessible image
+  buttons and named selection controls, with focus restored on detail return.
+- Preserve the v0.20.16 detail workflow, existing host protocol, sending rules,
+  configuration defaults and stored library. No Steam import is performed.
+
+## 0.20.16
+
+- Open a clicked sticker in a dedicated detail workspace instead of inserting
+  its details above the entire library. Keep the library view state and restore
+  the browsing position when returning.
+- Bound full-size previews to the available panel width, use explicit CSS
+  length units in raw DOM styles, and keep the original GIF animation in details.
+- Keep failed edits and deletes in their current workspace, reset cancelled
+  drafts, and prevent duplicate submissions while an action is pending.
+- Preserve the existing library, user configuration, main-chat tools, sending
+  behavior, reminder settings and host boundaries. No Steam import is performed.
+
 ## 0.20.15
 
 - Refine only the eager tier's main-chat decision, trigger and reminder wording.
