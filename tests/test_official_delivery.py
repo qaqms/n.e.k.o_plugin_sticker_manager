@@ -9,7 +9,7 @@ from sticker_manager.core.catalog import content_sha256
 from sticker_manager.core.configuration import StickerManagerSettings
 from sticker_manager.services.official_delivery import OfficialDelivery
 
-from tests.test_media import animated_webp
+from .test_media import animated_webp
 
 
 def make_pack(path, original, variant, *, corrupt=False):
