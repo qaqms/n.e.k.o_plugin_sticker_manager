@@ -18,6 +18,7 @@ SOURCE_SUFFIXES = {".py", ".json", ".toml", ".ts", ".tsx", ".mjs"}
 EXCLUDED_DIRS = {
     ".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache",
     ".ruff_cache", ".tmpgate", "tests", "vendor", "target", "logs",
+    ".benchmarks", ".mypy_cache",
 }
 FRONTEND_FILES = (
     "frontend/plugin-manager/scripts/check-hosted-tsx.mjs",
@@ -168,6 +169,8 @@ def _run(command: list[str], *, cwd: Path, env: dict[str, str]) -> None:
 
 
 def run_checks(host_root: Path, *, node_modules: Path, gates: list[str]) -> None:
+    if not (node_modules / "typescript").is_dir():
+        node_modules = host_root / "frontend" / "plugin-manager" / "node_modules"
     with isolated_host(host_root) as sandbox:
         mounted = sandbox.snapshot / "plugin" / "plugins" / "sticker_manager"
         shutil.copytree(
@@ -200,6 +203,7 @@ def run_checks(host_root: Path, *, node_modules: Path, gates: list[str]) -> None
                     cwd=sandbox.snapshot, env=sandbox.env,
                 )
             elif gate == "hosted-tsx":
+                # The primary test gate already ran with the plugin's dev Python.
                 typescript = node_modules / "typescript"
                 if not typescript.is_dir():
                     raise SystemExit(f"[FAIL] TypeScript dependency not found: {typescript}")
@@ -216,7 +220,13 @@ def run_checks(host_root: Path, *, node_modules: Path, gates: list[str]) -> None
                     cwd=sandbox.snapshot, env=sandbox.env,
                 )
             else:
-                raise ValueError(f"unknown gate: {gate}")
+                if gate != "release":
+                    raise ValueError(f"unknown gate: {gate}")
+                _run(
+                    [str(sandbox.python), "-m", "plugin.neko_plugin_cli", "check", "-r",
+                     "sticker_manager", "--skip-tests", "--target-dir", str(sandbox.root / "packages")],
+                    cwd=sandbox.snapshot, env=sandbox.env,
+                )
 
 
 def main() -> int:

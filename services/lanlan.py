@@ -20,14 +20,14 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import math
 import time
-import urllib.request
 from collections.abc import Iterable, Mapping
 from functools import partial
 from typing import Any
+
+from .local_http import read_local_json
 
 logger = logging.getLogger("sticker_manager.lanlan")
 
@@ -180,9 +180,7 @@ class LanlanResolver:
         return f"http://127.0.0.1:{port}"
 
     def _fetch_blocking(self) -> str:
-        req = urllib.request.Request(self._api_base() + _CURRENT_ENDPOINT, method="GET")
-        with urllib.request.urlopen(req, timeout=_HTTP_TIMEOUT_SEC) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
+        payload = read_local_json(self._api_base() + _CURRENT_ENDPOINT, timeout=_HTTP_TIMEOUT_SEC)
         if not isinstance(payload, Mapping):
             return ""
         return str(payload.get("current_catgirl") or "").strip()

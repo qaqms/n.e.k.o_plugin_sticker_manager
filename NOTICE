@@ -1,0 +1,14 @@
+N.E.K.O Sticker Manager (sticker_manager)
+Copyright 2026 qaqms
+
+The plugin's original source code, documentation and configuration are
+licensed under the Apache License, Version 2.0. See LICENSE.
+
+Bundled images and their derivatives in the logical official/official_pack.zip
+archive (shipped as .partNNN files and a .parts.json manifest) are
+not licensed by this source-code license. See MEDIA_NOTICE.md for scope.
+
+This plugin uses the public SDK interfaces of Project N.E.K.O.
+The host and its SDK are separate projects with their own licenses.
+The name "official" used for a built-in collection is a plugin UI label;
+it does not imply endorsement or media licensing by Project N.E.K.O.

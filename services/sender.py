@@ -2,7 +2,7 @@
 
 两条投递通道（由 `SendSettings` 决定走哪条）：
 1. **内联**（默认，≤ `inline_max_bytes`）：`parts=[{"type":"image","data":bytes,"mime":...}]`。
-   gif 一定走这条——宿主对输入图会归一成 JPEG，压平动画；内联保留原字节。
+   GIF/动画 WebP 默认走这条——上传会归一成 JPEG，压平动画；内联保留原字节。
 2. **上传换 URL**（大图 / 显式配置）：`await ctx.images.upload(data)` 拿回
    `{"type":"image","url":...,"mime":"image/jpeg"}` 的 part 再投递。
 
@@ -33,7 +33,9 @@ from typing import Any
 
 from ..core.catalog import Sticker, detect_image_format
 from ..core.configuration import StickerManagerSettings
+from ..core.media import preserves_animation
 from .library import Library
+from .official_delivery import OfficialDelivery
 from .turn_end import EndTicket, TurnEndLogs
 
 # 稳定错误码（模型/面板各自的文案层翻译它们）
@@ -109,6 +111,7 @@ class Sender:
         self._drain_lock = threading.Lock()
         self._closed = False
         self._epoch = 0
+        self._official_delivery: OfficialDelivery | None = None
 
     def _log(self, message: str, *, exc: bool = False) -> None:
         if self._logger is None:
@@ -261,6 +264,20 @@ class Sender:
         if detected is None:
             return SendResult.failure(ERR_BAD_IMAGE, sticker_id=sticker.id)
         _ext, mime = detected
+        if len(data) > settings.send.inline_max_bytes:
+            pack_path = getattr(self._plugin, "_official_pack_path", None)
+            if callable(pack_path):
+                try:
+                    if self._official_delivery is None:
+                        self._official_delivery = OfficialDelivery(pack_path())
+                    variant = self._official_delivery.resolve(data)
+                except Exception:
+                    self._log("official delivery asset unavailable", exc=True)
+                    return SendResult.failure(ERR_BAD_IMAGE, sticker_id=sticker.id)
+                if variant is not None:
+                    data = variant
+                    mime = "image/webp"
+                    self._log(f"official delivery variant: id={sticker.id} bytes={len(data)}")
 
         ticket = None
         if self._turn_end is not None and (
@@ -472,8 +489,8 @@ class Sender:
         配文是独立消息，不占用图片的内联预算。
         """
         inline_budget = settings.send.inline_max_bytes
-        if mime == "image/gif" and not settings.send.animated_via_upload:
-            # gif 只能内联；内联不下就是真放不下（上传会毁掉动画，宁可拒绝）。
+        if preserves_animation(data, mime) and not settings.send.animated_via_upload:
+            # GIF and animated WebP must keep their original bytes.
             if len(data) > inline_budget:
                 return None
             return {"type": "image", "data": data, "mime": mime}

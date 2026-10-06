@@ -59,6 +59,7 @@ class PackEntry:
     sha256: str = ""
     caption: str = ""
     visible_text: str = ""
+    legacy_sha256: list[str] = field(default_factory=list)
 
 
 def safe_member_name(name: Any) -> str:
@@ -106,8 +107,23 @@ def pack_entry_from_raw(raw: Any) -> PackEntry | None:
         sha256=digest if isinstance(digest, str) else "",
         caption=normalize_optional_text(raw.get("caption"), limit=CAPTION_MAX_CHARS),
         visible_text=normalize_optional_text(raw.get("visible_text"), limit=VISIBLE_TEXT_MAX_CHARS),
+        legacy_sha256=parse_legacy_digests(raw.get("legacy_sha256")),
     )
 
+
+
+def parse_legacy_digests(raw: Any) -> list[str]:
+    """Read explicit previous image fingerprints for official asset upgrades."""
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    for value in raw:
+        if not isinstance(value, str):
+            continue
+        digest = value.lower()
+        if len(digest) == 64 and all(char in "0123456789abcdef" for char in digest) and digest not in out:
+            out.append(digest)
+    return out
 
 def parse_manifest(raw: Any) -> list[PackEntry]:
     """manifest.json 的顶层解析：认不出形状给空列表，能救的按原顺序救。"""

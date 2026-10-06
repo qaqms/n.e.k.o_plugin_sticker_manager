@@ -2,7 +2,9 @@ import importlib.util
 import json
 import subprocess
 import sys
+from fnmatch import fnmatchcase
 from pathlib import Path
+from tomllib import loads as toml_loads
 from types import SimpleNamespace
 
 import pytest
@@ -142,6 +144,60 @@ def test_write_guard_is_inherited_by_python_descendants(tmp_path):
     assert result.returncode == 0, result.stderr
     assert inside.read_text() == "allowed"
     assert not outside.exists()
+
+
+def test_runtime_files_match_market_allowlist():
+    rules = toml_loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["tool"]["neko"]["build"]
+    selected = {path.relative_to(ROOT).as_posix() for path in builder.collect_plugin_files()}
+    market = {
+        path.relative_to(ROOT).as_posix()
+        for path in ROOT.rglob("*")
+        if path.is_file()
+        and not set(path.relative_to(ROOT).parts) & set(rules["exclude_dirs"])
+        and path.name not in rules["exclude_files"]
+        and any(fnmatchcase(path.relative_to(ROOT).as_posix(), pattern) for pattern in rules["include"])
+    }
+    assert selected == market
+    assert "plugin.meta.json" not in selected
+    assert "official/official_pack.zip.parts.json" in selected
+    assert "official/official_pack.zip.part001" in selected
+    assert "official/official_pack.zip" not in selected
+
+
+def test_collector_leaves_development_and_private_files_out(tmp_path, monkeypatch):
+    for name in (
+        "__init__.py", "plugin.toml", "core/catalog.py", "services/library.py", "ui/panel.tsx",
+        "official/official_pack.zip", "core/__pycache__/leak.py", "data/catalog.json",
+        ".env", ".env.local", "private.json", "debug.log", "plugin.meta.json", "tests/test_private.py",
+        "core/private.json", "services/private.toml", "i18n/debug.py",
+    ):
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
+    monkeypatch.setattr(builder, "ROOT", tmp_path)
+    (tmp_path / "official/official_pack.zip.part001").write_bytes(b"fixture")
+    (tmp_path / "official/official_pack.zip.parts.json").write_text(json.dumps({
+        "parts": [{"name": "official_pack.zip.part001"}],
+    }), encoding="utf-8")
+    selected = {path.relative_to(tmp_path).as_posix() for path in builder.collect_plugin_files()}
+    assert selected == {
+        "__init__.py", "plugin.toml", "core/catalog.py", "services/library.py", "ui/panel.tsx",
+        "official/official_pack.zip.parts.json", "official/official_pack.zip.part001",
+    }
+
+
+def test_collector_rejects_linked_runtime_inputs(tmp_path, monkeypatch):
+    root = tmp_path / "source"
+    root.mkdir()
+    private = tmp_path / "private.py"
+    private.write_bytes(b"private fixture")
+    try:
+        (root / "__init__.py").symlink_to(private)
+    except OSError:
+        pytest.skip("symlink creation is not available")
+    monkeypatch.setattr(builder, "ROOT", root)
+    with pytest.raises(ValueError, match="linked build input"):
+        builder.collect_plugin_files()
 
 
 def test_guard_allows_asyncio_self_pipe_but_rejects_host_connections(tmp_path):

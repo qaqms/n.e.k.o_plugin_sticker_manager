@@ -34,7 +34,7 @@ from ..core.catalog import (
     normalize_group,
     normalize_zone_name,
 )
-from ..core.labeling import plan_label_refresh
+from ..core.labeling import index_by_digest, plan_label_refresh
 from ..core.pack import (
     PACK_DIR_PREFIX,
     PACK_MANIFEST_FILENAME,
@@ -46,6 +46,9 @@ from ..core.pack import (
     safe_member_name,
 )
 from ..core.thumbs import THUMB_CACHE_VERSION, build_thumb, thumb_filename
+from .bundled_pack import open_pack
+from .official_assets import validate_official_assets
+from .pack_io import ManifestLimitError, read_pack_manifest
 
 # v2（v0.11.0 J-1）：顶层新增 zones / active_zone / group_zone 三键（区→分类→图）。
 # 读侧宽松兼容 v1（无这三键 = 旧平铺库，load() 里一次性迁进默认区）；写侧永远按 v2 写。
@@ -543,6 +546,18 @@ class Library:
             return {"status": "io", "error": loaded.code or ERR_IO}
         if self._official_seeded and not force:
             return {"status": "already", "refresh": self.refresh_official_labels(pack_path)}
+        try:
+            validate_official_assets(pack_path)
+        except Exception:
+            return {"status": "invalid_assets", "error": "official_pack_validation"}
+        if force and self._official_pack_version:
+            try:
+                with open_pack(pack_path) as pack:
+                    version = parse_pack_version(json.loads(read_pack_manifest(pack)))
+            except Exception:
+                version = 0
+            if 0 < version < self._official_pack_version:
+                return {"status": "invalid_assets", "error": "official_pack_older"}
         zone_id = self.official_zone()
         created = False
         if zone_id:
@@ -557,6 +572,9 @@ class Library:
             self._zones[zone_id] = {**self._zones[zone_id], "builtin": True}
             self.save()
         fresh_library = self.count() == 0
+        upgraded = self.refresh_official_labels(pack_path) if force else None
+        if upgraded and upgraded["status"] in {"io", "invalid_assets"}:
+            return upgraded
         summary = self.import_pack(pack_path, zone=zone_id)
         if summary["rejected"] == 0 and summary["failed"] == 0:
             self._official_seeded = True
@@ -574,7 +592,7 @@ class Library:
             "status": status,
             "zone": zone_id,
             "created": created,
-            "refresh": self.refresh_official_labels(pack_path),
+            "refresh": upgraded if upgraded and upgraded["status"] == "refreshed" else self.refresh_official_labels(pack_path),
             **summary,
         }
 
@@ -589,18 +607,19 @@ class Library:
         又是一次性台账——所以重打的官方包带着新分类/新梗义进来时，老装机一张也不会变。
         判断全在 `core/labeling.py`（纯函数，逐条钉死），这里只管 IO。
 
-        四条不动主人的东西：只碰 builtin 位的条目（陷阱 24）、`owner_edited` 整条跳过、
-        分类说明只补缺、只写 catalog.json（图片文件/id/启停/使用台账一律不碰）。
+        只碰官方区现有条目，主人编辑过的字段让位、分类说明只补缺。包显式携带
+        legacy_sha256 时可替换旧版图片；保持 id/启停/使用台账，不补回主动删除的图。
+        图片先以新路径发布，catalog 原子保存成功后清旧图；失败回退内存与新文件。
         status：no_pack（没有官方区）/ unreadable（包读不出）/ no_version（包不带版本尺，
         主人自打的包与 export_pack 产物都算）/ current（不比库里新，什么都不做）/
         refreshed / io（写盘失败：版本不盖章，下次启动自然重试）。
         """
         zone_id = self.official_zone()
-        if not zone_id:
+        if not zone_id or not self._zones[zone_id].get("builtin"):
             return {"status": "no_pack"}
         try:
-            with zipfile.ZipFile(pack_path) as pack:
-                raw = json.loads(pack.read(PACK_MANIFEST_FILENAME).decode("utf-8"))
+            with open_pack(pack_path) as pack:
+                raw = json.loads(read_pack_manifest(pack).decode("utf-8"))
         except Exception:
             return {"status": "unreadable"}
         version = parse_pack_version(raw)
@@ -608,12 +627,61 @@ class Library:
             return {"status": "no_version"}
         if version <= self._official_pack_version:
             return {"status": "current", "version": version}
+        try:
+            validate_official_assets(pack_path)
+        except Exception:
+            return {"status": "invalid_assets", "error": "official_pack_validation"}
+        entries = parse_manifest(raw)
+        official = [s for s in self._stickers.values() if self.zone_of_sticker(s) == zone_id]
+        index = index_by_digest(entries)
+        images: dict[str, tuple[str, str, bytes]] = {}
+        try:
+            with open_pack(pack_path) as pack:
+                for sticker in official:
+                    entry = index.get(sticker.sha256)
+                    if entry is None or entry.sha256 == sticker.sha256:
+                        continue
+                    info = pack.getinfo(PACK_DIR_PREFIX + entry.file)
+                    if info.file_size <= 0 or info.file_size > MAX_STICKER_BYTES:
+                        return {"status": "invalid_assets", "error": "image_size"}
+                    data = pack.read(info)
+                    detected = detect_image_format(data)
+                    if detected is None or content_sha256(data) != entry.sha256:
+                        return {"status": "invalid_assets", "error": "image_digest_or_format"}
+                    filename = f"{sticker.id}-{entry.sha256}.{detected[0]}"
+                    if (self.stickers_dir / filename).resolve().parent != self.stickers_dir.resolve():
+                        return {"status": "invalid_assets", "error": "image_path"}
+                    images[sticker.id] = (filename, entry.sha256, data)
+        except Exception:
+            return {"status": "invalid_assets", "error": "image_unreadable"}
         plan = plan_label_refresh(
-            [s for s in self._stickers.values() if self.zone_of_sticker(s) == zone_id],
-            parse_manifest(raw),
+            official,
+            entries,
             self._groups,
             parse_manifest_groups(raw),
         )
+        old_stickers = dict(self._stickers)
+        old_groups = dict(self._groups)
+        old_group_zone = dict(self._group_zone)
+        created: list[Path] = []
+        # Publish different filenames first; the old catalog remains usable if interrupted.
+        try:
+            self.stickers_dir.mkdir(parents=True, exist_ok=True)
+            for sticker_id, (filename, digest, data) in images.items():
+                target = self.stickers_dir / filename
+                if not target.exists():
+                    created.append(target)
+                temporary = target.with_suffix(target.suffix + ".tmp")
+                try:
+                    temporary.write_bytes(data)
+                    temporary.replace(target)
+                finally:
+                    temporary.unlink(missing_ok=True)
+                self._stickers[sticker_id] = replace(self._stickers[sticker_id], file=filename, sha256=digest)
+        except Exception:
+            self._stickers = old_stickers
+            self._discard_upgrade_files(created)
+            return {"status": "io", "error": ERR_IO}
         for sticker_id, patch in plan.patches:
             self._stickers[sticker_id] = replace(self._stickers[sticker_id], **patch)
         for group_name in plan.new_groups:
@@ -625,18 +693,27 @@ class Library:
         saved = self.save()
         if not saved.ok:
             self._official_pack_version = previous
-            for group_name in plan.new_groups:
-                self._group_zone.pop(group_name, None)
+            self._stickers = old_stickers
+            self._groups = old_groups
+            self._group_zone = old_group_zone
+            self._discard_upgrade_files(created)
             return {"status": "io", "error": saved.code}
+        referenced = {s.file for s in self._stickers.values()}
+        self._discard_upgrade_files([
+            self.image_path(old_stickers[sticker_id])
+            for sticker_id in images
+            if old_stickers[sticker_id].file not in referenced
+        ])
         self._log(
-            "official labels refreshed: version={} refreshed={} skipped_edited={} unmatched={} groups={}".format(
-                version, plan.refreshed, plan.skipped_edited, plan.unmatched, len(plan.group_descs)
+            "official labels refreshed: version={} refreshed={} skipped_edited={} unmatched={} groups={} images_updated={}".format(
+                version, plan.refreshed, plan.skipped_edited, plan.unmatched, len(plan.group_descs), len(images)
             )
         )
         return {
             "status": "refreshed",
             "version": version,
             "refreshed": plan.refreshed,
+            "images_updated": len(images),
             "skipped_edited": plan.skipped_edited,
             "unmatched": plan.unmatched,
             "groups": len(plan.group_descs),
@@ -645,6 +722,15 @@ class Library:
     # ------------------------------------------------------------------
     # 分组说明（v0.7.0 轮 F）
     # ------------------------------------------------------------------
+
+    def _discard_upgrade_files(self, paths: list[Path]) -> None:
+        for path in paths:
+            try:
+                if path.resolve().parent != self.stickers_dir.resolve():
+                    continue
+                path.unlink(missing_ok=True)
+            except OSError:
+                self._log(f"official asset cleanup deferred: {path.name}")
 
     def group_descs(self) -> dict[str, str]:
         """组名 -> 一句话说明（副本）。"""
@@ -1146,14 +1232,18 @@ class Library:
             # 整批兑底组名（裸包通道）：就地登记归属，否则这些图会成无户籍的隐式分类。
             self._group_zone.setdefault(group.strip(), target_zone)
         try:
-            pack = zipfile.ZipFile(path)
+            pack = open_pack(path)
         except Exception:
             self._log(f"pack unreadable: {path.name}")
             summary["failed"] += 1
             return summary
         with pack:
             try:
-                manifest_raw = json.loads(pack.read(PACK_MANIFEST_FILENAME).decode("utf-8"))
+                manifest_raw = json.loads(read_pack_manifest(pack).decode("utf-8"))
+            except ManifestLimitError:
+                summary["failed"] += 1
+                self._log("pack rejected: manifest size limit")
+                return summary
             except KeyError:
                 manifest_raw = None
             except Exception:

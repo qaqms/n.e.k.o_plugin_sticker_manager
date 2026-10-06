@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "size": 119179456,
+  "sha256": "95fe17ca1494710d414b81fb554ec02df07b07b8af93de882c1d5a727281ff62",
+  "parts": [
+    {
+      "name": "official_pack.zip.part001",
+      "size": 67108864,
+      "sha256": "e26d89e66ca300be91dc51f09874dc61a597cc7c486dd39d85f875aebf1d598c"
+    },
+    {
+      "name": "official_pack.zip.part002",
+      "size": 52070592,
+      "sha256": "4000ad6a3e2e46b2b7b0c9fc9261dca7a5f95b8bf478e65b4a808d65b1125791"
+    }
+  ]
+}

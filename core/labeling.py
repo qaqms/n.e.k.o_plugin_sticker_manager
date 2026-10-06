@@ -58,9 +58,23 @@ def index_by_digest(entries: Iterable[PackEntry]) -> dict[str, PackEntry]:
     同指纹重复出现时**第一条赢**——官方包由工坊打出来不该有重复，但宽松层不拒。
     """
     out: dict[str, PackEntry] = {}
-    for entry in entries:
+    rows = list(entries)
+    for entry in rows:
         if entry.sha256 and entry.sha256 not in out:
             out[entry.sha256] = entry
+    aliases: dict[str, PackEntry] = {}
+    ambiguous: set[str] = set()
+    for entry in rows:
+        if not entry.sha256:
+            continue
+        for digest in entry.legacy_sha256:
+            if digest in aliases and aliases[digest].sha256 != entry.sha256:
+                ambiguous.add(digest)
+            else:
+                aliases[digest] = entry
+    for digest, entry in aliases.items():
+        if digest not in ambiguous:
+            out.setdefault(digest, entry)
     return out
 
 

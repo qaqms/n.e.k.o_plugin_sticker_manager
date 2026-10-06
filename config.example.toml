@@ -26,7 +26,7 @@ reply_tail_display_buffer_sec = 2.0
 # 静态图走内联通道的字节上限（256 KiB）；超过改走宿主上传换 URL。
 # 整条消息 payload 上限 512 KiB（base64 膨胀 4/3），这里已留余量。
 inline_max_bytes = 262144
-# 是否允许动图也走上传通道（代价：gif 动画被归一成 JPEG 压平）。默认关闭。
+# 是否允许 GIF/动画 WebP 走上传通道（代价：动画被归一成 JPEG 压平）。默认关闭。
 animated_via_upload = false
 # 跨轮去重：她自主选图时，同一角色卡最近 N 张成功发过的不再出现
 # （query 候选剔除；显式 id 在发送时被拦，主人点名要重看用 force 绕行）。0 = 关闭。

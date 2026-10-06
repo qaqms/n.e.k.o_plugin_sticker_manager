@@ -1,5 +1,61 @@
 # Changelog
 
+## 0.9.0
+
+- Split the unchanged bundled archive into 64 MiB chunks with size and SHA256
+  checks, avoiding GitHub's 100 MiB file limit without LFS or host changes.
+  Read chunks directly with bounded seekable I/O; retain legacy ZIP compatibility.
+  Preserve all original media, delivery variants, metadata and library behavior.
+
+- Add an Apache-2.0 source license, copyright notice and separate media-scope
+  statement, and ship them in both local and Market builds. Bundled-media
+  redistribution rights are not granted or verified by the source license.
+- Document first Market review, immutable revisions, standard Release evidence,
+  stable/beta publication and the remaining installation and remote-CI checks.
+
+- Prepare the first public-release candidate under a maintainer-selected
+  version reset. 0.9.0 sorts below the historical 0.20.x development versions;
+  existing installations need an explicitly confirmed manual replacement.
+- Replace the release-history README with installation, first-use, configuration,
+  privacy, compatibility and troubleshooting documentation. Preserve history here.
+- Restore the local Git repository from the existing GitHub main history without
+  replacing working files or rewriting remote commits.
+- Keep sticker behavior, configuration defaults and user-library data unchanged.
+  GitHub CI, first Market review and publication are separate release gates.
+
+## 0.20.19
+
+- Prepare a security-review build before the first stable release; this is not
+  a Market publication or a declaration that 1.0 release gates have passed.
+- Bound ZIP manifest decompression and keep loopback diagnostics off system
+  proxies, with focused regression coverage.
+- Run release checks in disposable host snapshots, never the original host
+  checkout or installed application. Fix development-cache lint exclusions.
+- Align Market packaging with the local runtime allow-list, reject linked
+  build inputs, and regenerate packaged metadata from the staged payload.
+- Remove stale generated metadata, generalize the installation-path example
+  and expand ignore rules for secrets, logs, runtime data and build artifacts.
+- Record remaining release blockers: Git history/remote CI are unavailable
+  locally, and source licensing plus bundled-media redistribution rights
+  require the maintainer's confirmation. No host or user data is modified.
+
+## 0.20.18
+
+- Restore exact original GIF bytes for official collections, details and exports.
+  Add separate animated WebP send variants under the inline budget, preserving
+  timing, loops and transparency without deliberate frame sampling. Variants are
+  lossy when needed; identical decoded frames may merge without shortening time.
+- Raise ZIP import capacity to 128MiB so original-quality exports can be reimported.
+- Upgrade existing official images through explicit historical SHA256 aliases
+  while preserving IDs, owner edits, disabled state, usage and active zone.
+  Validate media releases before updating and roll back failed catalog writes.
+  Deleted images are not automatically restored and custom-zone images stay put.
+- Protect animated WebP from the host upload path that flattens animations.
+- Replace the no-op market verification workflow and add the official release
+  workflow. Actual GitHub CI and Market publishing remain external release gates.
+- Add upgrade and media build regression tests plus release/update documentation.
+  No host, installed plugin, user configuration or live library is modified.
+
 ## 0.20.17
 
 - Make the library the default workspace, with separate sending settings and

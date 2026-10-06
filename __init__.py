@@ -81,6 +81,7 @@ from .core import (
     validate_optional_text,
 )
 from .services import Awareness, LanlanResolver, Library, RunStats, Sender, ToolWatch, gave_shape
+from .services.bundled_pack import pack_exists
 from .services.turn_end import TurnEndLogs, log_directories
 
 __all__ = ["StickerManagerPlugin"]
@@ -200,7 +201,7 @@ class StickerManagerPlugin(NekoPluginBase):
             # （只播一次/同名收编/空库才默认激活）。播种炸了不许拦 startup：它是锦上添花，
             # 库的管理面不因此受伤；台账未盖，下次启动自动重试（幂等吃指纹查重）。
             pack = self._official_pack_path()
-            if pack.is_file():
+            if pack_exists(pack):
                 seed = self._library.seed_official(pack)
                 seed_note = str(seed.get("status", "?") if seed.get("status") != "io" else f"io:{seed.get('error')}")
         except Exception:  # noqa: BLE001 - 播种异常只进日志，不拖死启动
@@ -912,10 +913,10 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     async def zone_restore_official_entry(self, **_):
         pack = self._official_pack_path()
-        if not pack.is_file():
+        if not pack_exists(pack):
             return Err(SdkError("official_pack_missing"))
         seed = self._library.seed_official(pack, force=True)
-        if seed.get("status") == "io":
+        if seed.get("status") in {"io", "invalid_assets"}:
             return Err(SdkError(str(seed.get("error") or "library_io_error")))
         return Ok({"note": "official_restored", **seed})
 
@@ -1889,7 +1890,7 @@ class StickerManagerPlugin(NekoPluginBase):
             # （空串=不在册，面板 tab 尾出「恢复官方收藏」），seeded=播种台账。
             # J-3：pack_version=已应用的官方包内容版本（0=从没刷过标签）——排障用，面板不读。
             "official": {
-                "pack": self._official_pack_path().is_file(),
+                "pack": pack_exists(self._official_pack_path()),
                 "zone": self._library.official_zone(),
                 "seeded": self._library.official_seeded(),
                 "pack_version": self._library.official_pack_version(),

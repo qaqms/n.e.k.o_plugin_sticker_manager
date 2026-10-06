@@ -41,7 +41,7 @@ PLUGIN_PREFIX = f"payload/plugins/{PACKAGE_ID}"
 
 # 进包的规则是白名单，不是黑名单——新加的调试脚本/测试/文档不该跟着上路。
 INCLUDE_DIRS = ("core", "services", "i18n")
-INCLUDE_SUFFIXES = (".py", ".json", ".toml", ".ts", ".tsx")
+INCLUDE_SUFFIXES = {"core": {".py"}, "services": {".py"}, "i18n": {".json"}, "ui": {".ts", ".tsx"}}
 UI_ENTRIES = (
     "ui/panel.tsx",
     "ui/shared.ts",
@@ -52,12 +52,14 @@ UI_ENTRIES = (
 ROOT_FILES = (
     "__init__.py",
     "plugin.toml",
-    "plugin.meta.json",
     "pyproject.toml",
     "config.example.toml",
     "README.md",
+    "LICENSE",
+    "NOTICE",
+    "MEDIA_NOTICE.md",
 )
-OFFICIAL_PACK = "official/official_pack.zip"
+OFFICIAL_MANIFEST = "official/official_pack.zip.parts.json"
 _EXCLUDE_NAMES = {"__pycache__", ".ruff_cache", ".pytest_cache"}
 
 
@@ -66,31 +68,48 @@ def collect_plugin_files() -> list[Path]:
     picked: list[Path] = []
 
     def keep(path: Path) -> bool:
+        if path.is_symlink() or not path.resolve().is_relative_to(ROOT.resolve()):
+            raise ValueError(f"Refusing linked build input: {path.relative_to(ROOT)}")
         parts = set(path.relative_to(ROOT).parts)
         return not (parts & _EXCLUDE_NAMES)
 
     def add_dir(directory: Path) -> None:
         if not directory.is_dir():
             return
+        if not keep(directory):
+            return
         for child in sorted(directory.rglob("*")):
-            if child.is_file() and child.suffix in INCLUDE_SUFFIXES and keep(child):
+            allowed = INCLUDE_SUFFIXES[directory.relative_to(ROOT).parts[0]]
+            if child.is_file() and child.suffix in allowed and keep(child):
                 picked.append(child)
 
     for name in ROOT_FILES:
         path = ROOT / name
-        if path.is_file():
+        if path.is_file() and keep(path):
             picked.append(path)
     for name in INCLUDE_DIRS:
         add_dir(ROOT / name)
     for name in UI_ENTRIES:
         target = ROOT / name
+        if target.exists() and not keep(target):
+            continue
         if target.is_dir():
             add_dir(target)
         elif target.is_file():
             picked.append(target)
-    official = ROOT / OFFICIAL_PACK
-    if official.is_file():
-        picked.append(official)
+    official = ROOT / OFFICIAL_MANIFEST
+    keep(official)
+    if not official.is_file():
+        raise ValueError("Missing official archive parts manifest; run tools/split_official_pack.py")
+    manifest = json.loads(official.read_text(encoding="utf-8"))
+    for name in [official.name, *(row["name"] for row in manifest["parts"])]:
+        if Path(name).name != name or not name.startswith("official_pack.zip.") or any(c in name for c in "/\\:"):
+            raise ValueError("Unsafe official archive part name")
+        path = official.parent / name
+        if not path.is_file() or path.stat().st_size > 64 * 1024 * 1024:
+            raise ValueError(f"Missing or oversized official archive part: {name}")
+        if keep(path):
+            picked.append(path)
     return sorted(set(picked), key=lambda p: p.relative_to(ROOT).as_posix())
 
 
@@ -260,11 +279,13 @@ def build(out_dir: Path, *, host_root: Path | None = None) -> Path:
     version = toml_loads((ROOT / "plugin.toml").read_text(encoding="utf-8"))["plugin"]["version"]
     target = out_dir / f"{PACKAGE_ID}_v{version}.neko-plugin"
     out_dir.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as archive:
+    temporary = target.with_suffix(target.suffix + ".tmp")
+    with zipfile.ZipFile(temporary, "w", zipfile.ZIP_DEFLATED) as archive:
         for relative, content in hash_entries:
             archive.writestr(f"payload/{relative}", content)
         archive.writestr("manifest.toml", manifest_toml())
         archive.writestr("metadata.toml", metadata_toml(payload_hash(hash_entries)))
+    temporary.replace(target)
     return target
 
 

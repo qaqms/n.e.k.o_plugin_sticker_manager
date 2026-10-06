@@ -74,7 +74,7 @@ PREVIEW_CHUNK_BYTES = 3 * 1024 * 1024
 # （3MiB 原始→base64 ≈4MiB，封套余量同上）；但方向相反：预览是服务端分段**回**，
 # 上传是面板分段**来**。会话总大小上限防“手滑选了整个盘”的 zip 淹库。
 UPLOAD_CHUNK_BYTES = 3 * 1024 * 1024
-UPLOAD_MAX_TOTAL_BYTES = 64 * 1024 * 1024
+UPLOAD_MAX_TOTAL_BYTES = 128 * 1024 * 1024
 
 # query 选图的候选上限（轮 C，与 外部系统 top_k=5 同量级）：头部并列时不替她拍板，
 # 回一屏能读完的候选清单让她用 id 定夺。

@@ -78,7 +78,7 @@ class SendSettings:
     # base64 膨胀 4/3，这里再留余量给可能的文字 part 与协议封装。
     # 超过这个尺寸的图改走 ctx.images.upload() 换 URL part。
     inline_max_bytes: int = 256 * 1024
-    # 动图（gif）刻意不走 upload：宿主会把任何输入归一成 JPEG，
+    # GIF 和动画 WebP 刻意不走 upload：宿主会把任何输入归一成 JPEG，
     # 动画会被压平。动图只能内联，超过 inline_max_bytes 就如实拒绝。
     animated_via_upload: bool = False
     # 跨轮去重（轮 D①）：同一角色卡最近 N 张成功发过的图在"她自主选图"时不再出现

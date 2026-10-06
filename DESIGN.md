@@ -16,6 +16,25 @@
 给宿主主对话里的猫娘一个**自己的表情包收藏间**：主人在面板里收藏/描述/打标签/禁用/删除，
 她通过 llm_tool 在对话里自主挑一张发出去；每次成败记使用台账。
 
+## Current Media And Update Contract (v0.20.18)
+
+- Source GIFs remain untouched and their exact bytes become the official collection.
+  Details/exports retain full original quality. Separate animated WebP delivery files
+  fit the default 256KiB inline budget. No deliberate frame sampling; lossy encoding
+  may merge identical decoded frames. Total timing, loops and alpha are verified.
+- `pack_version` gates labels and media together. Explicit `legacy_sha256` aliases pair
+  re-encoded assets with existing official-zone entries; every future release must
+  retain the full digest history. `asset_id` is a stable build identifier.
+- Media releases are fully validated before mutation. New filenames are published
+  before the catalog commit; old files are removed only afterwards. Failed catalog
+  commits restore memory and do not stamp the version. IDs, edits, enablement and
+  usage remain intact. Deleted or moved items are not silently restored or relocated.
+- Animated WebP is protected from flattening uploads just like GIF. No codec dependency
+  is added to the runtime; Pillow is only a development dependency.
+- Market workflows now use the official reusable templates. Local tests do not prove
+  GitHub CI, publication or actual Market upgrade success. No host/runtime writes.
+- See `docs/updates-and-release.md`; older GIF/label-only notes below are historical.
+
 ## Current Recovery Contract（v0.20.14）
 
 - 独立 `watch` timer 与巡检间隔均为 10 秒；工具恢复不依赖提醒开关。

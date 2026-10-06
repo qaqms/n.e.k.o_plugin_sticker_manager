@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-import json
 import threading
 import urllib.parse
-import urllib.request
 from collections.abc import Iterable, Mapping
 from typing import Any, Callable
+
+from .local_http import read_local_json
 
 __all__ = ["TOOL_WATCH_INTERVAL_SEC", "ToolWatch", "missing_tool_names"]
 
@@ -101,9 +101,8 @@ async def _default_fetch(url: str) -> dict[str, Any] | None:
     base = f"http://127.0.0.1:{port}{url}"
 
     def _do() -> dict[str, Any]:
-        with urllib.request.urlopen(base, timeout=_HTTP_TIMEOUT_SEC) as resp:
-            value = json.loads(resp.read().decode("utf-8"))
-            return value if isinstance(value, dict) else {}
+        value = read_local_json(base, timeout=_HTTP_TIMEOUT_SEC)
+        return value if isinstance(value, dict) else {}
 
     try:
         return await asyncio.to_thread(_do)

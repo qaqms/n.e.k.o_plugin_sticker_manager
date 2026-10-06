@@ -13,7 +13,7 @@ keywords = [
     "meme",
     "gallery",
 ]
-version = "0.20.17"
+version = "0.9.0"
 type = "plugin"
 entry = "plugin.plugins.sticker_manager:StickerManagerPlugin"
 
@@ -66,7 +66,7 @@ defer_tool_sends = false
 # 仅排队发送：生成结束后的逐段显示兼容缓冲（秒，0..30），不代表前端或 TTS 真正结束。
 # 0 = 恢复无额外缓冲；旧配置没有此键时自动使用默认值。
 reply_tail_display_buffer_sec = 2.0
-# 静态图走内联通道的字节上限；超过改走宿主上传换 URL（gif 例外：
+# 静态图走内联通道的字节上限；超过改走宿主上传换 URL（GIF/动画 WebP 例外：
 # 上传会把动图压平成 JPEG，动图内联不下就如实拒绝）。
 inline_max_bytes = 262144
 # 是否允许动图也走上传通道（代价：动画被压平）。默认关闭。
