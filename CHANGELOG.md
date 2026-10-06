@@ -2,6 +2,12 @@
 
 ## 0.9.0
 
+- Use a relative test-helper import so the pinned Market Ruff policy passes
+  from both the plugin root and the CI checkout parent. Remote Verify run #14
+  passed on commit `7296e8b`; first Market review and Release are still pending.
+- Refresh pre-release status and installation guidance; distinguish the earlier
+  development 0.9.0 entry from this maintainer-selected version reset.
+
 - Split the unchanged bundled archive into 64 MiB chunks with size and SHA256
   checks, avoiding GitHub's 100 MiB file limit without LFS or host changes.
   Read chunks directly with bounded seekable I/O; retain legacy ZIP compatibility.
@@ -859,7 +865,7 @@ v0.9.1「墙不糊脸、弹窗不再被裁」——实机截图钉出的两只�
   同缓存同并发尺；alive 护栏防卸载后 setState）；kit Modal/ImagePreview 退场（import 清干净）。
 - i18n +2 键（panel.focus.title/back）。
 
-## 0.9.0
+## 0.9.0（历史开发版本，重定号之前）
 
 v0.9.0「表情墙」——轮 G-2：格子去表单化，参数全部收进详情弹窗（纯视图轮，后端零变化）：
 

@@ -2,18 +2,12 @@
 
 让 N.E.K.O 在聊天中自己挑选、发送合适的表情包，也给你一个整理收藏的面板。
 
-**版本：0.9.0 · 插件 ID：`sticker_manager` · 作者：qaqms**
-
-当前为导入测试候选版，尚未完成市场发行验收。本文是使用说明，历史变更见 [CHANGELOG](CHANGELOG.md)。
-
-[下载安装包](https://github.com/qaqms/n.e.k.o_plugin_sticker_manager/releases) ·
-[反馈问题](https://github.com/qaqms/n.e.k.o_plugin_sticker_manager/issues) ·
-[更新记录](https://github.com/qaqms/n.e.k.o_plugin_sticker_manager/blob/main/CHANGELOG.md)
+**插件 ID：`sticker_manager` · 作者：qaqms**
 
 ## 能做什么
 
 - **聊天配图**：猫娘通过 `sticker_list` 和 `sticker_send` 查看当前收藏、按分类或关键词挑图；不需要每次手动指定图片。
-- **开箱即用**：默认自带YUI官方表情包
+- **内置收藏**：随包提供 190 张表情及分类信息，首次启动自动导入。
 - **分区收藏**：按“区 → 分类 → 图片”整理图库，只让猫娘使用当前激活区；浏览其他区不会自动改变她的选图范围。
 - **导入与整理**：收集 PNG、JPG、GIF、WebP，支持批量导入、搜索、勾选、移动分类与删除。
 - **图片详情**：查看原图和动画，编辑说明、使用情境、标签与图中文字；返回时保留图库的搜索和选择。
@@ -31,7 +25,10 @@
 SDK 声明：推荐 `>=0.1.0,<0.2.0`，支持范围 `>=0.1.0,<0.3.0`；
 这不是对所有历史安装版的实测保证，具体导入与聊天行为请以目标宿主验收为准。
 
-1. 从本仓库的 **Releases** 下载 `.neko-plugin` 文件；源码 ZIP 不是安装包。
+`0.9.0` 尚未发布到 Releases。测试时使用维护者提供的候选 `.neko-plugin` 包；
+正式发布后，可从本仓库的 **Releases** 下载对应版本。源码 ZIP 不是安装包。
+
+1. 获取 `.neko-plugin` 安装包。
 2. 在 N.E.K.O 的插件管理中导入安装包，确认安装或替换同 ID 插件。
 3. 启动插件，打开“表情包管理”面板。
 4. 在发送设置中打开总开关。**默认关闭**，不开启时猫娘不会查看目录或发表情，但你仍可整理图库。
@@ -103,7 +100,7 @@ Windows 默认日志目录为 `%LOCALAPPDATA%\N.E.K.O\logs`，插件日志在 `p
 
 市场首次上架流程是：推送源码并通过远程 Verify → 提交仓库的固定 commit 审核 → 审核通过 → 标准 GitHub Release → 通知市场发布版本。
 本地导入包用于测试；它不能代替首次审核，也不应手动上传后就视为已完成市场发布。
-完整规则见 [更新与发布](docs/updates-and-release.md) 和 [官方发布教程](https://project-neko.online/zh-CN/plugins/cli)。
+完整规则见 [更新与发布](https://github.com/qaqms/n.e.k.o_plugin_sticker_manager/blob/main/docs/updates-and-release.md) 和 [官方发布教程](https://project-neko.online/zh-CN/plugins/cli)。
 
 运行时插件不额外依赖第三方 Python 库。开发测试需要 Python 3.11+、uv；素材构建与测试使用 Pillow，面板检查需要 TypeScript。
 
