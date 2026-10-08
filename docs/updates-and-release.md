@@ -1,6 +1,6 @@
 # 更新与发布
 
-规则核对日期：2026-10-06。依据 [官方发布教程](https://project-neko.online/zh-CN/plugins/cli)、
+规则核对日期：2026-10-08。依据 [官方发布教程](https://project-neko.online/zh-CN/plugins/cli)、
 [官方 CLI 源码](https://github.com/Project-N-E-K-O/N.E.K.O/blob/main/plugin/neko_plugin_cli/commands/publish_cmd.py)
 和当前本地宿主 SDK。市场服务和 `main` 上的模板可能变化，正式发布前应重新核对。
 
@@ -96,7 +96,7 @@ GIF 与动画 WebP 不走宿主上传通道，避免被压成首帧 JPEG。图�
 ### 发布可安装版本
 
 本仓库位于宿主目录外。正式发布时可在宿主源码根使用插件的绝对路径，不需要把
-源码搬进宿主。以下是将来经过确认后使用的命令，**本轮未执行**：
+源码搬进宿主。标准完整发布命令如下；必须先确认源码已推送、版本尚未发布：
 
 ```powershell
 uv run neko-plugin check 'D:\neko kaifa3\n.e.k.o_plugin_sticker_manager'
@@ -131,25 +131,25 @@ CLI 等待资产就绪后，向市场发送 Release URL。市场只接受已通�
 通常无需重新首次审核，但需要新版本号、新 commit 和新 Release。撤回版本不可恢复，
 撤回后也不能复用同一版本号或同一个 GitHub Release。
 
-### 当前是否可发行
+### 0.9.0 首次发行
 
-截至 2026-10-06，源码提交 `7296e8b3829f5a3234545e948ec4253fafe416be` 已推送，
-[远程 Verify #14](https://github.com/qaqms/n.e.k.o_plugin_sticker_manager/actions/runs/37421532428)
-全部通过，含 Release check、验证包及市场凭据上传。可以准备首次市场审核，
-但 Verify 的构建产物不是正式 Release，不能把当前状态写成“已上架”或“发行验收完成”。
-若继续修改文档或源码，应先提交推送并等待新 commit 的 Verify 通过，再提交审核快照。
-原创源码使用 Apache-2.0，范围及素材例外见 `LICENSE`、`NOTICE` 和 `MEDIA_NOTICE.md`。按维护者要求，
-本轮不调查或替换 190 张随包素材；这不代表素材再分发权已解决，声明也不能代替授权。
-公开发行带素材包仍有未解决的授权风险。
+2026-10-08 已通过市场公开接口确认插件条目 `94` 的状态为 `approved`，
+首次审核已经通过；核对时 `latest_version` 为空，尚无可安装市场版本。
+维护者已明确授权发行 `0.9.0` stable。文档更新前的源码提交 `a8af51d`
+对应 [远程 Verify #16](https://github.com/qaqms/n.e.k.o_plugin_sticker_manager/actions/runs/37424452113)
+成功，核对时未发现远程 `v0.9.0` 标签。
 
-当前文件及本地 45 个 Git 提交已通过有限的高置信秘密/个人路径签名检查；
-这不等于完整供应链或安全审计。技术检查没有发现必须新增的发行文件。
-仍需完成：用户安装版验收、首次市场审核、正式 Release 工作流和实际版本发布。
-截至本次核对未发现 `v0.9.0` 远程标签，也未执行 publish。
-市场账号及既有申请状态没有授权访问，不能据此断言
-已有申请通过。源码 commit/push 不等于发布版本；未经明确确认不创建 tag、
-发布 Release 或提交市场申请。
-具体本地检查结果见 `docs/pre-release-audit.md`。
+此次发行保留现有运行逻辑、默认配置、用户图库和素材分片。工具发图仍默认即时提交，
+不保证在最后一个文字气泡显示后或 TTS 播放结束后发送；精准尾部投递仍需宿主接口支持。
+发行说明见 `docs/releases/0.9.0.md`。正式发布结果以 GitHub Release 资产、
+标准 Release 工作流成功结果，以及市场版本列表和 stable latest 为准；
+Verify 产物和已过审条目均不能代替这些发布结果。
+
+源码使用 Apache-2.0，范围及素材例外见 `LICENSE`、`NOTICE` 和 `MEDIA_NOTICE.md`。
+按维护者要求本轮不调查或替换随包素材；审核通过不等于素材授权问题已解决。
+本地技术检查和公开发布也不代表完整供应链、安全或版权审计。
+安装版实机体验仍由维护者验收，本轮不操作正在运行的宿主或用户数据。
+历史本地检查结果见 `docs/pre-release-audit.md`。
 
 ## 用户实机验收
 

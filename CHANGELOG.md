@@ -2,9 +2,11 @@
 
 ## 0.9.0
 
+- Prepare the first stable Market release after the initial repository review
+  was approved. Keep immediate tool delivery and document its reply-tail limit.
 - Use a relative test-helper import so the pinned Market Ruff policy passes
   from both the plugin root and the CI checkout parent. Remote Verify run #14
-  passed on commit `7296e8b`; first Market review and Release are still pending.
+  passed on commit `7296e8b`; run #16 also passed on commit `a8af51d`.
 - Refresh pre-release status and installation guidance; distinguish the earlier
   development 0.9.0 entry from this maintainer-selected version reset.
 
