@@ -5,18 +5,21 @@
 2. 避开"[plugin.store].enabled=false 时静默失效"的坑（our_life 陷阱 §4）——
    文件通道的失败是**响亮的**（IOError 会被捕获并转成稳定错误码）。
 
-线程模型：所有写操作都来自入口/工具/面板调用（插件子进程的单一事件循环），
-没有跨进程共享；load 是全量读 + 内存缓存，坏条目宽松丢弃、不炸整本目录。
+线程模型：入口和定时器可能运行在不同线程。实例级可重入锁覆盖状态修改、
+写盘及失败回滚，也保护读快照；没有跨进程共享。
 """
 
 from __future__ import annotations
 
 import json
+import threading
 import time
 import zipfile
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
+from functools import wraps
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Concatenate, Iterator, ParamSpec, TypeVar
 
 from ..core.catalog import (
     DEFAULT_ZONE_NAME,
@@ -83,6 +86,20 @@ ERR_EMPTY = "library_empty"
 ERR_DUPLICATE = "duplicate_image"
 ERR_PACK_UNREADABLE = "pack_unreadable"
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
+
+def _serialized(
+    method: Callable[Concatenate["Library", _P], _R],
+) -> Callable[Concatenate["Library", _P], _R]:
+    @wraps(method)
+    def guarded(self: Library, *args: _P.args, **kwargs: _P.kwargs) -> _R:
+        with self.locked():
+            return method(self, *args, **kwargs)
+
+    return guarded
+
 
 @dataclass
 class LibraryResult:
@@ -106,6 +123,7 @@ class Library:
     """
 
     def __init__(self, root: Path, *, logger: Any = None, on_saved: Any = None):
+        self._state_lock = threading.RLock()
         self._root = Path(root)
         self._logger = logger
         self._on_saved = on_saved
@@ -127,9 +145,15 @@ class Library:
         self._catalog_seen = False
         self._io_dirty = False
         # zip 直传会话（仅本进程，sid -> {h, path, seq, size, name, at}）：
-        # 入口调用都跑在同一事件循环上，字典变更天然串行；进程重启 = 会话作废，
+        # 会话变更与文件写入共用图库锁；进程重启 = 会话作废，
         # 重选文件即可——断点续传不值得为这种短生命周期交互复杂度。
         self._uploads: dict[str, dict] = {}
+
+    @contextmanager
+    def locked(self) -> Iterator[None]:
+        """Protect a synchronous compound operation; never hold this across await."""
+        with self._state_lock:
+            yield
 
     # ------------------------------------------------------------------
     # 路径与加载
@@ -174,6 +198,7 @@ class Library:
             except Exception:
                 pass
 
+    @_serialized
     def load(self, *, force: bool = False) -> LibraryResult:
         """Read a valid catalog; reject unreadable roots without discarding the last good snapshot.
 
@@ -294,6 +319,7 @@ class Library:
             self.save()
             self._log("catalog migrated to zones v2")
 
+    @_serialized
     def save(self) -> LibraryResult:
         if self._read_failed:
             return LibraryResult.failure(ERR_IO, "catalog_unreadable")
@@ -357,6 +383,7 @@ class Library:
                     pass
 
     @property
+    @_serialized
     def io_dirty(self) -> bool:
         """上一次读/写是否走过 IO 异常。面板横幅用它。"""
         return self._io_dirty
@@ -365,6 +392,7 @@ class Library:
     # 区（v0.11.0 J-1：区→分类→图的上层；她只感知激活区，其余整体隐形）
     # ------------------------------------------------------------------
 
+    @_serialized
     def zones(self) -> list[dict[str, Any]]:
         """按 tab 序（插入序）列区：id/名/说明/是否激活/区内张数（含未分组）。"""
         counts: dict[str, int] = {}
@@ -383,15 +411,19 @@ class Library:
             for zone_id, meta in self._zones.items()
         ]
 
+    @_serialized
     def zone_ids(self) -> set[str]:
         return set(self._zones)
 
+    @_serialized
     def active_zone(self) -> str:
         return self._active_zone
 
+    @_serialized
     def zone_of_group(self, group: str) -> str:
         return self._group_zone.get(group, "")
 
+    @_serialized
     def zone_of_sticker(self, sticker: Sticker) -> str:
         """图在哪个区：分类住哪区它就在哪区（分类归属优先），未分组看自己的 zone。"""
         if sticker.group:
@@ -400,12 +432,14 @@ class Library:
                 return mapped
         return sticker.zone if sticker.zone in self._zones else self._active_zone
 
+    @_serialized
     def zone_group_names(self, zone_id: str) -> set[str]:
         """一个区里的分类名（显式 ∪ 区内图在住的隐式）。跨区查名请走 `group_names()`。"""
         names = {g for g, z in self._group_zone.items() if z == zone_id and g in self._groups}
         names |= {s.group for s in self._stickers.values() if s.group and self.zone_of_sticker(s) == zone_id}
         return names
 
+    @_serialized
     def create_zone(self, name: Any, desc: Any = "") -> tuple[str, str]:
         """新建一个区；回 (区 id, 错误码)。重名回 `zone_exists`（tab 撞名和分类撞名同理）。"""
         zone_name = normalize_zone_name(name)
@@ -423,6 +457,7 @@ class Library:
         self._log(f"zone created: id={zone_id}")
         return zone_id, ""
 
+    @_serialized
     def rename_zone(self, zone_id: Any, name: Any) -> tuple[bool, str]:
         """改区名：内部 id 设计所以改名白送（分类改名的债不新埋）；回 (是否成功, 错误码)。"""
         if not isinstance(zone_id, str) or zone_id not in self._zones:
@@ -440,6 +475,7 @@ class Library:
             return False, saved.code or ERR_IO
         return True, ""
 
+    @_serialized
     def set_zone_desc(self, zone_id: Any, desc: Any) -> tuple[bool, str]:
         if not isinstance(zone_id, str) or zone_id not in self._zones:
             return False, "zone_not_found"
@@ -452,6 +488,7 @@ class Library:
             return False, saved.code or ERR_IO
         return True, ""
 
+    @_serialized
     def activate_zone(self, zone_id: Any) -> tuple[bool, str]:
         """切她的世界：激活区以外的分类/图从她目录、检索与发图候选里整体消失。"""
         if not isinstance(zone_id, str) or zone_id not in self._zones:
@@ -465,6 +502,7 @@ class Library:
         self._log(f"zone activated: id={zone_id}")
         return True, ""
 
+    @_serialized
     def remove_zone(self, zone_id: Any) -> tuple[bool, str, int]:
         """拆区：**连带拆它全部分类与图**（与 remove_group 同一条裁决，放大一层）。
 
@@ -512,10 +550,12 @@ class Library:
     # 官方区播种（v0.12.0 J-2 P2A：完全内置 + 只播一次 + 恢复按钮）
     # ------------------------------------------------------------------
 
+    @_serialized
     def official_seeded(self) -> bool:
         """播种台账（catalog 顶层 `official_seeded`）：封过盘就不再自动重播。"""
         return self._official_seeded
 
+    @_serialized
     def official_zone(self) -> str:
         """官方区 id：`builtin` 位优先，其次同名收编（主人手建的「官方」区）；都没有回空串。
 
@@ -529,6 +569,7 @@ class Library:
                 return zone_id
         return ""
 
+    @_serialized
     def seed_official(self, pack_path: Path, *, force: bool = False) -> dict[str, Any]:
         """把内置官方包收进官方区；回 {status, zone?, imported/duplicates/rejected/failed, refresh}。
 
@@ -596,10 +637,12 @@ class Library:
             **summary,
         }
 
+    @_serialized
     def official_pack_version(self) -> int:
         """已应用的官方包内容版本（catalog 顶层 `official_pack_version`）；0 = 从没刷过。"""
         return self._official_pack_version
 
+    @_serialized
     def refresh_official_labels(self, pack_path: Path) -> dict[str, Any]:
         """官方包标签下发尺（v0.13.0 J-3）：包比库新时，按内容指纹把**官方区条目**的文本刷成包里的。
 
@@ -732,10 +775,12 @@ class Library:
             except OSError:
                 self._log(f"official asset cleanup deferred: {path.name}")
 
+    @_serialized
     def group_descs(self) -> dict[str, str]:
         """组名 -> 一句话说明（副本）。"""
         return dict(self._groups)
 
+    @_serialized
     def group_names(self) -> set[str]:
         """在册分类名（轮 I）：主人建过的（含零张的空分类）∪ 有图在住的（隐式分类）。
 
@@ -744,6 +789,7 @@ class Library:
         """
         return {sticker.group for sticker in self._stickers.values() if sticker.group} | set(self._groups)
 
+    @_serialized
     def set_group_desc(self, name: Any, desc: Any) -> tuple[bool, str]:
         """写/改/清一个分类的说明；回 (是否成功, 错误码)。
 
@@ -767,6 +813,7 @@ class Library:
             return False, saved.code or ERR_IO
         return True, ""
 
+    @_serialized
     def create_group(self, name: Any, desc: Any = "", zone: Any = "") -> tuple[bool, str]:
         """新建一个分类（轮 I：先立分类，再往分类里塞图；J-1：分类住在区里）；回 (是否成功, 错误码)。
 
@@ -794,6 +841,7 @@ class Library:
         self._log(f"group created: {group} zone={target_zone}")
         return True, ""
 
+    @_serialized
     def remove_group(self, name: Any) -> tuple[bool, str, int]:
         """删分类，**连带删掉这一组的图与文件**（主人拍板 1C）；回 (成功, 错误码, 删掉的张数)。
 
@@ -834,12 +882,14 @@ class Library:
     # 查询
     # ------------------------------------------------------------------
 
+    @_serialized
     def all(self) -> list[Sticker]:
         return sorted(
             self._stickers.values(),
             key=lambda s: -s.added_at,
         )
 
+    @_serialized
     def active_pool(self) -> list[Sticker]:
         """她的全世界：激活区内的全部图（与 `all()` 同序）。
 
@@ -848,9 +898,11 @@ class Library:
         """
         return [s for s in self.all() if self.zone_of_sticker(s) == self._active_zone]
 
+    @_serialized
     def get(self, sticker_id: str) -> Sticker | None:
         return self._stickers.get(sticker_id)
 
+    @_serialized
     def count(self) -> int:
         return len(self._stickers)
 
@@ -859,6 +911,7 @@ class Library:
         # 所以这里不需要再做路径逃逸检查——检查在 add() 的入库口。
         return self.stickers_dir / sticker.file
 
+    @_serialized
     def thumb_for(self, sticker: Sticker, *, build: Any = build_thumb) -> bytes | None:
         """取这张图的缩略图字节；盘上没有就现做一份并落盘。`None` = 拿不到，调用方**降级回原图**。
 
@@ -920,6 +973,7 @@ class Library:
             self.save()  # 回填失败不阻断入库（下次 repair/查重会再试）
         return hit
 
+    @_serialized
     def add(
         self,
         *,
@@ -986,6 +1040,7 @@ class Library:
         self._log(f"sticker added: id={sticker_id} bytes={len(data)}")
         return sticker, ""
 
+    @_serialized
     def update(
         self,
         sticker_id: str,
@@ -1036,6 +1091,7 @@ class Library:
             return None, saved.code
         return updated, ""
 
+    @_serialized
     def touch_used(self, sticker_id: str, *, now: float) -> None:
         """记一次使用。失败不回滚发送——台账是弱一致的一刻。"""
         sticker = self._stickers.get(sticker_id)
@@ -1044,6 +1100,7 @@ class Library:
         self._stickers[sticker_id] = sticker.with_touch(now=now)
         self.save()
 
+    @_serialized
     def remove(self, sticker_id: str) -> str:
         """删除条目与文件。返回错误码（空 = 成功）。"""
         sticker = self._stickers.pop(sticker_id, None)
@@ -1064,6 +1121,7 @@ class Library:
     # 自修复
     # ------------------------------------------------------------------
 
+    @_serialized
     def repair(self) -> dict[str, int]:
         """库体检：清掉文件已丢失的条目、删掉没人引用的孤儿文件、回填旧条目指纹。
 
@@ -1163,6 +1221,7 @@ class Library:
     def exports_dir(self) -> Path:
         return self._root / EXPORTS_DIRNAME
 
+    @_serialized
     def export_pack(self, *, now: float | None = None) -> tuple[dict[str, Any], str]:
         """把整本库打成套图 zip 写进 `exports/`。返回 (结果, 错误码)。
 
@@ -1195,6 +1254,8 @@ class Library:
                 continue
             included.append(sticker)
             exported += 1
+        if exported > PACK_MAX_ENTRIES:
+            return {}, "pack_too_many_entries"
         try:
             with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as pack:
                 pack.writestr(
@@ -1212,6 +1273,7 @@ class Library:
         self._log(f"pack exported: file={target.name} stickers={exported} skipped={skipped}")
         return {"file": str(target), "exported": exported, "skipped": skipped}, ""
 
+    @_serialized
     def import_pack(
         self, path: Path, *, group: str = "", tags: list[str] | None = None, zone: str = ""
     ) -> dict[str, int]:
@@ -1227,10 +1289,16 @@ class Library:
           描述取文件名清洗——与收件箱单文件通道同一形态；两种形态都吃整批 tags/group 兜底。
         """
         summary = {"imported": 0, "duplicates": 0, "rejected": 0, "failed": 0}
-        target_zone = zone if zone in self._zones else self._active_zone
-        if group and isinstance(group, str) and group.strip():
-            # 整批兑底组名（裸包通道）：就地登记归属，否则这些图会成无户籍的隐式分类。
-            self._group_zone.setdefault(group.strip(), target_zone)
+        if not self.load().ok or (zone and zone not in self._zones):
+            summary["failed"] += 1
+            return summary
+        target_zone = zone or self._active_zone
+        group = normalize_group(group)
+        group_zones = {name: self.zone_of_group(name) or self._active_zone for name in self.group_names()}
+        group_zones.update({
+            sticker.group: self.zone_of_sticker(sticker)
+            for sticker in self._stickers.values() if sticker.group
+        })
         try:
             pack = open_pack(path)
         except Exception:
@@ -1250,7 +1318,8 @@ class Library:
                 # manifest 在但坏了：图仍可救（按裸包处理），如实记一笔日志。
                 self._log(f"pack manifest broken, falling back to bare mode: {path.name}")
                 manifest_raw = None
-            parsed = parse_manifest(manifest_raw) if manifest_raw is not None else []
+            # The manifest byte budget bounds parsing; count overflow before enforcing the image cap.
+            parsed = parse_manifest(manifest_raw, limit=None) if manifest_raw is not None else []
             pack_groups = parse_manifest_groups(manifest_raw) if manifest_raw is not None else {}
             imported_groups: set[str] = set()
             if parsed:
@@ -1277,12 +1346,20 @@ class Library:
                     continue
                 file_name = safe_member_name(name)
                 entry_group = entry.group if entry is not None else ""
+                chosen_group = entry_group or group
+                if chosen_group in group_zones and group_zones[chosen_group] != target_zone:
+                    if self._find_duplicate(content_sha256(data)) is not None:
+                        summary["duplicates"] += 1
+                    else:
+                        summary["rejected"] += 1
+                        self._log("pack image rejected: category belongs to another zone")
+                    continue
                 entry_tags = list(entry.tags) if entry is not None and entry.tags else list(tags or [])
                 sticker, error = self.add(
                     data=data,
                     desc=entry.desc if entry is not None else desc_from_filename(file_name),
                     tags=entry_tags,
-                    group=entry_group or group,
+                    group=chosen_group,
                     zone=target_zone,
                     caption=entry.caption if entry is not None else "",
                     visible_text=entry.visible_text if entry is not None else "",
@@ -1320,6 +1397,7 @@ class Library:
     # 收件箱导入
     # ------------------------------------------------------------------
 
+    @_serialized
     def ingest_inbox(
         self,
         *,
@@ -1396,6 +1474,7 @@ class Library:
     def uploads_dir(self) -> Path:
         return self._root / UPLOADS_DIRNAME
 
+    @_serialized
     def upload_start(self, filename: Any, size: Any = None) -> tuple[str, str]:
         """开一个上传会话：只认 .zip 结尾（图走 add 通道，不重复造第二条入库路）。
 
@@ -1423,6 +1502,7 @@ class Library:
         self._uploads[sid] = {"h": handle, "path": path, "seq": 0, "size": 0, "name": name, "at": time.time()}
         return sid, ""
 
+    @_serialized
     def upload_append(self, sid: str, seq: Any, data: bytes) -> str:
         """按 seq 顺序追加一块；乱序/超限/写失败都**作废会话**（不留半截尸体让人重试错对象）。
 
@@ -1449,6 +1529,7 @@ class Library:
         session["at"] = time.time()
         return ""
 
+    @_serialized
     def upload_finish(
         self, sid: str, *, tags: list[str] | None = None, group: str = "", zone: str = ""
     ) -> tuple[dict[str, int], str]:
@@ -1515,6 +1596,7 @@ class Library:
     def usage_path(self) -> Path:
         return self._root / USAGE_FILENAME
 
+    @_serialized
     def read_usage(self, limit: int = 50) -> list[dict[str, Any]]:
         try:
             raw = json.loads(self.usage_path().read_text(encoding="utf-8"))
@@ -1530,6 +1612,7 @@ class Library:
         out.reverse()  # 新的在前
         return out
 
+    @_serialized
     def append_usage(self, record: dict[str, Any], *, keep: int) -> None:
         """追加一条使用记录（只放非隐私字段：时刻/表情 id/角色名/来源/成败）。
 

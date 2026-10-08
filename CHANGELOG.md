@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.9.1
+
+- Prepare the 0.9.1 stable maintenance release on 2026-10-08 with four
+  library/import/send fixes. Publication evidence is recorded separately.
+
+- Serialize library mutations, persistence, rollback and snapshots across host
+  threads, including usage records and upload sessions.
+- Account for manifest entries beyond the 512-image import limit and retain
+  partially imported inbox archives. Refuse exports that exceed that limit.
+- Reject new pack images whose category belongs to another zone instead of
+  silently importing into that zone. Preserve content-based duplicate handling.
+- Revalidate current image existence, enablement and model-visible zone before
+  submission after uploads. Keep explicit panel sends independent of the active zone.
+- Add deterministic concurrency and import/send regression coverage.
+
 ## 0.9.0
 
 - Publish the first stable Market release on 2026-10-08 after the initial
@@ -850,7 +865,7 @@ v0.10.0「分类优先」——轮 I：分类从「图的附带属性」升成**
   另把两条旧语义门改正（`set_group_desc("")` 保留键、poisoned 段空说明保留键）。
 - 五门全绿（pytest / ruff / check / release / hosted-tsx），`check --release` `payload_hash_verified=True`。
 
-## 0.9.1
+## 0.9.1（历史开发版本，重定号之前）
 
 v0.9.1「墙不糊脸、弹窗不再被裁」——实机截图钉出的两只观感雷（纯视图轮，后端零变化）：
 

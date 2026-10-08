@@ -307,17 +307,21 @@ class Sender:
             if epoch != self._epoch:
                 return SendResult.failure(ERR_NOT_ENABLED, sticker_id=sticker.id)
             if ticket is not None:
+                with self._library.locked():
+                    current, code = self._current_for_submission(sticker.id, source=source)
+                if current is None or code:
+                    return SendResult.failure(code or ERR_MISSING_FILE, sticker_id=sticker.id)
                 if len(self._pending) >= _MAX_PENDING:
                     return SendResult.failure("send_queue_full", sticker_id=sticker.id)
                 self._pending[lanlan] = PendingSend(
-                    sticker, parts, ticket, source, time.monotonic(), len(text),
+                    current, parts, ticket, source, time.monotonic(), len(text),
                     settings.send.reply_tail_display_buffer_sec,
                 )
                 self._log(
                     f"sticker queued: id={sticker.id} source={source} "
                     f"buffer_sec={settings.send.reply_tail_display_buffer_sec:g}"
                 )
-                return SendResult(ok=True, sticker_id=sticker.id, desc=sticker.desc, queued=True)
+                return SendResult(ok=True, sticker_id=current.id, desc=current.desc, queued=True)
 
             moment += max(0.0, time.monotonic() - started)
             return self._submit(
@@ -326,6 +330,34 @@ class Sender:
             )
 
     def _submit(
+        self, sticker: Sticker, parts: list[dict[str, Any]], *, lanlan: str,
+        settings: StickerManagerSettings, source: str, moment: float, text_len: int,
+    ) -> SendResult:
+        # Uploads yield control. Recheck current state and submit under the same
+        # lock as management writes so an intervening disable/delete cannot leak.
+        with self._library.locked():
+            current, code = self._current_for_submission(sticker.id, source=source)
+            if current is None or code:
+                return SendResult.failure(code or ERR_MISSING_FILE, sticker_id=sticker.id)
+            return self._submit_checked(
+                current, parts, lanlan=lanlan, settings=settings,
+                source=source, moment=moment, text_len=text_len,
+            )
+
+    def _current_for_submission(self, sticker_id: str, *, source: str) -> tuple[Sticker | None, str]:
+        loaded = self._library.load()
+        if not loaded.ok:
+            return None, loaded.code
+        current = self._library.get(sticker_id)
+        if current is None or not self._library.image_path(current).is_file():
+            return None, ERR_MISSING_FILE
+        if current.disabled:
+            return None, "sticker_disabled"
+        if source in {"tool", "agent"} and self._library.zone_of_sticker(current) != self._library.active_zone():
+            return None, "sticker_zone_changed"
+        return current, ""
+
+    def _submit_checked(
         self, sticker: Sticker, parts: list[dict[str, Any]], *, lanlan: str,
         settings: StickerManagerSettings, source: str, moment: float, text_len: int,
     ) -> SendResult:

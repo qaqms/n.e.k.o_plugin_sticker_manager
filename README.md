@@ -65,6 +65,8 @@ SDK 声明：推荐 `>=0.1.0,<0.2.0`，支持范围 `>=0.1.0,<0.3.0`；
 收藏、详情和导出保留内置 GIF 的原始字节。聊天发送使用原图或预算内的动画 WebP；为满足大小限制，发送版可能有损压缩或缩小尺寸，但不会替换收藏本体。图库缩略图是静态图，详情和聊天才播放动画。
 
 - 单张导入图片最大 **8MiB**；面板分块直传总量最大 **128MiB**。
+- 单个套图包最多导入 **512 张**；超出部分计为拒收，收件箱源包保留。全库导出超过 512 张时明确拒绝，不生成无法完整导回的包。
+- 分类名全库唯一。向另一区导入同名分类的新图片会计为拒收，不会静默进入原分类所在区；相同图片仍按重复处理。
 - 发送内联预算默认 **256KiB**。较大的静态图通过宿主上传发送；超预算动图默认拒绝，不静默压成首帧。
 - 表情包独立显示为插件图片消息，不伪装成猫娘的普通文字气泡。
 - 工具发图默认即时提交，可能先于普通文字回复的剩余内容出现；不保证在全部文字或 TTS 结束后发送。
@@ -111,7 +113,7 @@ uv sync --group dev
 uv run python tools/release_gate.py
 node tests/hosted_ui_regression.cjs --node-modules ../N.E.K.O/frontend/plugin-manager/node_modules
 uv run python tools/build_package.py --host-root ../N.E.K.O
-uv run python tools/inspect_package.py ../dist/sticker_manager_v0.9.0.neko-plugin
+uv run python tools/inspect_package.py ../dist/sticker_manager_v0.9.1.neko-plugin
 ```
 
 宿主源码默认位于相邻的 `N.E.K.O` 目录。校验和元数据探测在隔离副本中执行，不安装到正在运行的宿主；产物默认写入相邻 `dist` 目录。测试、开发工具、内部文档、缓存和用户数据不进入安装包。

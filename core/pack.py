@@ -125,7 +125,7 @@ def parse_legacy_digests(raw: Any) -> list[str]:
             out.append(digest)
     return out
 
-def parse_manifest(raw: Any) -> list[PackEntry]:
+def parse_manifest(raw: Any, *, limit: int | None = PACK_MAX_ENTRIES) -> list[PackEntry]:
     """manifest.json 的顶层解析：认不出形状给空列表，能救的按原顺序救。"""
     if not isinstance(raw, Mapping):
         return []
@@ -137,7 +137,7 @@ def parse_manifest(raw: Any) -> list[PackEntry]:
         entry = pack_entry_from_raw(item)
         if entry is not None:
             out.append(entry)
-        if len(out) >= PACK_MAX_ENTRIES:
+        if limit is not None and len(out) >= limit:
             break
     return out
 

@@ -96,8 +96,13 @@ export function useLibraryModel(surface: Surface) {
   };
   const reportFailure = (error: unknown) => {
     const raw = error instanceof Error ? error.message : String(error ?? "failed");
+    const code = extractCode(raw);
     setLibraryNote(t("panel.toast.failed", {
-      code: extractCode(raw),
+      code: code === "pack_too_many_entries"
+        ? t("panel.export.too_many", {
+            defaultValue: "图库超过单包 512 张上限，未生成导出文件。",
+          })
+        : code,
       defaultValue: "操作失败：{code}",
     }));
   };
@@ -355,7 +360,7 @@ export function useLibraryModel(surface: Surface) {
             rejected: fin.rejected ?? 0,
             failed: fin.failed ?? 0,
             defaultValue:
-              "套图包导入完成：收进 {imported}、重复跳过 {duplicates}、坏图/超限 {rejected}、失败 {failed}",
+              "套图包导入完成：收进 {imported}、重复跳过 {duplicates}、拒收（坏图/超限/跨区分类冲突）{rejected}、失败 {failed}",
           }) + targetZoneNote(targetName),
         );
       }
