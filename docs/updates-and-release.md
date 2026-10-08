@@ -133,15 +133,17 @@ CLI 等待资产就绪后，向市场发送 Release URL。市场只接受已通�
 
 ### 0.9.0 首次发行
 
-2026-10-08 已通过市场公开接口确认插件条目 `94` 的状态为 `approved`，
-首次审核已经通过；核对时 `latest_version` 为空，尚无可安装市场版本。
-维护者已明确授权发行 `0.9.0` stable。文档更新前的源码提交 `a8af51d`
-对应 [远程 Verify #16](https://github.com/qaqms/n.e.k.o_plugin_sticker_manager/actions/runs/37424452113)
-成功，核对时未发现远程 `v0.9.0` 标签。
+2026-10-08 已完成 `0.9.0` stable 发行。标签 `v0.9.0` 固定指向提交
+`02b85b8660ae563395928fcfea9cf2f803170ef5`；远程 Verify #17、标签 Verify #18
+及 Release #1 均成功，三个标准 Release 资产均已上传。
+标准 CLI 的市场发布请求返回成功，随后公开接口确认插件条目 `94` 的
+stable latest 为 `0.9.0`，版本记录 `202` 的验证状态为 `passed`。
+正式包已下载并与证据哈希、标签源码及包清单核对，记录见
+`docs/releases/0.9.0-publication.md`。不再移动或覆盖这个已发布标签。
 
 此次发行保留现有运行逻辑、默认配置、用户图库和素材分片。工具发图仍默认即时提交，
 不保证在最后一个文字气泡显示后或 TTS 播放结束后发送；精准尾部投递仍需宿主接口支持。
-发行说明见 `docs/releases/0.9.0.md`。正式发布结果以 GitHub Release 资产、
+发行说明见 `docs/releases/0.9.0.md`。后续版本同样以 GitHub Release 资产、
 标准 Release 工作流成功结果，以及市场版本列表和 stable latest 为准；
 Verify 产物和已过审条目均不能代替这些发布结果。
 

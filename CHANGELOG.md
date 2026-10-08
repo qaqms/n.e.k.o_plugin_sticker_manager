@@ -2,8 +2,10 @@
 
 ## 0.9.0
 
-- Prepare the first stable Market release after the initial repository review
-  was approved. Keep immediate tool delivery and document its reply-tail limit.
+- Publish the first stable Market release on 2026-10-08 after the initial
+  repository review was approved. Release #1 and tag Verify #18 passed;
+  Market version 0.9.0 is the verified stable latest. Keep immediate tool
+  delivery and document its reply-tail limit.
 - Use a relative test-helper import so the pinned Market Ruff policy passes
   from both the plugin root and the CI checkout parent. Remote Verify run #14
   passed on commit `7296e8b`; run #16 also passed on commit `a8af51d`.
