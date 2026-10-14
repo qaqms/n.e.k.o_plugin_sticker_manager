@@ -32,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import inspect
 import math
 import random
 import time
@@ -233,6 +234,7 @@ class StickerManagerPlugin(NekoPluginBase):
     @lifecycle(id="shutdown")
     async def on_shutdown(self, **_):
         self._note_deferred_outcomes(self._sender.cancel_pending(settings=self._settings, closing=True))
+        self._note_deferred_outcomes(await self._sender.cancel_host_pending(settings=self._settings))
         # Observe retained turns without injecting a new cue during shutdown.
         try:
             await self._awareness.observe_pending(settings=self._settings)
@@ -268,7 +270,10 @@ class StickerManagerPlugin(NekoPluginBase):
 
     def _note_deferred_outcomes(self, outcomes):
         for _source, result in outcomes:
+            if result.detail == "host_reply_tail_duplicate" or getattr(result, "delivery_recorded", False):
+                continue
             self._runstats.note_delivery(ok=result.ok, reason=result.code)
+            result.delivery_recorded = True
 
     @timer_interval(id="watch", seconds=10, name="sticker_manager watch")
     async def on_watch(self, **_):
@@ -1076,8 +1081,10 @@ class StickerManagerPlugin(NekoPluginBase):
         隐私纪律：她的检索词只落长度；分类名是主人自己写的目录键，落原名——
         "她挑了哪个分类、挑空了几次"正是本轮要看的东西。
         """
+        delivery_recorded = result.pop("_delivery_recorded", False)
         reason = self._runstats.note_tool_call(
-            name=name, gave=gave, result=result, group=group, query_len=query_len
+            name=name, gave=gave, result=result, group=group, query_len=query_len,
+            **({"count_delivery": False} if delivery_recorded else {}),
         )
         if reason:
             outcome = f"refused reason={reason}"
@@ -1212,7 +1219,11 @@ class StickerManagerPlugin(NekoPluginBase):
             return False
         catalog = self._send_tool_catalog()
         description = build_send_tool_description(catalog, self._settings.send.eagerness)
-        if str(previous.get("description") or "") == description:
+        tail_supported = "reply_tail" in inspect.signature(register).parameters
+        if (
+            str(previous.get("description") or "") == description
+            and (not tail_supported or previous.get("reply_tail") is True)
+        ):
             return True
         params = {
             "name": _SEND_TOOL_NAME,
@@ -1221,6 +1232,7 @@ class StickerManagerPlugin(NekoPluginBase):
             "handler": self.tool_sticker_send,
             "timeout": float(previous.get("timeout_seconds") or 20.0),
             "role": previous.get("role"),
+            **({"reply_tail": True} if tail_supported else {}),
         }
         try:
             unregister(_SEND_TOOL_NAME)
@@ -1277,7 +1289,8 @@ class StickerManagerPlugin(NekoPluginBase):
                     "maxLength": SEND_TEXT_MAX_CHARS,
                     "description": (
                         "额外配文（可选）：先单独发文字，再单独发图片。"
-                        "正常文字回复时仍可调用 sticker_send(group=分类名) 配一张独立表情包，text 无需填写；"
+                        "正常文字回复时仍可实际调用工具 sticker_send，group 填分类名，配一张独立表情包，text 无需填写；"
+                        "正文和配文不写工具名、参数或选图过程。"
                         "只有额外配文才填 text，配文不要在正文重复"
                     ),
                 },
@@ -2175,6 +2188,7 @@ class StickerManagerPlugin(NekoPluginBase):
                 "reason": "text_too_long",
                 "hint": f"配文最多 {SEND_TEXT_MAX_CHARS} 字：那句话太长就别写在这里，正常回文字就好。",
             }
+        host_reply = _host_reply_from_kwargs(kwargs) if _source == "tool" else None
         result = await self._sender.send(
             sticker,
             lanlan=lanlan,
@@ -2183,18 +2197,22 @@ class StickerManagerPlugin(NekoPluginBase):
             now=time.time(),
             force=bypass,
             text=caption,
+            **({"host_reply": host_reply} if host_reply is not None else {}),
         )
         if not result.ok:
-            self._sender.note_attempt_failed(
-                lanlan=lanlan,
-                sticker_id=sticker.id,
-                code=result.code,
-                settings=self._settings,
-                now=time.time(),
-                source=_source,
-                **({"text_submitted": True} if result.text_submitted else {}),
-            )
+            if not getattr(result, "failure_recorded", False):
+                self._sender.note_attempt_failed(
+                    lanlan=lanlan,
+                    sticker_id=sticker.id,
+                    code=result.code,
+                    settings=self._settings,
+                    now=time.time(),
+                    source=_source,
+                    **({"text_submitted": True} if result.text_submitted else {}),
+                )
             out: dict[str, Any] = {"ok": False, "reason": result.code, "tried": sticker.id}
+            if getattr(result, "delivery_recorded", False):
+                out["_delivery_recorded"] = True
             hint = _SEND_HINTS.get(result.code)
             if hint:
                 out["hint"] = hint
@@ -2203,6 +2221,23 @@ class StickerManagerPlugin(NekoPluginBase):
                 out["hint"] = "配文已提交，但图片未提交成功。不要重复发送这段配文，继续正常回复。"
             return out
         if result.queued:
+            if result.detail.startswith("host_reply_tail"):
+                tail_note = (
+                    "表情包登记结果暂未确认；如宿主接受，将排在本轮全部文字之后。"
+                    if result.detail == "host_reply_tail_uncertain"
+                    else "表情包已登记，等待本轮全部文字显示后再投递。"
+                )
+                return {
+                    "ok": True,
+                    "sent": "",
+                    "queued": sticker.id,
+                    "desc": sticker.catalog_body(self._library.group_descs()),
+                    "note": (
+                        tail_note
+                        + "继续正常回复，不要等待或重复提交这张图。"
+                        + NEXT_STEP_NOTE.removeprefix("表情包已提交到聊天，")
+                    ),
+                }
             return {
                 "ok": True,
                 "sent": "",
@@ -2214,6 +2249,8 @@ class StickerManagerPlugin(NekoPluginBase):
                     + NEXT_STEP_NOTE.removeprefix("表情包已提交到聊天，")
                 ),
             }
+        if result.detail == "host_reply_tail_duplicate":
+            return {"ok": True, "sent": "", "note": "同一轮这张图已登记，不必再次发送。"}
         return {
             "ok": True,
             "sent": sticker.id,
@@ -2236,6 +2273,7 @@ class StickerManagerPlugin(NekoPluginBase):
         self._settings = StickerManagerSettings.from_config(config if isinstance(config, dict) else {})
         if not self._settings.enabled:
             self._note_deferred_outcomes(self._sender.cancel_pending(settings=self._settings))
+            self._note_deferred_outcomes(await self._sender.cancel_host_pending(settings=self._settings))
         return self._settings
 
     def _pick_for_send(self, sticker_id: Any, lanlan: str) -> tuple[Sticker | None, Any | None]:
@@ -2251,8 +2289,22 @@ class StickerManagerPlugin(NekoPluginBase):
         return sticker, None
 
 
+def _host_reply_from_kwargs(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    ctx_obj = kwargs.get("_ctx")
+    value = ctx_obj.get("host_reply") if isinstance(ctx_obj, dict) else None
+    if not isinstance(value, dict) or type(value.get("version")) is not int or value["version"] != 1:
+        return None
+    required = ("reply_id", "request_id", "role", "call_id", "source", "token")
+    if not all(isinstance(value.get(key), str) and value[key].strip() for key in required):
+        return None
+    return dict(value)
+
+
 def _lanlan_from_kwargs(kwargs: dict[str, Any]) -> str:
-    """从入口/工具收到的 `_ctx` 里取角色名（宿主每次调用都会注入）。"""
+    """Use the original host reply's role, then the legacy entry hint."""
+    host_reply = _host_reply_from_kwargs(kwargs)
+    if host_reply is not None:
+        return host_reply["role"]
     ctx_obj = kwargs.get("_ctx") if isinstance(kwargs, dict) else None
     if isinstance(ctx_obj, dict):
         name = ctx_obj.get("lanlan_name")

@@ -116,15 +116,16 @@ def effective_inject_interval_n(tier: str, configured: int) -> int:
 # 这条**不提任何闸**（冷却/去重/概率在拒绝那一刻由 `_SEND_HINTS` 就地说，陷阱 29）。
 NEXT_STEP_NOTE = (
     "表情包已提交到聊天，继续正常文字回复，不复述额外配文。"
-    "后续互动想配图时仍可调用 sticker_send(group=分类名)，text 留空即可；没合适的就纯文字。"
+    "正文和配文不写工具名、参数或选图过程。"
+    "后续互动想配图时仍可实际调用工具 sticker_send，group 填分类名，text 留空即可；没合适的就纯文字。"
 )
 
 
 def injection_pointer(tier: str) -> str:
     """注入正文里点名那一句（v0.19.0）：说清"现在就可以调它"，而不是"去看说明"。"""
     return (
-        "回复有情绪或轻松互动时，按你想表达的态度选分类，调用 sticker_send(group=分类名)。"
-        "正常文字回复照常说，text 留空即可，图片独立发送；没有合适的就纯文字。"
+        "配图时实际调用工具 sticker_send，group 填分类名；正文和配文不写工具名、参数或选图过程。"
+        "正常文字回复照常说，text 留空即可，图片独立发送；不贴切就纯文字。"
     )
 
 

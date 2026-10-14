@@ -163,8 +163,9 @@ def test_dynamic_registration_keeps_real_schema_and_positive_group_only_guidance
 def test_injection_pointer_explicitly_allows_normal_reply_plus_group_only_image(tier):
     pointer = injection_pointer(tier)
     assert _INDEPENDENT_GUIDANCE in pointer
-    assert "sticker_send(group=分类名)" in pointer and "text 留空即可" in pointer
-    assert "没有合适的就纯文字" in pointer
+    assert "实际调用工具 sticker_send，group 填分类名" in pointer and "text 留空即可" in pointer
+    assert pointer.startswith("配图时")
+    assert "不贴切就纯文字" in pointer
 
 
 @pytest.mark.parametrize("tier,interval", [

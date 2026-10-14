@@ -1,5 +1,77 @@
 # Changelog
 
+## 0.9.2
+
+- Publish the current reply-tail experiment and panel improvements under the
+  requested version 0.9.2; synchronize plugin, project and lockfile versions.
+- With the matching host capability, place the sticker after the original
+  main-chat text queue, final text presentation and entry animation finish.
+  This does not wait for TTS playback completion.
+- Retain the tool-call narration guidance from the local beta.2 experiment.
+  Hosts without the new capability continue using immediate image delivery.
+- Publish on a separate reply-tail branch, preserving the independently
+  developed remote main. Importing this plugin alone cannot enable accurate
+  tail delivery on an unchanged Steam host.
+
+## 0.21.0-beta.2
+
+- Clarify that sending a sticker requires an actual tool call, not a written
+  action annotation. Keep tool names, arguments and selection narration out
+  of ordinary replies and optional captions.
+- Replace function-style examples in the standing tool description, hidden
+  reminders, send receipts and legacy send schema. Preserve tier permissions,
+  reminder timing, send gates, schemas, `blind` images and reply-tail behavior.
+- Keep the eager event reminder within its existing 220-character budget.
+  This is prompt guidance, not an output filter or a guarantee of model compliance.
+- Preserve the beta.1 package and the active test installation. The user
+  imports this update; no host source or conversation history is rewritten.
+
+## 0.21.0-beta.1
+
+- Add an experimental main-text reply-tail path using the host-issued original
+  reply capability and `ctx.reply_tail`. Register only the selected image and
+  return promptly; normal reply text stays on its existing channel.
+- Keep old hosts on the existing immediate path. A valid capability followed
+  by a rejected or uncertain registration never triggers an immediate resend.
+  Query or cancel the original registration instead.
+- Keep tool images `blind` and preserve inline GIF bytes. Count usage and
+  cooldown once on confirmed host WebSocket submission, not on registration
+  or on the later polling time; this is not a frontend display acknowledgement.
+- Preserve v0.20.17 panel changes, eagerness, probability, deduplication,
+  reminder timing and Agent routing. Add `send.host_reply_tail=true` as a
+  capability-gated setting; keep `defer_tool_sends=false`.
+- This prerelease accompanies a local host prototype in the `neko kaifa7`
+  copy only. Importing this plugin alone into an unchanged Steam host does
+  not enable accurate tail delivery. No automatic installation is performed.
+
+## 0.20.17
+
+- Make the library the default workspace, with separate sending settings and
+  runtime status views, category navigation and compact management controls.
+- Expand zone management and category descriptions on demand to keep the
+  narrow-screen workspace focused on images.
+- Keep batch actions and feedback available while browsing; distinguish hidden
+  selections and process large selections in batches of at most 200 IDs.
+- Freeze the target zone for category creation and imports, preserve failed
+  drafts, prevent duplicate management requests and distinguish refresh errors
+  from successful writes.
+- Add explicit image retry and decode-error handling, keyboard-accessible image
+  buttons and named selection controls, with focus restored on detail return.
+- Preserve the v0.20.16 detail workflow, existing host protocol, sending rules,
+  configuration defaults and stored library. No Steam import is performed.
+
+## 0.20.16
+
+- Open a clicked sticker in a dedicated detail workspace instead of inserting
+  its details above the entire library. Keep the library view state and restore
+  the browsing position when returning.
+- Bound full-size previews to the available panel width, use explicit CSS
+  length units in raw DOM styles, and keep the original GIF animation in details.
+- Keep failed edits and deletes in their current workspace, reset cancelled
+  drafts, and prevent duplicate submissions while an action is pending.
+- Preserve the existing library, user configuration, main-chat tools, sending
+  behavior, reminder settings and host boundaries. No Steam import is performed.
+
 ## 0.20.15
 
 - Refine only the eager tier's main-chat decision, trigger and reminder wording.

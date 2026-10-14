@@ -18,6 +18,8 @@ enabled = false
 [sticker_manager.send]
 # 同一角色卡两次发送之间的最小间隔（秒）。
 cooldown_sec = 20.0
+# 仅新宿主提供可信本轮上下文时请求准确尾发；旧宿主保持即时发送。
+host_reply_tail = true
 # 工具选图默认即时发送；true 沿用回复后排队，下一轮输入可能取消待发图。
 defer_tool_sends = false
 # 仅排队发送：生成结束后的逐段显示兼容缓冲（秒，0..30），不代表前端或 TTS 真正结束。

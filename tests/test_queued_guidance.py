@@ -50,7 +50,7 @@ def test_queued_guidance_only_limits_same_turn_same_image(tmp_path, monkeypatch,
     assert "本轮回复与显示缓冲结束后" in note
     assert "继续正常回复，无需等待" in note
     assert NEXT_STEP_NOTE.removeprefix("表情包已提交到聊天，") in note
-    assert "后续互动想配图时仍可调用 sticker_send(group=分类名)" in note
+    assert "后续互动想配图时仍可实际调用工具 sticker_send，group 填分类名" in note
     assert "group + text" not in note
     assert "继续正常文字回复" in note
     assert "text 留空即可" in note

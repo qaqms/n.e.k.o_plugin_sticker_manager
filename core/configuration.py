@@ -70,6 +70,8 @@ class SendSettings:
 
     # 同一角色卡两次发送之间的最小间隔（秒）。防刷屏，也防模型连着甩图。
     cooldown_sec: float = 20.0
+    # Only a host-issued text-reply capability enables ordered tail delivery.
+    host_reply_tail: bool = True
     # 默认即时投递工具选图；显式打开才沿用日志驱动的回复后排队。
     defer_tool_sends: bool = False
     # 生成结束后给前端逐段冒字留的兼容缓冲；不是前端/TTS 完成信号。0 = 不额外等待。
@@ -174,6 +176,9 @@ class StickerManagerSettings:
         return cls(
             enabled=_as_bool(section.get("enabled"), False),
             send=SendSettings(
+                host_reply_tail=_as_bool(
+                    send_raw.get("host_reply_tail"), send_default.host_reply_tail,
+                ),
                 defer_tool_sends=_as_bool(
                     send_raw.get("defer_tool_sends"), send_default.defer_tool_sends,
                 ),

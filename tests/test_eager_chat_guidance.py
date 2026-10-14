@@ -1,5 +1,5 @@
 # pyright: reportMissingImports=false
-"""Eager-only prompt changes preserve the delivered 0.20.14 runtime contracts."""
+"""Shared tool-call guidance preserves tier permissions and runtime contracts."""
 
 from __future__ import annotations
 
@@ -55,13 +55,14 @@ _UNCHANGED_014 = {
         "note": " 贴切就配一张，不贴切就别硬找。",
     },
 }
-_SHARED_POINTER_014 = (
-    "回复有情绪或轻松互动时，按你想表达的态度选分类，调用 sticker_send(group=分类名)。"
-    "正常文字回复照常说，text 留空即可，图片独立发送；没有合适的就纯文字。"
+_SHARED_POINTER = (
+    "配图时实际调用工具 sticker_send，group 填分类名；正文和配文不写工具名、参数或选图过程。"
+    "正常文字回复照常说，text 留空即可，图片独立发送；不贴切就纯文字。"
 )
-_NEXT_STEP_014 = (
+_NEXT_STEP = (
     "表情包已提交到聊天，继续正常文字回复，不复述额外配文。"
-    "后续互动想配图时仍可调用 sticker_send(group=分类名)，text 留空即可；没合适的就纯文字。"
+    "正文和配文不写工具名、参数或选图过程。"
+    "后续互动想配图时仍可实际调用工具 sticker_send，group 填分类名，text 留空即可；没合适的就纯文字。"
 )
 
 
@@ -79,9 +80,9 @@ def test_non_eager_text_is_byte_for_byte_014_baseline(tier):
 
 
 @pytest.mark.parametrize("tier", ["reserved", "natural", "eager"])
-def test_shared_pointer_and_next_step_keep_014_baseline(tier):
-    assert injection_pointer(tier) == _SHARED_POINTER_014
-    assert NEXT_STEP_NOTE == _NEXT_STEP_014
+def test_shared_pointer_and_next_step_distinguish_actual_calls_from_reply_text(tier):
+    assert injection_pointer(tier) == _SHARED_POINTER
+    assert NEXT_STEP_NOTE == _NEXT_STEP
 
 
 @pytest.mark.parametrize("junk", ["wild", None, ["eager"]])
@@ -110,7 +111,7 @@ def test_eager_tool_surface_prioritizes_fitting_image_for_ordinary_chat():
     assert "无贴切分类、信息问答或正经办事就纯文字" in description
     assert "单回复最多一张" in description
     assert "正常文字回复照常说，text 留空即可，图片独立发送" in description
-    assert "日常只需 sticker_send(group=分类名)" in description
+    assert "实际调用工具 sticker_send，group 填分类名" in description
 
 
 def test_eager_guidance_has_no_turn_quota_or_indiscriminate_fill():
@@ -126,7 +127,7 @@ def test_eager_reminder_budget_covers_190_stickers_and_both_triggers(event):
     assert "190 张表情包" in text
     assert "贴切就优先配一张，不等要图，文字说清也别省掉" in text
     assert "分清安慰与自述，不贴切或正经办事纯文字，单回复最多一张" in text
-    assert _SHARED_POINTER_014 in text
+    assert _SHARED_POINTER in text
     assert len(text) < 220
     assert text.startswith("（表情包点名）") is event
 
@@ -166,7 +167,7 @@ def test_actual_awareness_push_gets_eager_text_without_changing_cadence_or_trans
     text = call["parts"][0]["text"]
     assert "贴切就优先配一张，不等要图，文字说清也别省掉" in text
     assert "分清安慰与自述" in text and "单回复最多一张" in text
-    assert _SHARED_POINTER_014 in text
+    assert _SHARED_POINTER in text
     assert text.startswith("（表情包点名）") is (trigger == "signal")
     assert awareness.turns_seen == len(texts)
     assert awareness.trigger_counts == {trigger: 1}

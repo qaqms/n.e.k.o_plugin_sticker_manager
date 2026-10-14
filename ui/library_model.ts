@@ -19,6 +19,8 @@ import {
 } from "./shared";
 import type { Section, Surface, ZoneInfo } from "./shared";
 
+const BATCH_ACTION_LIMIT = 200;
+
 function readFileChunk(blob: any): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -37,6 +39,10 @@ export function useLibraryModel(surface: Surface) {
   const confirm = useConfirm();
   const [query, setQuery] = useState("");
   const [libraryNote, setLibraryNote] = useState("");
+  const [pending, setPending] = useState("");
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const busyRef = useRef("");
+  const refreshFailedRef = useRef(false);
   const [uploading, setUploading] = useState(false);
   const [selected, setSelected] = useState<string[]>([]);
   const [batchTags, setBatchTags] = useState("");
@@ -50,14 +56,17 @@ export function useLibraryModel(surface: Surface) {
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [collectBusy, setCollectBusy] = useState(false);
-  // v0.9.1：详情载体是聚焦卡（库卡顶部就地展开），不是弹窗——kit Modal 在宿主里平台级残废。
+  // 详情替换图库工作区；模型常驻，浏览条件与选择不随详情卸载。
   const [focus, setFocus] = useState("");
+  const browsePositionRef = useRef<{ id: string; x: number; y: number } | null>(null);
+  const restorePositionRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const zipInputRef = useRef<any>(null);
   // 轮 I：全库共用**一个**隐藏图片输入框，目标分类走 ref 而不是 state——
   // “点区块头收图→click()→onChange” 三步里 onChange 的闭包可能抓到旧 state，
   // ref 赋值当场生效，不靠重渲染传参。
   const imgInputRef = useRef<any>(null);
   const collectTargetRef = useRef<string>("");
+  const collectZoneRef = useRef<string>("");
   // 收图的目标区也走 ref（与目标分类同一条闭包坑：click()→onChange 三步里 state 可能是旧的）。
   const viewZoneRef = useRef<string>("");
   // J-1：区（分类的上层）。`viewZone` 是主人正在看的 tab；它掉了（被删/未选）就回激活区。
@@ -74,6 +83,119 @@ export function useLibraryModel(surface: Surface) {
     return false;
   };
   const view = zoneExists(viewZone) ? viewZone : activeZone;
+  const beginTask = (action: string, clearNote = true) => {
+    if (busyRef.current || (refreshFailedRef.current && action !== "refresh")) return false;
+    busyRef.current = action;
+    setPending(action);
+    if (clearNote) setLibraryNote("");
+    return true;
+  };
+  const endTask = () => {
+    busyRef.current = "";
+    setPending("");
+  };
+  const reportFailure = (error: unknown) => {
+    const raw = error instanceof Error ? error.message : String(error ?? "failed");
+    setLibraryNote(t("panel.toast.failed", {
+      code: extractCode(raw),
+      defaultValue: "操作失败：{code}",
+    }));
+  };
+  const targetZoneNote = (name: string) => t("panel.operation.target_zone", {
+    name,
+    defaultValue: "（目标区：{name}）",
+  });
+  const zoneName = (id: string) =>
+    String(zonesList.find((zone) => zone.id === id)?.name || id);
+  const reportRefreshFailure = () => {
+    refreshFailedRef.current = true;
+    setRefreshFailed(true);
+  };
+  const clearRefreshFailure = () => {
+    refreshFailedRef.current = false;
+    setRefreshFailed(false);
+  };
+  const refreshAfterAction = async () => {
+    try {
+      await surface.api.refresh();
+      clearRefreshFailure();
+      return true;
+    } catch {
+      reportRefreshFailure();
+      return false;
+    }
+  };
+  const retryRefresh = async () => {
+    if (!beginTask("refresh", false)) return;
+    try {
+      await refreshAfterAction();
+    } finally {
+      endTask();
+    }
+  };
+  const openFocus = (id: string) => {
+    const scrolling = document.scrollingElement || document.documentElement;
+    browsePositionRef.current = {
+      id,
+      x: window.scrollX || scrolling.scrollLeft || 0,
+      y: window.scrollY || scrolling.scrollTop || 0,
+    };
+    restorePositionRef.current = null;
+    setFocus(id);
+  };
+  const closeFocus = () => {
+    restorePositionRef.current = browsePositionRef.current;
+    setFocus("");
+  };
+  const switchViewZone = (id: string) => {
+    if (id === view) return;
+    browsePositionRef.current = null;
+    restorePositionRef.current = null;
+    setFocus("");
+    setSelected([]);
+    setBatchGroup("");
+    setViewZone(id);
+  };
+  useEffect(() => {
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        if (focus) {
+          document.getElementById("sticker-focus-workspace")?.scrollIntoView({
+            block: "start",
+            behavior: "auto",
+          });
+          window.scrollTo(0, 0);
+          document.getElementById("sticker-focus-back")
+            ?.querySelector?.<HTMLButtonElement>("button")?.focus?.({ preventScroll: true });
+          return;
+        }
+        const position = restorePositionRef.current;
+        if (!position) return;
+        // scrollIntoView also brings an externally scrolled iframe back to its tile.
+        document.getElementById(`sticker-tile-${position.id}`)?.scrollIntoView({
+          block: "nearest",
+          behavior: "auto",
+        });
+        window.scrollTo(position.x, position.y);
+        document.getElementById(`sticker-open-${position.id}`)?.focus?.({ preventScroll: true });
+        restorePositionRef.current = null;
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      window.cancelAnimationFrame(secondFrame);
+    };
+  }, [focus]);
+  useEffect(() => {
+    const rows = (surface.state && surface.state.stickers) || [];
+    setSelected((previous) => {
+      const next = previous.filter((id) =>
+        rows.some((row) => row.id === id && String(row.zone || "") === view),
+      );
+      return next.length === previous.length ? previous : next;
+    });
+  }, [surface.state, view]);
   // 当场同步给 ref：收图/导入的闭包落点永远跟当前视图一致。
   viewZoneRef.current = view;
   useEffect(() => {
@@ -90,7 +212,7 @@ export function useLibraryModel(surface: Surface) {
     doneDefault: string,
     params?: Record<string, unknown>,
   ) => {
-    setLibraryNote("");
+    if (!beginTask(actionId)) return false;
     try {
       const result = await callAction(
         surface,
@@ -111,18 +233,13 @@ export function useLibraryModel(surface: Surface) {
       }
       setLibraryNote(t(doneKey, extra));
       setSelected([]);
-      await surface.api.refresh();
+      await refreshAfterAction();
       return true;
     } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setLibraryNote(
-        t("panel.toast.failed", {
-          code: extractCode(raw),
-          defaultValue: "操作失败：{code}",
-        }),
-      );
+      reportFailure(error);
       return false;
+    } finally {
+      endTask();
     }
   };
   const createZone = (name: string, desc: string) =>
@@ -140,7 +257,8 @@ export function useLibraryModel(surface: Surface) {
     zoneAction("zone_restore_official", {}, "panel.zone.restored", "官方收藏已恢复：收了 {count} 张");
 
   const exportPack = async () => {
-    setLibraryNote("");
+    if (!beginTask("export_pack")) return;
+    setLibraryNote(t("panel.export.busy", { defaultValue: "正在导出…" }));
     try {
       const result = await callAction(surface, "export_pack", {}, LONG_CALL);
       if (result) {
@@ -154,19 +272,15 @@ export function useLibraryModel(surface: Surface) {
         );
       }
     } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setLibraryNote(
-        t("panel.toast.failed", {
-          code: extractCode(raw),
-          defaultValue: "操作失败：{code}",
-        }),
-      );
+      reportFailure(error);
+    } finally {
+      endTask();
     }
   };
 
   const repair = async () => {
-    setLibraryNote("");
+    if (!beginTask("repair")) return;
+    setLibraryNote(t("panel.repair.busy", { defaultValue: "正在体检与修复…" }));
     try {
       const result = await callAction(surface, "repair", {});
       if (result) {
@@ -180,16 +294,11 @@ export function useLibraryModel(surface: Surface) {
           }),
         );
       }
-      await surface.api.refresh();
+      await refreshAfterAction();
     } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setLibraryNote(
-        t("panel.toast.failed", {
-          code: extractCode(raw),
-          defaultValue: "操作失败：{code}",
-        }),
-      );
+      reportFailure(error);
+    } finally {
+      endTask();
     }
   };
 
@@ -199,11 +308,11 @@ export function useLibraryModel(surface: Surface) {
   // 套图包直传（v0.6.0）：选择 .zip → 分块上传 → 服务端同一把尺导入。
   // 分块大小由服务端 start 回包定（与预览共用同一条 ZMQ 帧尺），面板不硬编码。
   const importZip = async (file: any) => {
-    if (uploading) {
-      return;
-    }
+    if (!beginTask("import_zip")) return;
+    const targetZone = viewZoneRef.current;
+    const targetName = zoneName(targetZone);
     setUploading(true);
-    setLibraryNote("");
+    setLibraryNote(t("panel.upload.starting", { defaultValue: "正在准备上传…" }) + targetZoneNote(targetName));
     try {
       const start = await callAction(surface, "import_upload_start", {
         name: file.name,
@@ -228,13 +337,14 @@ export function useLibraryModel(surface: Surface) {
             done: seq,
             total,
             defaultValue: "上传中 {done}/{total}…",
-          }),
+          }) + targetZoneNote(targetName),
         );
       }
+      setLibraryNote(t("panel.upload.importing", { defaultValue: "上传完成，正在导入…" }) + targetZoneNote(targetName));
       const fin = await callAction(
         surface,
         "import_upload_finish",
-        { session: sid },
+        { session: sid, zone: targetZone },
         LONG_CALL,
       );
       if (fin) {
@@ -246,54 +356,44 @@ export function useLibraryModel(surface: Surface) {
             failed: fin.failed ?? 0,
             defaultValue:
               "套图包导入完成：收进 {imported}、重复跳过 {duplicates}、坏图/超限 {rejected}、失败 {failed}",
-          }),
+          }) + targetZoneNote(targetName),
         );
       }
-      await surface.api.refresh();
+      await refreshAfterAction();
     } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setLibraryNote(
-        t("panel.toast.failed", {
-          code: extractCode(raw),
-          defaultValue: "操作失败：{code}",
-        }),
-      );
+      reportFailure(error);
+    } finally {
+      setUploading(false);
+      endTask();
     }
-    setUploading(false);
   };
 
   // 轮 G：分组说明编辑（“分类即 prompt”的一句维护入口），就地挂在区块头上。
   const saveGroupDesc = async () => {
-    if (!descEditing) {
-      return;
-    }
-    setLibraryNote("");
+    if (!descEditing || !beginTask("group_set_desc")) return;
+    const group = descEditing;
+    const desc = descDraft.trim();
     try {
       await callAction(surface, "group_set_desc", {
-        group: descEditing,
-        desc: descDraft.trim(),
+        group,
+        desc,
       });
       setLibraryNote(
         t("panel.group.desc_saved", { defaultValue: "分组说明已更新" }),
       );
-      setDescEditing("");
-      await surface.api.refresh();
+      setDescEditing((current) => current === group ? "" : current);
+      await refreshAfterAction();
     } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setLibraryNote(
-        t("panel.toast.failed", {
-          code: extractCode(raw),
-          defaultValue: "操作失败：{code}",
-        }),
-      );
+      reportFailure(error);
+    } finally {
+      endTask();
     }
   };
 
   // 轮 I：分类优先——先立分类（名字必填、说明可空），再往分类里收图。
   // 逐图字段（描述/梗义/标签）不在收图时问：收完点开图在聚焦卡里补。
   const createCategory = async () => {
+    if (busyRef.current) return;
     const name = String(newName || "").trim();
     if (!name) {
       setLibraryNote(
@@ -301,17 +401,20 @@ export function useLibraryModel(surface: Surface) {
       );
       return;
     }
-    setLibraryNote("");
+    if (!beginTask("group_create")) return;
+    const targetZone = viewZoneRef.current;
+    const targetName = zoneName(targetZone);
     try {
       await callAction(surface, "group_create", {
         group: name,
         desc: String(newDesc || "").trim(),
+        zone: targetZone,
       });
       setLibraryNote(
         t("panel.group.created", {
           name: name,
           defaultValue: "分类「{name}」已建好——点它块头的「收图」往里塞表情。",
-        }),
+        }) + targetZoneNote(targetName),
       );
       setNewName("");
       setNewDesc("");
@@ -319,16 +422,11 @@ export function useLibraryModel(surface: Surface) {
       // 防“建完了但屏幕上看不到”：搜索词会把零张新区块筛掉（它不命中分类名），
       // 刚建的分类应当当场就在眼前。
       setQuery("");
-      await surface.api.refresh();
+      await refreshAfterAction();
     } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setLibraryNote(
-        t("panel.toast.failed", {
-          code: extractCode(raw),
-          defaultValue: "操作失败：{code}",
-        }),
-      );
+      reportFailure(error);
+    } finally {
+      endTask();
     }
   };
 
@@ -340,27 +438,25 @@ export function useLibraryModel(surface: Surface) {
 
   // 删分类 = 连带删它里的图（主人拍板 1C）：确认里先把精确张数摊开。
   const removeCategory = async (section: Section) => {
-    const answer = await confirm({
-      title: t("panel.group.delete_title", { defaultValue: "删分类" }),
-      message: section.total
-        ? t("panel.group.delete_message", {
-            name: section.name,
-            count: section.total,
-            defaultValue:
-              "将拆掉分类「{name}」，连带删它里的 {count} 张图与文件，不可恢复。",
-          })
-        : t("panel.group.delete_message_empty", {
-            name: section.name,
-            defaultValue:
-              "删掉空分类「{name}」？（它里面对她不可见，不会影哿发图）",
-          }),
-      tone: "danger",
-    });
-    if (!answer) {
-      return;
-    }
-    setLibraryNote("");
+    if (!beginTask("group_remove")) return;
     try {
+      const answer = await confirm({
+        title: t("panel.group.delete_title", { defaultValue: "删分类" }),
+        message: section.total
+          ? t("panel.group.delete_message", {
+              name: section.name,
+              count: section.total,
+              defaultValue:
+                "将拆掉分类「{name}」，连带删它里的 {count} 张图与文件，不可恢复。",
+            })
+          : t("panel.group.delete_message_empty", {
+              name: section.name,
+              defaultValue:
+                "删掉空分类「{name}」？（它里面对她不可见，不会影哿发图）",
+            }),
+        tone: "danger",
+      });
+      if (!answer) return;
       const result = await callAction(
         surface,
         "group_remove",
@@ -376,60 +472,58 @@ export function useLibraryModel(surface: Surface) {
       );
       setSelected([]);
       // 聚焦卡不需要手动收：删掉的图不在 state.stickers 里，focusRow 自然为空。
-      await surface.api.refresh();
+      await refreshAfterAction();
     } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setLibraryNote(
-        t("panel.toast.failed", {
-          code: extractCode(raw),
-          defaultValue: "操作失败：{code}",
-        }),
-      );
+      reportFailure(error);
+    } finally {
+      endTask();
     }
   };
 
   // 轮 I（2A）：收图分散到区块头。目标分类走 ref 传递（见 collectTargetRef 注释）；
   // 逐张走已测的 add 通道（魔数/查重/体积尺全复用）。
   const collectInto = (group: string) => {
+    if (busyRef.current || refreshFailedRef.current) return;
     collectTargetRef.current = group;
+    collectZoneRef.current = viewZoneRef.current;
     if (imgInputRef.current) {
       imgInputRef.current.click();
     }
   };
 
-  const importFiles = async (files: any, group: string) => {
+  const importFiles = async (files: any, group: string, targetZone: string) => {
     const list: any[] = Array.from(files || []);
-    if (!list.length || collectBusy) {
-      return;
-    }
+    if (!list.length || !beginTask("collect")) return;
     const taken = list.slice(0, MAX_BATCH_FILES);
+    const targetName = zoneName(targetZone);
     setCollectBusy(true);
-    setLibraryNote("");
     let ok = 0;
     let dup = 0;
     let big = 0;
     let fail = 0;
-    for (let i = 0; i < taken.length; i += 1) {
-      const file = taken[i];
-      if (Number(file.size) > MAX_STICKER_BYTES) {
-        big += 1;
-      } else {
-        const b64 = dataUrlToBase64(await readAsDataUrl(file));
-        if (b64) {
+    try {
+      for (let i = 0; i < taken.length; i += 1) {
+        const file = taken[i];
+        if (Number(file.size) > MAX_STICKER_BYTES) {
+          big += 1;
+        } else {
           try {
-            // 收图不问逐图字段：desc 交空串，目录正文按轮 F 那把尺回落到分类说明。
-            // （不再拿文件名当描述：外部包的哈希名会把自已在目录里压到分类说明头上。）
-            const result = await callAction(surface, "add", {
-              data_base64: b64,
-              desc: "",
-              group: group,
-              zone: viewZoneRef.current,
-            });
-            if (result && result.note === "sticker_added") {
-              ok += 1;
-            } else {
+            const b64 = dataUrlToBase64(await readAsDataUrl(file));
+            if (!b64) {
               fail += 1;
+            } else {
+              // 收图不问逐图字段；分类说明承担未标注图片的目录正文。
+              const result = await callAction(surface, "add", {
+                data_base64: b64,
+                desc: "",
+                group,
+                zone: targetZone,
+              });
+              if (result && result.note === "sticker_added") {
+                ok += 1;
+              } else {
+                fail += 1;
+              }
             }
           } catch (error) {
             const raw =
@@ -440,48 +534,48 @@ export function useLibraryModel(surface: Surface) {
               fail += 1;
             }
           }
-        } else {
-          fail += 1; // 空 base64：读不出内容，计失败
         }
+        setLibraryNote(
+          t("panel.collect.busy", {
+            done: i + 1,
+            total: taken.length,
+            defaultValue: "收藏中 {done}/{total}…",
+          }) + targetZoneNote(targetName),
+        );
       }
+      const extra = list.length - taken.length;
       setLibraryNote(
-        t("panel.collect.busy", {
-          done: i + 1,
-          total: taken.length,
-          defaultValue: "收藏中 {done}/{total}…",
-        }),
+        t("panel.collect.done", {
+          ok, dup, big, fail,
+          defaultValue:
+            "已收 {ok} · 重复跳过 {dup} · 超限略过 {big} · 失败 {fail}",
+        }) +
+          (group
+            ? t("panel.collect.into", {
+                name: group,
+                defaultValue: "（进「{name}」）",
+              })
+            : "") +
+          targetZoneNote(targetName) +
+          (extra > 0
+            ? t("panel.batch.more", {
+                extra,
+                defaultValue: "；本次未处理 {extra} 张",
+              })
+            : ""),
       );
+      await refreshAfterAction();
+    } catch (error) {
+      reportFailure(error);
+    } finally {
+      setCollectBusy(false);
+      endTask();
     }
-    setCollectBusy(false);
-    await surface.api.refresh();
-    const extra = list.length - taken.length;
-    setLibraryNote(
-      t("panel.collect.done", {
-        ok: ok,
-        dup: dup,
-        big: big,
-        fail: fail,
-        defaultValue:
-          "已收 {ok} · 重复跳过 {dup} · 超限略过 {big} · 失败 {fail}",
-      }) +
-        (group
-          ? t("panel.collect.into", {
-              name: group,
-              defaultValue: "（进「{name}」）",
-            })
-          : "") +
-        (extra > 0
-          ? t("panel.batch.more", {
-              extra: extra,
-              defaultValue: "；本次未处理 {extra} 张",
-            })
-          : ""),
-    );
   };
 
   // 隐藏输入框的落点：目标分类当场从 ref 取（轮 I 的 ref 纪律）。
   const chooseCollectedFiles = (files: any) => {
-    return importFiles(files, collectTargetRef.current);
+    return importFiles(files, collectTargetRef.current, collectZoneRef.current || viewZoneRef.current);
   };
 
   const toggleSelected = (id: string) => {
@@ -507,79 +601,124 @@ export function useLibraryModel(surface: Surface) {
     setSelected([]);
   };
 
-  const runBatch = async (patch: Record<string, unknown>) => {
-    if (!selected.length) {
-      return;
-    }
-    setLibraryNote("");
-    try {
-      const result = await callAction(surface, "batch_update", {
-        ids: selected,
-        ...patch,
-      });
-      if (result) {
-        setLibraryNote(
-          t("panel.batch.done_update", {
-            updated: result.updated ?? 0,
-            missing: (result.missing || []).length,
-            defaultValue: "批量完成：改了 {updated}、不存在/失败 {missing}",
-          }),
-        );
+  const keepVisibleSelection = (visibleIds: string[]) => {
+    const visible = new Set(visibleIds);
+    setSelected((previous) => previous.filter((id) => visible.has(id)));
+  };
+  const clearHiddenSelection = keepVisibleSelection;
+
+  const executeBatch = async (
+    actionId: "batch_update" | "batch_remove",
+    ids: string[],
+    patch: Record<string, unknown> = {},
+  ) => {
+    const successful = new Set<string>();
+    let completed = 0;
+    let missing = 0;
+    let processed = 0;
+    let failure: unknown = null;
+    for (let offset = 0; offset < ids.length; offset += BATCH_ACTION_LIMIT) {
+      const chunk = ids.slice(offset, offset + BATCH_ACTION_LIMIT);
+      setLibraryNote(t("panel.batch.progress", {
+        done: processed,
+        total: ids.length,
+        defaultValue: "批量处理中 {done}/{total}…",
+      }));
+      try {
+        const result = await callAction(surface, actionId, { ...patch, ids: chunk }, LONG_CALL);
+        const count = result && Number(actionId === "batch_remove" ? result.removed : result.updated);
+        const absent = result && Array.isArray(result.missing)
+          ? new Set<string>(result.missing.filter((id: unknown) => typeof id === "string"))
+          : null;
+        // Only acknowledge IDs when the response accounts for this entire chunk.
+        if (!absent || !Number.isInteger(count) || count < 0 ||
+            Array.from(absent).some((id) => chunk.indexOf(id) < 0) ||
+            count + absent.size !== chunk.length) {
+          throw new Error("invalid_batch_result");
+        }
+        chunk.forEach((id) => {
+          if (!absent.has(id)) successful.add(id);
+        });
+        completed += count;
+        missing += absent.size;
+        processed += chunk.length;
+      } catch (error) {
+        failure = error;
+        break;
       }
-      await surface.api.refresh();
+    }
+    return { completed, missing, remaining: ids.length - processed, successful, failure };
+  };
+
+  const batchFailureNote = (summary: {
+    completed: number;
+    missing: number;
+    remaining: number;
+    failure: unknown;
+  }) => {
+    const raw = summary.failure instanceof Error
+      ? summary.failure.message : String(summary.failure ?? "failed");
+    return t("panel.batch.partial_failed", {
+      completed: summary.completed,
+      failed: summary.missing,
+      remaining: summary.remaining,
+      code: extractCode(raw),
+      defaultValue: "批量未全部完成：成功 {completed}、失败 {failed}、结果未确认 {remaining}：{code}",
+    });
+  };
+
+  const runBatch = async (patch: Record<string, unknown>) => {
+    if (!selected.length || !beginTask("batch_update")) return;
+    const ids = selected.slice();
+    const frozenPatch = { ...patch };
+    try {
+      const summary = await executeBatch("batch_update", ids, frozenPatch);
+      setLibraryNote(summary.failure
+        ? batchFailureNote(summary)
+        : t("panel.batch.done_update", {
+            updated: summary.completed,
+            missing: summary.missing,
+            defaultValue: "批量完成：改了 {updated}、不存在/失败 {missing}",
+          }));
+      await refreshAfterAction();
     } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setLibraryNote(
-        t("panel.toast.failed", {
-          code: extractCode(raw),
-          defaultValue: "操作失败：{code}",
-        }),
-      );
+      reportFailure(error);
+    } finally {
+      endTask();
     }
   };
 
-  const batchDelete = async () => {
-    if (!selected.length) {
-      return;
-    }
-    // 对齐参考系统的破坏性确认：先把精确张数摊开，再问要不要删。
-    const answer = await confirm({
-      title: t("panel.batch.delete_title", { defaultValue: "批量删除" }),
-      message: t("panel.batch.delete_message", {
-        count: selected.length,
-        defaultValue: "将删掉 {count} 张图和它们的记录，不可恢复。",
-      }),
-      tone: "danger",
-    });
-    if (!answer) {
-      return;
-    }
-    setLibraryNote("");
+  const batchDelete = async (hiddenCount = 0) => {
+    if (!selected.length || !beginTask("batch_remove")) return;
+    const ids = selected.slice();
+    const hidden = Math.min(ids.length, Math.max(0, Math.trunc(hiddenCount) || 0));
     try {
-      const result = await callAction(surface, "batch_remove", {
-        ids: selected,
+      const answer = await confirm({
+        title: t("panel.batch.delete_title", { defaultValue: "批量删除" }),
+        message: t("panel.batch.delete_message", {
+          count: ids.length,
+          defaultValue: "将删掉 {count} 张图和它们的记录，不可恢复。",
+        }) + (hidden ? t("panel.batch.delete_hidden", {
+          hidden,
+          defaultValue: "其中 {hidden} 张不在当前筛选结果中。",
+        }) : ""),
+        tone: "danger",
       });
-      if (result) {
-        setLibraryNote(
-          t("panel.batch.delete_done", {
-            removed: result.removed ?? 0,
-            missing: (result.missing || []).length,
-            defaultValue: "已删 {removed} 张、不存在 {missing}",
-          }),
-        );
-      }
-      setSelected([]);
-      await surface.api.refresh();
+      if (!answer) return;
+      const summary = await executeBatch("batch_remove", ids);
+      setSelected((previous) => previous.filter((id) => !summary.successful.has(id)));
+      setLibraryNote(summary.failure
+        ? batchFailureNote(summary)
+        : t("panel.batch.delete_done", {
+            removed: summary.completed,
+            missing: summary.missing,
+            defaultValue: "已删 {removed} 张、不存在/失败 {missing}",
+          }));
+      await refreshAfterAction();
     } catch (error) {
-      const raw =
-        error instanceof Error ? error.message : String(error ?? "failed");
-      setLibraryNote(
-        t("panel.toast.failed", {
-          code: extractCode(raw),
-          defaultValue: "操作失败：{code}",
-        }),
-      );
+      reportFailure(error);
+    } finally {
+      endTask();
     }
   };
 
@@ -589,7 +728,7 @@ export function useLibraryModel(surface: Surface) {
     zonesList,
     activeZone,
     view,
-    setViewZone,
+    setViewZone: switchViewZone,
     officialInfo: (surface.state && surface.state.official) || {},
     createZone,
     renameZone,
@@ -597,13 +736,24 @@ export function useLibraryModel(surface: Surface) {
     activateZone,
     removeZone,
     restoreOfficial,
-    libraryNote,
+    libraryNote: refreshFailed
+      ? [libraryNote, t("panel.refresh.failed", {
+          defaultValue: "操作已完成，但列表刷新失败；请重试刷新。",
+        })].filter(Boolean).join(" ")
+      : libraryNote,
+    pending,
+    refreshFailed,
+    retryRefresh,
+    reportRefreshFailure,
+    clearRefreshFailure,
     uploading,
     collectBusy,
     selected,
     toggleSelected,
     selectSection,
     clearSelection,
+    clearHiddenSelection,
+    keepVisibleSelection,
     batchTags,
     setBatchTags,
     batchGroup,
@@ -620,7 +770,8 @@ export function useLibraryModel(surface: Surface) {
     descDraft,
     setDescDraft,
     focus,
-    setFocus,
+    openFocus,
+    closeFocus,
     zipInputRef,
     imgInputRef,
     exportPack,

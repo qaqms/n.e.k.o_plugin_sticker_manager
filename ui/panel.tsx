@@ -1,31 +1,20 @@
-// Hosted TSX 面板：表情包管理。只从 `@neko/plugin-ui` 导入，业务逻辑全在 Python 侧。
-//
-// v0.10.1 拆分：本文件只留**装配骨架**（顶栏 + 三张卡的摆位），块的去向——
-// - ui/shared.ts          类型 + 常量 + 纯函数（两处以上共用的尺）
-// - ui/preview.ts         预览缓存 / 懒加载调度 / useStickerPreview
-// - ui/library_model.ts   库卡的状态与动作闭包（无 JSX，"这张卡怎么想"）
-// - ui/components/**      区条 / 格子 / 聚焦卡 / 注入卡 / 批量条 / 分类区块 / 工具条
-// 纪律照旧：新增 t() 键必须入 i18n（契约门递归扫 ui/ 全域）；长任务走 LONG_CALL；
-// 覆盖层弹窗禁用（陷阱 20）。
-//
-// 契约要点（照 plugin/sdk/hosted-ui/index.d.ts 的精确签名写）：
-// - 动作调用返回信封 `{plugin_id, action_id, result}`，真正的返回值在 `.result`。
-// - 只能调被 @ui.action 暴露过的入口；检查器是**文本级**规则：
-//   一律写完整的 `props.xxx.api` 成员访问，绝不出现裸 `api` 标识符（含参数名与别名）。
-// - 缩略图懒加载：context 只带元数据，预览字节由 `preview` 动作按 id 现取，
-//   模块级缓存（同一 iframe 生命周期内不重复取图；坏图记空串，不重试风暴）。
+// Hosted TSX: browsing state stays mounted while the detail workspace replaces it.
 import {
   Alert,
   Button,
-  Card,
-  Divider,
   EmptyState,
+  Field,
   Inline,
   Page,
+  SegmentedControl,
+  Select,
   Stack,
   StatusBadge,
   Switch,
   Text,
+  useEffect,
+  useRef,
+  useState,
 } from "@neko/plugin-ui";
 import { AwarenessCard } from "./components/awareness_card";
 import { BatchBar } from "./components/batch_bar";
@@ -34,80 +23,222 @@ import { FocusCard } from "./components/focus_card";
 import { LibraryToolbar } from "./components/library_toolbar";
 import { ZoneBar } from "./components/zone_bar";
 import { useLibraryModel } from "./library_model";
-import { buildSections, callAction } from "./shared";
+import { buildSections, callAction, extractCode } from "./shared";
 import type { Surface } from "./shared";
+
+const PANEL_STYLES = `
+.sticker-panel { display:grid; gap:16px; min-width:0; }
+.sticker-panel * { letter-spacing:0; }
+.sticker-panel .neko-input,.sticker-panel .neko-select { max-width:100%; }
+.sticker-panel .neko-field { min-width:0; }
+.sticker-panel .neko-text { overflow-wrap:anywhere; }
+.sticker-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.sticker-workspace { display:grid; gap:16px; min-width:0; }
+.sticker-section-title { margin:0; font-size:15px; line-height:1.5; }
+.sticker-sticky { position:sticky; top:0; z-index:2; display:grid; gap:8px; padding:8px 0; background:var(--bg); border-bottom:1px solid var(--border); min-width:0; }
+.sticker-feedback { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:13px; min-width:0; }
+.sticker-feedback .neko-text { max-height:72px; overflow:auto; font-size:13px; }
+.sticker-filter-row { display:grid; grid-template-columns:minmax(160px,260px) minmax(0,1fr); gap:12px; align-items:end; }
+.sticker-category-header { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; }
+.sticker-category-name { flex:1 1 160px; min-width:0; margin:0; font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
+.sticker-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,128px),1fr)); gap:8px; min-width:0; }
+.sticker-grid > * { width:100%; max-width:176px; min-width:0; }
+.sticker-menu { width:100%; min-width:0; }
+.sticker-menu > summary { width:fit-content; padding:6px 2px; color:var(--muted); cursor:pointer; font-size:13px; }
+.sticker-menu[open] > summary { color:var(--text); }
+.sticker-menu-body { display:grid; gap:10px; padding:8px 0 0; min-width:0; }
+.sticker-menu-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.sticker-batch { display:grid; gap:6px; min-width:0; }
+.sticker-batch-main { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:8px; align-items:center; }
+.sticker-batch-move { display:grid; grid-template-columns:minmax(0,1fr) auto auto; gap:6px; min-width:0; align-items:center; }
+.sticker-batch .neko-button { padding:7px 10px; font-size:12px; }
+.sticker-batch-count { margin:0; font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
+.sticker-batch-more { max-height:min(220px,40vh); overflow:auto; padding:8px 0 0; }
+.sticker-batch .sticker-menu > summary { padding:4px 2px; }
+.sticker-settings { display:grid; gap:16px; max-width:720px; min-width:0; }
+.sticker-readouts { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); gap:12px; margin:0; min-width:0; }
+.sticker-readouts > div { display:grid; gap:4px; min-width:0; padding:8px 0; border-bottom:1px solid var(--border); }
+.sticker-readouts dt { font-size:12px; color:var(--muted); }
+.sticker-readouts dd { margin:0; font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
+.sticker-search { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:8px; }
+.sticker-search > * { min-width:0; }
+.sticker-collection-count { margin:0; font-size:13px; color:var(--muted); line-height:1.6; }
+@media (max-width:480px) {
+  .sticker-workspace { gap:12px; }
+  .sticker-workspace .neko-button { padding:7px 10px; font-size:13px; }
+  .sticker-filter-row { grid-template-columns:1fr; gap:8px; }
+  .sticker-batch-main { grid-template-columns:1fr auto; gap:6px; }
+  .sticker-batch-move { grid-template-columns:minmax(0,1fr) auto auto; }
+  .sticker-search { grid-template-columns:minmax(0,1fr) auto; }
+  .sticker-search .sticker-new-category { grid-column:1 / -1; grid-row:2; justify-self:start; }
+  .sticker-search .sticker-import { grid-column:2; grid-row:1; }
+}
+`;
 
 export default function Panel(props: Surface) {
   const state = props.state || {};
   const t = props.t;
   const lib = useLibraryModel(props);
+  const [viewTab, setViewTab] = useState("library");
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [switchBusy, setSwitchBusy] = useState(false);
+  const [switchNote, setSwitchNote] = useState("");
+  const [settingsBusy, setSettingsBusy] = useState(false);
+  const switchBusyRef = useRef(false);
+  const operationBusy = !!lib.pending || switchBusy || settingsBusy;
+  const managementBusy = operationBusy || !!lib.refreshFailed;
   const stickers = state.stickers || [];
   const groups = state.groups || [];
   const zones = lib.zonesList;
-  // J-1：主人可以浏览任意区（view tab）；她只感知激活区（activeZone）——两把尺分开。
   const view = lib.view;
-  const viewGroups = groups.filter(
-    (info: any) => String(info.zone || "") === view,
-  );
-  viewGroups.sort((a: any, b: any) => (a.count === b.count ? String(a.name).localeCompare(String(b.name)) : b.count - a.count));
-
   const term = lib.query.trim().toLowerCase();
-  const sections = buildSections(stickers, groups, term, t, view);
-  // 聚焦卡跟着最新库态走：被删/被筛掉就自动收起，不留幽灵卡。
+  const sectionValue = (group: string) => `group:${group}`;
+  const allSections = buildSections(stickers, groups, "", t, view);
+  const matchingSections = buildSections(stickers, groups, term, t, view);
+  const sections = categoryFilter
+    ? matchingSections.filter((section) => sectionValue(section.group) === categoryFilter)
+    : matchingSections;
+  const visibleIds = sections.flatMap((section) => section.rows.map((row) => row.id));
+  const matchingIds = matchingSections.flatMap((section) => section.rows.map((row) => row.id));
+  const hiddenSelected = lib.selected.filter((id) => visibleIds.indexOf(id) < 0).length;
+  const zoneTotal = stickers.filter((row) => String(row.zone || "") === view).length;
+  const activeZone = zones.filter((zone) => zone.id === lib.activeZone)[0];
   const focusRow = lib.focus
-    ? stickers.filter((row) => row.id === lib.focus)[0] || null
+    ? stickers.filter((row) => row.id === lib.focus && matchingIds.indexOf(row.id) >= 0)[0] || null
     : null;
 
+  useEffect(() => {
+    setCategoryFilter("");
+  }, [view]);
+  useEffect(() => {
+    if (categoryFilter && !allSections.some((section) => sectionValue(section.group) === categoryFilter)) {
+      setCategoryFilter("");
+    }
+  }, [categoryFilter, view, state.groups, state.stickers]);
+  useEffect(() => {
+    if (lib.focus && !focusRow) lib.closeFocus();
+  }, [lib.focus, focusRow]);
+
+  const changeEnabled = async (next: boolean) => {
+    if (switchBusyRef.current || managementBusy) return;
+    switchBusyRef.current = true;
+    setSwitchBusy(true);
+    setSwitchNote("");
+    let saved = false;
+    try {
+      await callAction(props, "switch", { enabled: next });
+      saved = true;
+      await props.api.refresh();
+      lib.clearRefreshFailure();
+    } catch (error) {
+      if (saved) {
+        lib.reportRefreshFailure();
+      } else {
+        const raw = error instanceof Error ? error.message : String(error ?? "failed");
+        const code = extractCode(raw);
+        setSwitchNote(t(`panel.error.${code}`, { defaultValue: code }));
+      }
+    } finally {
+      switchBusyRef.current = false;
+      setSwitchBusy(false);
+    }
+  };
+
+  if (focusRow) {
+    return (
+      <Page title={t("panel.focus.title", { defaultValue: "表情详情" })}>
+        <FocusCard
+          key={focusRow.id}
+          surface={props}
+          row={focusRow}
+          onExit={lib.closeFocus}
+          onRefreshFailed={lib.reportRefreshFailure}
+          onRefreshRecovered={lib.clearRefreshFailure}
+        />
+      </Page>
+    );
+  }
+
   return (
-    <Page
-      title={t("panel.title", { defaultValue: "表情包管理" })}
-      subtitle={state.lanlan || ""}
-    >
-      <Stack gap={12}>
+    <Page title={t("panel.title", { defaultValue: "表情包管理" })} subtitle={state.lanlan || ""}>
+      <style>{PANEL_STYLES}</style>
+      <div className="sticker-panel">
         {state.error_code ? (
-          <Alert
-            tone="danger"
-            message={t(`panel.error.${state.error_code}`, {
-              defaultValue: state.error_code,
-            })}
-          />
+          <Alert tone="danger" message={t(`panel.error.${state.error_code}`, { defaultValue: state.error_code })} />
         ) : null}
-        <Inline gap={16} align="center" wrap>
+        {switchNote ? <Alert tone="danger" message={switchNote} /> : null}
+        <Inline gap={12} align="center" wrap>
           <Switch
             checked={!!state.enabled}
-            label={t("panel.switch", {
-              defaultValue: "总开关（关闭后她不发图、看不到目录）",
-            })}
-            onChange={async (next: boolean) => {
-              await callAction(props, "switch", { enabled: next });
-              await props.api.refresh();
-            }}
+            disabled={managementBusy}
+            label={t("panel.switch.compact", { defaultValue: "猫娘发表情包" })}
+            onChange={changeEnabled}
           />
-          <Inline gap={6}>
-            <StatusBadge
-              tone="info"
-              label={`${t("panel.stat.total", { defaultValue: "收藏" })} ${state.counts ? state.counts.total : 0}`}
-            />
-            <StatusBadge
-              tone="success"
-              label={`${t("panel.stat.sent", { defaultValue: "累计发出" })} ${state.counts ? state.counts.sent_total : 0}`}
-            />
-            <StatusBadge
-              tone="warning"
-              label={`${t("panel.stat.available", { defaultValue: "可用" })} ${state.counts ? state.counts.enabled : 0}`}
-            />
-          </Inline>
+          <div style={{ minWidth: 0, flex: "1 1 160px", overflowWrap: "anywhere" }}>
+            <Text>
+              {t("panel.zone.current", {
+                name: activeZone?.name || "—",
+                defaultValue: "使用区：{name}",
+              })}
+            </Text>
+          </div>
+          <StatusBadge
+            tone="info"
+            label={`${t("panel.stat.total", { defaultValue: "收藏" })} ${state.counts?.total || 0}`}
+          />
         </Inline>
-        <Divider />
-        <AwarenessCard surface={props} />
-        <Card title={t("panel.card.library", { defaultValue: "管理表情包" })}>
-          <Stack gap={10}>
+        <SegmentedControl
+          value={viewTab}
+          disabled={operationBusy}
+          options={[
+            { value: "library", label: t("panel.view.library", { defaultValue: "图库" }) },
+            { value: "settings", label: t("panel.view.settings", { defaultValue: "发送设置" }) },
+            { value: "status", label: t("panel.view.status", { defaultValue: "运行状态" }) },
+          ]}
+          onChange={(next: any) => setViewTab(String(next))}
+        />
+        {(viewTab === "library" && (lib.selected.length || lib.pending || lib.libraryNote)) || lib.refreshFailed ? (
+          <div className="sticker-sticky">
+            {viewTab === "library" ? (
+                <BatchBar
+                  surface={props}
+                  selected={lib.selected}
+                  hiddenCount={hiddenSelected}
+                  zone={view}
+                  disabled={managementBusy}
+                  batchTags={lib.batchTags}
+                  setBatchTags={lib.setBatchTags}
+                  batchGroup={lib.batchGroup}
+                  setBatchGroup={lib.setBatchGroup}
+                  onRun={(patch) => { lib.runBatch(patch); }}
+                  onDelete={() => { lib.batchDelete(hiddenSelected); }}
+                  onClear={lib.clearSelection}
+                  onClearHidden={() => lib.clearHiddenSelection(visibleIds)}
+                />
+            ) : null}
+            {lib.libraryNote || lib.pending || lib.refreshFailed ? (
+              <div className="sticker-feedback" role="status" aria-live="polite">
+                <Text>
+                  {lib.libraryNote || t("panel.action.pending", { defaultValue: "处理中…" })}
+                </Text>
+                {lib.refreshFailed ? (
+                  <Button disabled={operationBusy} onClick={() => { lib.retryRefresh(); }}>
+                    {t("panel.refresh.retry", { defaultValue: "重试刷新" })}
+                  </Button>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {viewTab === "library" ? (
+          <div className="sticker-workspace">
             <ZoneBar
               surface={props}
               zones={zones}
               view={view}
               activeZone={lib.activeZone}
-              showRestore={!!(lib.officialInfo && lib.officialInfo.pack && !lib.officialInfo.zone)}
+              pending={managementBusy ? lib.pending || "external" : ""}
+              showRestore={!!(lib.officialInfo?.pack && !lib.officialInfo.zone)}
               onSwitch={lib.setViewZone}
               onCreate={lib.createZone}
               onRename={lib.renameZone}
@@ -123,159 +254,97 @@ export default function Panel(props: Surface) {
               creating={lib.creating}
               uploading={lib.uploading}
               collectBusy={lib.collectBusy}
+              disabled={managementBusy}
+              searchDisabled={operationBusy}
               newName={lib.newName}
               setNewName={lib.setNewName}
               newDesc={lib.newDesc}
               setNewDesc={lib.setNewDesc}
               zipInputRef={lib.zipInputRef}
               imgInputRef={lib.imgInputRef}
-              onToggleCreating={() => {
-                lib.setCreating(!lib.creating);
-              }}
+              onToggleCreating={() => lib.setCreating(!lib.creating)}
               onCreate={lib.createCategory}
               onCancelCreate={lib.cancelCreate}
-              onPickZip={() => {
-                if (lib.zipInputRef.current) {
-                  lib.zipInputRef.current.click();
-                }
-              }}
-              onZipChosen={(file: any) => {
-                lib.importZip(file);
-              }}
-              onImageFiles={(files: any) => {
-                lib.chooseCollectedFiles(files);
-              }}
-              onExport={() => {
-                lib.exportPack();
-              }}
-              onRepair={() => {
-                lib.repair();
-              }}
+              onPickZip={() => lib.zipInputRef.current?.click()}
+              onZipChosen={(file) => { lib.importZip(file); }}
+              onImageFiles={(files) => { lib.chooseCollectedFiles(files); }}
+              onExport={() => { lib.exportPack(); }}
+              onRepair={() => { lib.repair(); }}
             />
-            {sections.length > 0 ? (
-              // 轮 G：分类分区视图——每块「组名 · 张数 + 一句说明 + 就地操作」，
-              // 一路滚下去就是她的收藏间目录（J-1：只是当前区这一层）。
-              <Text>
-                {t("panel.section.summary", {
-                  groups: sections.length,
-                  images: stickers.filter(
-                    (row: any) => String(row.zone || "") === view,
-                  ).length,
-                  defaultValue: "{groups} 个分区 · 共 {images} 张",
+            <div className="sticker-filter-row">
+              <Field label={t("panel.category.filter", { defaultValue: "分类" })}>
+                <Select
+                  value={categoryFilter}
+                  disabled={operationBusy}
+                  options={[
+                    { value: "", label: t("panel.category.all", { defaultValue: "全部分类" }) },
+                    ...allSections.map((section) => ({
+                      value: sectionValue(section.group),
+                      label: `${section.name} (${section.total})`,
+                    })),
+                  ]}
+                  onChange={(next: any) => setCategoryFilter(String(next ?? ""))}
+                />
+              </Field>
+              <p className="sticker-collection-count">
+                {t("panel.library.visible", {
+                  visible: visibleIds.length,
+                  total: zoneTotal,
+                  categories: sections.length,
+                  defaultValue: "显示 {visible} / {total} 张 · {categories} 个分类",
                 })}
-              </Text>
-            ) : null}
-            <BatchBar
-              surface={props}
-              selected={lib.selected}
-              zone={view}
-              batchTags={lib.batchTags}
-              setBatchTags={lib.setBatchTags}
-              batchGroup={lib.batchGroup}
-              setBatchGroup={lib.setBatchGroup}
-              onRun={(patch: Record<string, unknown>) => {
-                lib.runBatch(patch);
-              }}
-              onDelete={() => {
-                lib.batchDelete();
-              }}
-              onClear={lib.clearSelection}
-            />
-            {lib.libraryNote ? <Text>{lib.libraryNote}</Text> : null}
-            {focusRow ? (
-              <FocusCard
-                key={focusRow.id}
-                surface={props}
-                row={focusRow}
-                onExit={() => {
-                  lib.setFocus("");
-                }}
-              />
-            ) : null}
+              </p>
+            </div>
             {sections.length === 0 ? (
               <Stack gap={8}>
                 <EmptyState
-                  title={
-                    term
-                      ? t("panel.filter.empty_title", {
-                          defaultValue: "当前筛选没有命中",
-                        })
-                      : viewGroups.length
-                        ? t("panel.empty.title", {
-                            defaultValue: "这个区还是空的",
-                          })
-                        : t("panel.cat.empty_title", {
-                            defaultValue: "还没有分类",
-                          })
-                  }
-                  description={
-                    term
-                      ? t("panel.filter.empty_hint", {
-                          defaultValue: "换个词试试，或清空搜索框。",
-                        })
-                      : viewGroups.length
-                        ? t("panel.empty.hint", {
-                            defaultValue:
-                              "点任意分类块头的「收图进这一类」，或直接用上面的套图包导入。",
-                          })
-                        : t("panel.cat.empty_hint", {
-                            defaultValue:
-                              "先建一个分类：名字必填，再补一句“什么时候用这一组”（那句话就是她选图时看到的分类正文）。有了分类，块头才有地方收图。",
-                          })
-                  }
+                  title={term || categoryFilter
+                    ? t("panel.filter.empty_title", { defaultValue: "当前筛选没有命中" })
+                    : t("panel.cat.empty_title", { defaultValue: "还没有分类" })}
                 />
-                {!term && !viewGroups.length ? (
-                  <Button
-                    tone="primary"
-                    onClick={() => {
-                      lib.setCreating(true);
-                    }}
-                  >
+                {!term && !categoryFilter && !allSections.length ? (
+                  <Button disabled={managementBusy} onClick={() => { lib.setCreating(true); }}>
                     {t("panel.group.new_button", { defaultValue: "新建分类" })}
                   </Button>
                 ) : null}
               </Stack>
-            ) : (
-              sections.map((section, index) => (
-                <CategorySection
-                  key={section.key}
-                  surface={props}
-                  section={section}
-                  showDivider={index > 0}
-                  selected={lib.selected}
-                  collectBusy={lib.collectBusy}
-                  descEditing={lib.descEditing}
-                  descDraft={lib.descDraft}
-                  onToggleSelect={lib.toggleSelected}
-                  onOpen={(id: string) => {
-                    lib.setFocus(lib.focus === id ? "" : id);
-                  }}
-                  onCollect={() => {
-                    lib.collectInto(section.group);
-                  }}
-                  onSelectAll={() => {
-                    lib.selectSection(section.rows);
-                  }}
-                  onToggleDescEditing={() => {
-                    lib.setDescEditing(
-                      lib.descEditing === section.group ? "" : section.group,
-                    );
-                    lib.setDescDraft(section.desc);
-                  }}
-                  setDescDraft={lib.setDescDraft}
-                  onSaveDesc={lib.saveGroupDesc}
-                  onCancelDesc={() => {
-                    lib.setDescEditing("");
-                  }}
-                  onRemoveCategory={() => {
-                    lib.removeCategory(section);
-                  }}
-                />
-              ))
-            )}
-          </Stack>
-        </Card>
-      </Stack>
+            ) : sections.map((section, index) => (
+              <CategorySection
+                key={section.key}
+                surface={props}
+                section={section}
+                showDivider={index > 0}
+                selected={lib.selected}
+                collectBusy={lib.collectBusy}
+                disabled={managementBusy}
+                descEditing={lib.descEditing}
+                descDraft={lib.descDraft}
+                onToggleSelect={lib.toggleSelected}
+                onOpen={lib.openFocus}
+                onCollect={() => lib.collectInto(section.group)}
+                onSelectAll={() => lib.selectSection(section.rows)}
+                onToggleDescEditing={() => {
+                  lib.setDescEditing(lib.descEditing === section.group ? "" : section.group);
+                  lib.setDescDraft(section.desc);
+                }}
+                setDescDraft={lib.setDescDraft}
+                onSaveDesc={lib.saveGroupDesc}
+                onCancelDesc={() => lib.setDescEditing("")}
+                onRemoveCategory={() => { lib.removeCategory(section); }}
+              />
+            ))}
+          </div>
+        ) : (
+          <AwarenessCard
+            surface={props}
+            mode={viewTab === "settings" ? "settings" : "status"}
+            disabled={!!lib.pending || switchBusy || lib.refreshFailed}
+            onBusyChange={setSettingsBusy}
+            onRefreshFailed={lib.reportRefreshFailure}
+            onRefreshRecovered={lib.clearRefreshFailure}
+          />
+        )}
+      </div>
     </Page>
   );
 }

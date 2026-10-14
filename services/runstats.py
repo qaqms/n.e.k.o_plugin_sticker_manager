@@ -73,6 +73,7 @@ class RunStats:
         result: dict[str, Any],
         group: str = "",
         query_len: int = 0,
+        count_delivery: bool = True,
     ) -> str:
         """记一次她发起的工具调用。返回拒因（成功时空串），供调用方决定日志级别。
 
@@ -88,9 +89,10 @@ class RunStats:
         shape = f"{name}({gave}" + (f" group={group}" if group else "") + (f" q_len={query_len}" if query_len else "") + ")"
         self.last_call = shape
         if reason:
-            self.refused += 1
+            if count_delivery:
+                self.refused += 1
             self.last_reason = reason
-        elif name in {"sticker_send", "agent_send"} and result.get("sent"):
+        elif count_delivery and name in {"sticker_send", "agent_send"} and result.get("sent"):
             self.sent += 1
         return reason
 

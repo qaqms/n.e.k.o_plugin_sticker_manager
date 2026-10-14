@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import shutil
@@ -199,7 +200,12 @@ def stage_plugin_entries(files: list[Path], host_root: Path) -> list[tuple[str, 
     python = host_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if not python.is_file():
         raise SystemExit(f"[FAIL] Host Python not found: {python}; pass --host-root")
-    with tempfile.TemporaryDirectory(prefix="sticker-package-") as temp:
+    spec = importlib.util.spec_from_file_location("sticker_host_isolation", Path(__file__).with_name("host_isolation.py"))
+    isolation = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(isolation)
+    with isolation.isolated_host(host_root) as sandbox, tempfile.TemporaryDirectory(
+        prefix="sticker-package-", dir=sandbox.root,
+    ) as temp:
         staged = Path(temp) / PACKAGE_ID
         for source in files:
             if source.name == "plugin.meta.json":
@@ -208,16 +214,18 @@ def stage_plugin_entries(files: list[Path], host_root: Path) -> list[tuple[str, 
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, target)
         code = (
-            "import json,sys; from pathlib import Path; "
+            "import json,os,sys; "
+            "assert getattr(sys,'_sticker_isolation_root',None)=="
+            "os.path.normcase(os.path.realpath(os.environ['STICKER_ISOLATION_ROOT'])); "
+            "from pathlib import Path; "
             "from plugin.neko_plugin_cli.core.metadata_probe import derive_plugin_metadata; "
             "from plugin.server.infrastructure.packaged_metadata import read_packaged_metadata; "
             "p=Path(sys.argv[1]); m=derive_plugin_metadata(p, source_only=True); "
             "(p/'plugin.meta.json').write_bytes((json.dumps(m,ensure_ascii=False,indent=2)+'\\n').encode('utf-8')); "
             "assert read_packaged_metadata(p) is not None, 'host rejected staged metadata'"
         )
-        env = {**os.environ, "PYTHONDONTWRITEBYTECODE": "1", "PYTHONIOENCODING": "utf-8"}
         result = subprocess.run(
-            [str(python), "-c", code, str(staged)], cwd=host_root, env=env,
+            [str(python), "-c", code, str(staged)], cwd=sandbox.snapshot, env=sandbox.env,
             capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120,
         )
         if result.returncode:

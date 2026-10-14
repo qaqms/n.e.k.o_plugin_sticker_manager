@@ -141,10 +141,10 @@ class TestTierDrivesThreeSurfaces:
     def test_injection_names_the_tool_and_optional_caption_without_merging(self):
         text = build_awareness_text([Sticker(id="a", file="a.png", desc="甲", tags=[])], eagerness="eager")
         assert "sticker_send" in text and "group" in text and "text" in text
-        assert "sticker_send(group=分类名)" in text
+        assert "实际调用工具 sticker_send，group 填分类名" in text
         assert "text 留空即可" in text
         assert "正常文字回复照常说" in text and "图片独立发送" in text
-        assert "没有合适的就纯文字" in text
+        assert "配图时实际调用" in text and "不贴切就纯文字" in text
         assert "一起发出去" not in text
         assert len(text) < 220, f"注入正文又长回目录复读机了：{len(text)} 字"
 
