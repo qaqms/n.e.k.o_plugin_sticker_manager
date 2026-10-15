@@ -16,20 +16,22 @@ def _add(plugin, marker=b"one", **kwargs):
     return sticker
 
 
-def test_generic_agent_request_sends_without_id(tmp_path, run_async):
+def test_generic_agent_request_returns_candidates_without_sending(tmp_path, run_async):
     plugin, host = _plugin(tmp_path)
     sticker = _add(plugin)
     result = run_async(plugin.send_entry())
-    assert result.is_ok() and result.value["id"] == sticker.id
-    assert len(host.push.calls) == 1
-    assert plugin._library.read_usage(10)[-1]["source"] == "agent"
-    assert plugin._runstats.sent == 1
+    assert result.is_ok() and result.value["id"] == ""
+    assert result.value["candidate_ids"] == [sticker.id]
+    assert not host.push.calls and not plugin._library.read_usage()
+    assert plugin._runstats.sent == 0
 
 
 def test_agent_group_and_text_use_shared_sender(tmp_path, run_async):
     plugin, host = _plugin(tmp_path)
     sticker = _add(plugin, group="happy")
     result = run_async(plugin.send_entry(group="happy", text="hello"))
+    assert result.is_ok() and result.value["id"] == "" and not host.push.calls
+    result = run_async(plugin.send_entry(id=sticker.id, group="happy", text="hello"))
     assert result.is_ok() and result.value["id"] == sticker.id
     assert host.push.calls[0]["parts"] == [{"type": "text", "text": "hello"}]
     assert [part["type"] for part in host.push.calls[1]["parts"]] == ["image"]
@@ -37,21 +39,22 @@ def test_agent_group_and_text_use_shared_sender(tmp_path, run_async):
     assert plugin._runstats.sent == 1
     assert plugin._library.get(sticker.id).use_count == 1
     assert len(plugin._library.read_usage()) == 1
-    second = run_async(plugin.send_entry(group="happy"))
+    second = run_async(plugin.send_entry(id=sticker.id, group="happy"))
     assert not second.is_ok()
     assert str(second.error) in {"send_cooldown", "recent_repeat"}
     assert len(host.push.calls) == 2
 
 
-def test_agent_query_uses_existing_resolution(tmp_path, run_async):
+def test_agent_query_requires_explicit_selection_even_for_single_hit(tmp_path, run_async):
     plugin, host = _plugin(tmp_path)
     sticker = _add(plugin)
     result = run_async(plugin.send_entry(query="happy"))
-    assert result.is_ok() and result.value["id"] == sticker.id
-    assert len(host.push.calls) == 1
+    assert result.is_ok() and result.value["id"] == ""
+    assert result.value["candidate_ids"] == [sticker.id]
+    assert not host.push.calls
 
 
-def test_auto_pick_only_uses_active_enabled_nonrecent_images(tmp_path, run_async):
+def test_agent_candidates_only_use_active_enabled_nonrecent_images(tmp_path, run_async):
     plugin, host = _plugin(tmp_path)
     old = _add(plugin)
     plugin._library.append_usage({"id": old.id, "lanlan": "K", "ok": True, "at": 1.0}, keep=200)
@@ -62,8 +65,9 @@ def test_auto_pick_only_uses_active_enabled_nonrecent_images(tmp_path, run_async
     _add(plugin, b"other", zone=other)
     chosen = _add(plugin, b"chosen")
     result = run_async(plugin.send_entry(_ctx={"lanlan_name": "K"}))
-    assert result.is_ok() and result.value["id"] == chosen.id
-    assert len(host.push.calls) == 1
+    assert result.is_ok() and result.value["id"] == ""
+    assert result.value["candidate_ids"] == [chosen.id]
+    assert not host.push.calls
 
 
 def test_agent_disabled_empty_and_all_recent_fail_without_sending(tmp_path, run_async):
@@ -77,10 +81,10 @@ def test_agent_disabled_empty_and_all_recent_fail_without_sending(tmp_path, run_
 
 def test_agent_cooldown_with_other_available_images(tmp_path, run_async):
     plugin, host = _plugin(tmp_path)
-    _add(plugin)
-    _add(plugin, b"second")
-    assert run_async(plugin.send_entry(_ctx={"lanlan_name": "K"})).is_ok()
-    result = run_async(plugin.send_entry(_ctx={"lanlan_name": "K"}))
+    first = _add(plugin)
+    second = _add(plugin, b"second")
+    assert run_async(plugin.send_entry(id=first.id, query="happy", _ctx={"lanlan_name": "K"})).is_ok()
+    result = run_async(plugin.send_entry(id=second.id, query="happy", _ctx={"lanlan_name": "K"}))
     assert not result.is_ok() and str(result.error) == "send_cooldown"
     assert len(host.push.calls) == 1
     assert plugin._library.read_usage()[-1]["source"] == "agent"
@@ -123,9 +127,9 @@ def test_direct_llm_tool_still_requires_a_selector(tmp_path, run_async):
 
 def test_agent_probability_gate_remains_effective(tmp_path, run_async):
     plugin, host = _plugin(tmp_path)
-    _add(plugin)
+    sticker = _add(plugin)
     plugin._settings = replace(plugin._settings, send=replace(plugin._settings.send, probability=0.0))
-    result = run_async(plugin.send_entry())
+    result = run_async(plugin.send_entry(id=sticker.id, query="happy"))
     assert not result.is_ok()
     assert not host.push.calls
 

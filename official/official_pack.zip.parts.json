@@ -1,17 +1,17 @@
 {
   "schema_version": 1,
-  "size": 119179456,
-  "sha256": "95fe17ca1494710d414b81fb554ec02df07b07b8af93de882c1d5a727281ff62",
+  "size": 119192210,
+  "sha256": "38916cd97f21b2f6f3169117a762c0311d532f45028567b39eefa1523f64e568",
   "parts": [
     {
       "name": "official_pack.zip.part001",
       "size": 67108864,
-      "sha256": "e26d89e66ca300be91dc51f09874dc61a597cc7c486dd39d85f875aebf1d598c"
+      "sha256": "d11dd3971e91bbd67b473ddd685163cfb7b709aee16a7ad63162fd268b3ede53"
     },
     {
       "name": "official_pack.zip.part002",
-      "size": 52070592,
-      "sha256": "4000ad6a3e2e46b2b7b0c9fc9261dca7a5f95b8bf478e65b4a808d65b1125791"
+      "size": 52083346,
+      "sha256": "3d63676d35989dc287abdafdeb1d2dad321a3f5adc5c1ff2dd881d3088505212"
     }
   ]
 }

@@ -8,9 +8,9 @@
    空则回落 desc（`Sticker.catalog_body` 一把尺）。**轮 F 起 desc 不再必填**（学外部系统：
    逐图零文本也能用）——两者都空时回落分组描述，再没有就如实标「未标注」。
 1.5. **分组（group）是“分类=描述”的单元**（轮 F）：`groups: {组名: 一句话说明}` 挂在库上，
-   她先挑组、组内再按图选/随机——管理面只需给组写一行话，逐图文字全部可选。
+   分类用来缩小候选范围，具体图片由模型阅读逐图说明后选择。
 2. **检索是"够用就好"**：子串匹配 desc/caption/tags/visible_text/id，不做分词、不做语义。
-   真语义检索是宿主记忆层的事，不在插件里造第二套。
+   聊天检索支持空格或逗号分隔的关键词；是否贴合回复仍由模型判断。
 4. 目录文案的纪律沿用 our_life 的注入契约：不给模型看原始路径、
    不堆砌形容词，一行一条。
 5. **查重只认内容指纹（sha256），不认文件名/扩展名**——与魔数嗅探同理，
@@ -79,6 +79,18 @@ UPLOAD_MAX_TOTAL_BYTES = 128 * 1024 * 1024
 # query 选图的候选上限（轮 C，与 外部系统 top_k=5 同量级）：头部并列时不替她拍板，
 # 回一屏能读完的候选清单让她用 id 定夺。
 SEND_CANDIDATES_MAX = 5
+SELECTION_MATCH_RULE = (
+    "动作、对象、发生阶段和语气强度都要符合上下文，不能只因同属开心或亲昵就选。"
+    "开箱图只用于表达收礼或拆礼物的反应，期待不等于已经收到，抱抱不等于舔人；"
+    "图片不能凭空增加拆礼盒、进食、嘲笑等核心情节，也不为迁就图片改写回复态度。"
+)
+SELECTION_HINT = (
+    "这些是候选，尚未发送。阅读逐图说明，按你准备回复的意图、对象和语气强度选择，"
+    "分清安慰对方、自己难过、自嘲和嘲笑对方；不要直接照搬用户情绪。"
+    f"{SELECTION_MATCH_RULE}"
+    "有贴切图片才用 sticker_send(sticker_id=候选ID) 发送，普通回复照常说，text 留空即可；"
+    "没有合适的就纯文字，不必换分类凑图。"
+)
 
 # 收件箱导入时文件名清洗成描述的规则：删扩展名、分隔符换空格、连续空白压扁。
 # 面板浏览器侧有一份等价的几行小函数；那是跨运行时的重复（iframe 里碰不到
@@ -393,8 +405,7 @@ class Sticker:
 def search_with_scores(
     stickers: list[Sticker], query: str, *, include_disabled: bool = False
 ) -> list[tuple[int, Sticker]]:
-    """带分数的检索（唯一实现）：打分+排序都在这；`search_stickers` 与
-    `resolve_send_target` 是它的薄封装——一把尺，三处同源。
+    """管理面按文本和使用记录检索；聊天候选走 `search_intent_candidates`。
 
     排序：命中分（精确 id > desc > caption > 套图精确 > 标签 > 套图子串 >
     图内原文 > 文件名）> 使用数 > 最近时刻。空查询 = 全量按"她最近爱用"，
@@ -428,23 +439,48 @@ def search_stickers(stickers: list[Sticker], query: str, *, include_disabled: bo
 def resolve_send_target(
     stickers: list[Sticker], query: str, *, limit: int = SEND_CANDIDATES_MAX
 ) -> tuple[Sticker | None, list[Sticker]]:
-    """query 选图的判定器：返回 (唯一最优, 并列候选)，两者至多一个非空。
+    """检索只提供候选，连唯一命中也需要模型读完说明后用 ID 确认。"""
+    if not (query or "").strip():
+        return None, []
+    return None, search_intent_candidates(stickers, query)[: max(1, limit)]
 
-    轮 C 的体验核心：**不替她拍板并列**。最优分严格唯一→直发；
-    头部并列→回 top-K 候选让她拿 id 再发。同分同台账的两张确实分不出高下——
-    猜一张也是发得，但把选择权还给她更符合"表情是她挑的"这件事。
-    空查询/全没命中都回 (None, [])。
-    """
-    term = (query or "").strip()
+
+def search_intent_candidates(stickers: list[Sticker], query: str) -> list[Sticker]:
+    """聊天候选召回：关键词取并集，多词命中优先；不把词法分数当语义结论。"""
+    term = (query or "").strip().casefold()[:300]
     if not term:
-        return None, []
-    scored = search_with_scores(stickers, term)
-    if not scored:
-        return None, []
-    top_score = scored[0][0]
-    if len(scored) == 1 or scored[1][0] < top_score:
-        return scored[0][1], []
-    return None, [sticker for _, sticker in scored[: max(1, limit)]]
+        return search_stickers(stickers, "")
+    terms = list(dict.fromkeys(re.split(r"[\s,，、;；/]+", term)))[:8]
+    terms = [word for word in terms if word]
+    scored = []
+    for sticker in stickers:
+        if sticker.disabled:
+            continue
+        scores = [_candidate_term_score(sticker, word) for word in terms]
+        score = sum(scores)
+        if score:
+            scored.append((sum(value > 0 for value in scores), score, sticker))
+    scored.sort(key=lambda item: (-item[0], -item[1], -item[2].use_count, -item[2].last_used_at))
+    return [sticker for _, _, sticker in scored]
+
+
+def _candidate_term_score(sticker: Sticker, term: str) -> int:
+    # Positive usage tags outrank prose, which may mention an unsuitable emotion.
+    if sticker.id.casefold() == term:
+        return 120
+    if any(term == tag.casefold() for tag in sticker.tags):
+        return 100
+    if any(term in tag.casefold() for tag in sticker.tags):
+        return 90
+    if term in sticker.desc.casefold():
+        return 80
+    if term in sticker.caption.casefold():
+        return 20
+    if term in sticker.visible_text.casefold():
+        return 10
+    if sticker.group and term in sticker.group.casefold():
+        return 5
+    return 0
 
 
 def _match_score(sticker: Sticker, term: str) -> int:

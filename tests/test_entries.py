@@ -170,7 +170,8 @@ class TestTools:
     def test_sticker_list_disabled_master_switch(self, tmp_path, run_async):
         plugin, _host = _make(tmp_path, enabled=False)
         out = run_async(plugin.tool_sticker_list())
-        assert out == {"ok": False, "reason": "not_enabled"}
+        assert out["ok"] is False and out["reason"] == "not_enabled"
+        assert "选图只在内部完成" in out["hint"] and not out.get("catalog")
 
     def test_sticker_send_by_id(self, tmp_path, run_async):
         plugin, host = _make(tmp_path)
@@ -213,13 +214,13 @@ class TestTools:
         follow = run_async(plugin.tool_sticker_send(sticker_id=second, **_ctx("K")))
         assert follow["ok"] is True and follow["sent"] == second
 
-    def test_sticker_send_strict_best_beats_tie_rule(self, tmp_path, run_async):
-        # 最优分严格唯一（desc 80 vs 标签子串 60）：直发，不回候选。
-        plugin, _host = _make(tmp_path)
+    def test_sticker_send_strict_best_still_requires_selection(self, tmp_path, run_async):
+        plugin, host = _make(tmp_path)
         best = run_async(_add(plugin, desc="开心挥手")).value["id"]
         run_async(_add(plugin, desc="别的图", tags="比较开心", data=JPEG_BYTES))
         out = run_async(plugin.tool_sticker_send(query="开心", **_ctx("K")))
-        assert out["ok"] is True and out["sent"] == best
+        assert out["ok"] is True and out["sent"] == ""
+        assert best in out["candidate_ids"] and not host.push.calls
 
     def test_sticker_send_skips_disabled_pick(self, tmp_path, run_async):
         # 模型点名要一张被禁用的图：不直发，回退到搜索；搜索也不含禁用 → no_match

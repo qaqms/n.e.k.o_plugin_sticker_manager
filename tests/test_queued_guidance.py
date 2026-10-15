@@ -1,9 +1,9 @@
 # pyright: reportMissingImports=false
-"""Queued receipts preserve later-turn guidance without claiming delivery."""
+"""Queued receipts preserve private continuation without claiming delivery."""
 
 from conftest import PNG_BYTES, FakeConfig, FakeHostContext, build_plugin
 from sticker_manager.core.configuration import StickerManagerSettings
-from sticker_manager.core.eagerness import NEXT_STEP_NOTE
+from sticker_manager.core.eagerness import INTERNAL_SELECTION_NOTE, NEXT_STEP_NOTE
 from sticker_manager.services.sender import SendResult
 
 
@@ -50,9 +50,10 @@ def test_queued_guidance_only_limits_same_turn_same_image(tmp_path, monkeypatch,
     assert "本轮回复与显示缓冲结束后" in note
     assert "继续正常回复，无需等待" in note
     assert NEXT_STEP_NOTE.removeprefix("表情包已提交到聊天，") in note
-    assert "后续互动想配图时仍可调用 sticker_send(group=分类名)" in note
+    assert "本轮选图已完成" in note
+    assert "只续接尚未说完的回复" in note
+    assert "若已说完就结束" in note
+    assert INTERNAL_SELECTION_NOTE in result["hint"]
     assert "group + text" not in note
-    assert "继续正常文字回复" in note
-    assert "text 留空即可" in note
-    assert "不复述额外配文" in note
+    assert "不复述原话、额外配文或选图过程" in note
     assert "不要重复调用发送" not in note

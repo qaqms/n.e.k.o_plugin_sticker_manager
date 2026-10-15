@@ -49,7 +49,7 @@ def _setup(tmp_path, *, data=PNG_BYTES, **send_overrides):
 def test_inline_tool_image_preserves_bytes_and_chat_without_read_feedback(tmp_path, run_async, data, mime):
     plugin, host, sticker = _setup(tmp_path, data=data)
 
-    result = run_async(plugin.tool_sticker_send(group="reactions", _ctx={"lanlan_name": "K"}))
+    result = run_async(plugin.tool_sticker_send(sticker_id=sticker.id, _ctx={"lanlan_name": "K"}))
 
     assert result["ok"] is True and result["sent"] == sticker.id
     assert not host.images.calls
@@ -66,7 +66,7 @@ def test_uploaded_tool_image_keeps_url_visible_without_read_feedback(tmp_path, r
     data = PNG_BYTES + b"large" * (70 * 1024)
     plugin, host, sticker = _setup(tmp_path, data=data)
 
-    result = run_async(plugin.tool_sticker_send(group="reactions"))
+    result = run_async(plugin.tool_sticker_send(sticker_id=sticker.id))
 
     assert result["ok"] is True and result["sent"] == sticker.id
     assert host.images.calls == [data]
@@ -82,7 +82,7 @@ def test_uploaded_tool_image_keeps_url_visible_without_read_feedback(tmp_path, r
 def test_tool_caption_and_image_stay_separate_and_both_blind(tmp_path, run_async):
     plugin, host, sticker = _setup(tmp_path)
 
-    result = run_async(plugin.tool_sticker_send(group="reactions", text="A small caption"))
+    result = run_async(plugin.tool_sticker_send(sticker_id=sticker.id, text="A small caption"))
 
     assert result["ok"] is True and result["sent"] == sticker.id
     assert len(host.push.calls) == 2
@@ -116,7 +116,7 @@ def test_panel_and_agent_images_retain_read_feedback(tmp_path, run_async, source
 def test_tool_receipt_retains_selected_description_and_next_step_note(tmp_path, run_async):
     plugin, host, sticker = _setup(tmp_path)
 
-    result = run_async(plugin.tool_sticker_send(group="reactions"))
+    result = run_async(plugin.tool_sticker_send(sticker_id=sticker.id))
 
     assert result["ok"] is True and result["sent"] == sticker.id
     assert "A playful reaction" in result["desc"]

@@ -113,7 +113,8 @@ class TestStandingDescription:
     def test_normal_reply_and_optional_caption_use_separate_surfaces(self):
         for tier in TOOL_NOTE:
             text = build_send_tool_description(_ONE_CATEGORY, tier)
-            assert "sticker_send(group=分类名)" in text
+            assert "sticker_list(group=分类名)" in text
+            assert "sticker_send(sticker_id=候选ID)" in text
             assert "正常文字回复照常说" in text and "图片独立发送" in text
             assert "text 留空即可" in text
             assert "只有额外配文才填 text" in text

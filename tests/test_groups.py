@@ -13,7 +13,6 @@ import io
 import json
 import zipfile
 
-import sticker_manager as pkg
 from conftest import PNG_BYTES, FakeConfig, FakeHostContext, build_plugin
 from sticker_manager.core.catalog import Sticker, format_group_overview
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings, StorageSettings
@@ -290,33 +289,37 @@ class TestSendGroup:
         run_async(_add(plugin, desc="甲", group="happy组"))
         run_async(_add(plugin, desc="乙", group="happy组"))
 
-    def test_exact_group_picks_within(self, tmp_path, run_async, monkeypatch):
+    def test_exact_group_requires_per_image_choice(self, tmp_path, run_async):
         plugin = _plugin(tmp_path, send=SendSettings(cooldown_sec=0.0, recent_dedup_count=0))
         self._fill(plugin, run_async)
-        monkeypatch.setattr(pkg, "_GROUP_PICK", lambda seq: seq[-1])  # 钉死"选池子里最后一张"
         out = run_async(plugin.tool_sticker_send(group="happy组", **_ctx("K")))
-        assert out["ok"] and out["sent"]
+        assert out["ok"] and out["sent"] == ""
         listed = run_async(plugin.list_entry())
         group_ids = {r["id"] for r in listed.value["stickers"] if r["group"] == "happy组"}
-        assert out["sent"] in group_ids and len(group_ids) == 2
-        # 选中的那张被计数，另一张没被动过——"随机"只随机在选谁，不篡改台账
+        assert set(out["candidate_ids"]) == group_ids and len(group_ids) == 2
+        assert not plugin._library.read_usage()
+        out = run_async(plugin.tool_sticker_send(sticker_id=out["candidate_ids"][-1], **_ctx("K")))
+        assert out["sent"] in group_ids
+        listed = run_async(plugin.list_entry())
         touched = [r for r in listed.value["stickers"] if r["id"] == out["sent"]][0]
         assert touched["use_count"] == 1
 
-    def test_recent_excluded_then_repeat(self, tmp_path, run_async, monkeypatch):
+    def test_recent_excluded_then_repeat(self, tmp_path, run_async):
         plugin = _plugin(tmp_path, send=SendSettings(cooldown_sec=0.0, recent_dedup_count=5))
         self._fill(plugin, run_async)
-        picks = []
-        monkeypatch.setattr(pkg, "_GROUP_PICK", lambda seq: (picks.append(list(seq)), seq[0])[1])
         first = run_async(plugin.tool_sticker_send(group="happy组", **_ctx("K")))
-        assert first["ok"]
+        chosen = first["candidate_ids"][0]
+        first = run_async(plugin.tool_sticker_send(sticker_id=chosen, **_ctx("K")))
+        assert first["sent"] == chosen
         second = run_async(plugin.tool_sticker_send(group="happy组", **_ctx("K")))
-        assert second["ok"] and second["sent"] != first["sent"]
-        assert len(picks[1]) == 1  # 第二刀的池子里只剩一张：刚发的被去重尺剔除
+        assert second["ok"] and second["sent"] == "" and second["count"] == 1
+        assert chosen not in second["candidate_ids"]
+        run_async(plugin.tool_sticker_send(sticker_id=second["candidate_ids"][0], **_ctx("K")))
         third = run_async(plugin.tool_sticker_send(group="happy组", **_ctx("K")))
         assert third["ok"] is False and third["reason"] == "recent_repeat"
         forced = run_async(plugin.tool_sticker_send(group="happy组", force=True, **_ctx("K")))
-        assert forced["ok"] is True  # force 把整组池子放回来
+        assert forced["ok"] is True and forced["sent"] == "" and forced["count"] == 2
+        assert run_async(plugin.tool_sticker_send(sticker_id=chosen, force=True, **_ctx("K")))["sent"] == chosen
 
     def test_group_errors_are_honest(self, tmp_path, run_async):
         plugin = _plugin(tmp_path, send=SendSettings(cooldown_sec=0.0))

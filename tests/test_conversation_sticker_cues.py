@@ -175,13 +175,13 @@ def test_old_interaction_in_batch_does_not_cue_latest_business_message(tmp_path,
 
 @pytest.mark.parametrize("tier", EAGERNESS_LEVELS)
 @pytest.mark.parametrize("event", [False, True])
-def test_cues_offer_group_only_send_without_premature_gate_warnings(tier, event):
+def test_cues_offer_candidate_selection_without_premature_gate_warnings(tier, event):
     cue = build_awareness_text(
         [Sticker(id="one", file="one.png", desc="轻松回应", tags=[], group="轻松互动")],
         eagerness=tier,
         event=event,
     )
-    assert "sticker_send" in cue and "group" in cue
+    assert "sticker_list" in cue and "sticker_send(sticker_id=候选ID)" in cue
     assert "text" in cue and any(word in cue for word in ("无需", "可选", "留空"))
     assert "文字" in cue
     for gate_instruction in ("冷却", "概率", "最近不重复", "节奏闸", "换一张就好", "别重试"):
@@ -198,15 +198,15 @@ def test_tool_description_keeps_group_path_and_text_only_exit(tier):
 
 
 @pytest.mark.parametrize("source", ["tool", "agent"])
-def test_group_only_image_and_agent_fallback_remain_real_sends(tmp_path, run_async, source):
+def test_selected_images_retain_source_and_transport(tmp_path, run_async, source):
     plugin, host, sticker = _plugin(tmp_path, [])
     plugin._settings = _settings()
 
     if source == "tool":
-        result = run_async(plugin.tool_sticker_send(group="轻松互动", _ctx={"lanlan_name": "K"}))
+        result = run_async(plugin.tool_sticker_send(sticker_id=sticker.id, _ctx={"lanlan_name": "K"}))
         assert result["ok"] is True and result["sent"] == sticker.id
     else:
-        result = run_async(plugin.send_entry(_ctx={"lanlan_name": "K"}))
+        result = run_async(plugin.send_entry(id=sticker.id, group="轻松互动", _ctx={"lanlan_name": "K"}))
         assert result.is_ok() and result.value["id"] == sticker.id
 
     assert len(host.push.calls) == 1
@@ -220,15 +220,15 @@ def test_group_only_image_and_agent_fallback_remain_real_sends(tmp_path, run_asy
 
 @pytest.mark.parametrize("source", ["tool", "agent"])
 def test_more_sensitive_reminders_do_not_bypass_probability_gate(tmp_path, run_async, source):
-    plugin, host, _ = _plugin(tmp_path, [])
+    plugin, host, sticker = _plugin(tmp_path, [])
     settings = _settings()
     plugin._settings = replace(settings, send=replace(settings.send, probability=0.0))
 
     if source == "tool":
-        result = run_async(plugin.tool_sticker_send(group="轻松互动"))
+        result = run_async(plugin.tool_sticker_send(sticker_id=sticker.id))
         assert result["ok"] is False and result["reason"] == "probability_declined"
     else:
-        result = run_async(plugin.send_entry())
+        result = run_async(plugin.send_entry(id=sticker.id, group="轻松互动"))
         assert not result.is_ok() and str(result.error) == "probability_declined"
 
     assert host.push.calls == []

@@ -20,8 +20,8 @@
 
 from __future__ import annotations
 
-from .catalog import Sticker, format_group_overview
-from .eagerness import decision_checkpoint, normalize_tier, send_tool_description
+from .catalog import SELECTION_MATCH_RULE, Sticker, format_group_overview
+from .eagerness import INTERNAL_SELECTION_NOTE, decision_checkpoint, normalize_tier, send_tool_description
 
 # 能力句：说清"这是什么"，并把三种形态都摆成合法选项（参考侧 prompt.head 的结构）。
 _HEAD = "发一张你收藏间里的表情包，配合你正在回的这句话。纯文字、正常回复配图、只发图都行。"
@@ -30,8 +30,13 @@ _HEAD = "发一张你收藏间里的表情包，配合你正在回的这句话�
 # 由 `_SEND_HINTS` 就地说明就够了，常驻面上写禁令只会教她别发。
 # 普通回复留在她自己的回复通道；可选 text 仅作额外配文，与图片分条，署名仍是插件。
 _TAIL = (
-    "日常只需 sticker_send(group=分类名)，从下方目录选分类，组内帮你选图，无需先查列表。"
-    "指定某张才填 sticker_id，关键词检索才填 query。"
+    "想配图时先调用 sticker_list(group=分类名) 看逐图说明，"
+    "也可用 query 给出空格分隔的短关键词，如「安慰 摸头」。"
+    "分类只缩小范围，按你准备回复的意图、对象和语气强度选具体图，"
+    "分清安慰对方、自己难过、自嘲与嘲笑对方，不直接照搬用户情绪。"
+    f"{SELECTION_MATCH_RULE}"
+    "选中后调用 sticker_send(sticker_id=候选ID)；只有 group 或 query 时只查候选，不发送。"
+    "没有贴切候选就纯文字，不换分类凑图。"
     "正常文字回复照常说，text 留空即可，图片独立发送；"
     "只有额外配文才填 text，配文与图片分条发送，配文不要在正文重复。"
 )
@@ -67,5 +72,5 @@ def build_send_tool_description(catalog: str, tier: str = "natural") -> str:
     档位那句仍由 `core/eagerness.send_tool_description` 追加——两个受众共用一个来源。
     """
     body = f"\n{CATALOG_TITLE}\n{catalog}\n" if catalog else f"\n{_EMPTY}\n"
-    base = f"{decision_checkpoint(tier)}\n{_HEAD}\n{_TAIL}{body}"
+    base = f"{decision_checkpoint(tier)}\n{INTERNAL_SELECTION_NOTE}\n{_HEAD}\n{_TAIL}{body}"
     return send_tool_description(base, normalize_tier(tier))

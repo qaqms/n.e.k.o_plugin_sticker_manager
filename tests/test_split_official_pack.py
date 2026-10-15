@@ -26,7 +26,7 @@ def test_split_preserves_exact_archive_bytes_and_checksums(tmp_path):
     assert source.read_bytes() == original
 
 
-def test_bundled_chunks_fit_github_and_preserve_original_archive():
+def test_bundled_chunks_fit_github_and_match_reviewed_v3_archive():
     folder = ROOT / "official"
     manifest = json.loads((folder / "official_pack.zip.parts.json").read_text(encoding="utf-8"))
     digest = hashlib.sha256()
@@ -38,5 +38,5 @@ def test_bundled_chunks_fit_github_and_preserve_original_archive():
         assert hashlib.sha256(chunk).hexdigest() == row["sha256"]
         digest.update(chunk)
         total += len(chunk)
-    assert total == manifest["size"] == 119179456
-    assert digest.hexdigest() == manifest["sha256"] == "95fe17ca1494710d414b81fb554ec02df07b07b8af93de882c1d5a727281ff62"
+    assert total == manifest["size"] == 119192210
+    assert digest.hexdigest() == manifest["sha256"] == "38916cd97f21b2f6f3169117a762c0311d532f45028567b39eefa1523f64e568"

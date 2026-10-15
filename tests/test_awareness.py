@@ -77,7 +77,7 @@ class TestCoreSelection:
         stickers = [_st("a", desc="猫猫挥手", use=2), _st("b", desc="大哭", use=1)]
         text = build_awareness_text(stickers)
         assert "2" in text  # 总数按未禁用算
-        assert "sticker_send" in text and "分类" in text  # 指向常驻面
+        assert "sticker_send" in text and "逐图说明" in text
         assert "[a]" not in text and "猫猫挥手" not in text and "大哭" not in text  # 无逐图行
         assert "最近常用" not in text and "你的套图" not in text  # 无目录块
         assert len(text) < 300, f"注入正文涨回目录复读机了：{len(text)} 字"

@@ -127,7 +127,7 @@ class TestToolCallTrace:
 
     def test_successful_call_is_counted_once_and_logged_once(self, tmp_path, run_async):
         plugin, _host = _plugin(tmp_path)
-        result = run_async(plugin.tool_sticker_send(group="困与睡"))
+        result = run_async(plugin.tool_sticker_send(sticker_id=plugin._library.all()[0].id))
         assert result.get("ok") is True, result
         assert plugin._runstats.sent == 1
         assert plugin._runstats.sticker_send_calls == 1 and plugin._runstats.agent_send_calls == 0

@@ -85,8 +85,8 @@ class TestInjectionText:
         # 默认档不许偷偷改老行为——这句是 v0.13.0 起她就看到的措辞。
         assert "宁缺毋滥" in _text("natural") and "多数时候纯文字就够了" not in _text("natural")
         assert "多数时候纯文字就够了" in _text("reserved")
-        assert "贴切就优先配一张" in _text("eager")
-        assert "文字说清也别省掉" in _text("eager")
+        assert "有贴切候选就优先配一张" in _text("eager")
+        assert "不等要图" in _text("eager")
 
     def test_unlisted_tier_degrades_to_natural(self):
         assert _text("wild") == _text("natural")
@@ -140,20 +140,22 @@ class TestTierDrivesThreeSurfaces:
 
     def test_injection_names_the_tool_and_optional_caption_without_merging(self):
         text = build_awareness_text([Sticker(id="a", file="a.png", desc="甲", tags=[])], eagerness="eager")
-        assert "sticker_send" in text and "group" in text and "text" in text
-        assert "sticker_send(group=分类名)" in text
+        assert "sticker_list" in text and "sticker_send" in text and "text" in text
+        assert "sticker_send(sticker_id=候选ID)" in text
         assert "text 留空即可" in text
         assert "正常文字回复照常说" in text and "图片独立发送" in text
         assert "没有合适的就纯文字" in text
         assert "一起发出去" not in text
-        assert len(text) < 220, f"注入正文又长回目录复读机了：{len(text)} 字"
+        assert len(text) < 300, f"注入正文又长回目录复读机了：{len(text)} 字"
 
     def test_success_result_tells_her_what_next(self, tmp_path, run_async):
         plugin, _host = _settings(tmp_path, send={"eagerness": "eager"})
         plugin._library.load(force=True)
         plugin._library.create_group("困与睡", "深夜犯困时用", "")
-        plugin._library.add(data=b"\x89PNG\r\n\x1a\n" + b"\x00" * 64 + b"|y", desc="哈欠", tags=[], group="困与睡")
-        result = run_async(plugin.tool_sticker_send(group="困与睡", text="先困了"))
+        sticker, _ = plugin._library.add(
+            data=b"\x89PNG\r\n\x1a\n" + b"\x00" * 64 + b"|y", desc="哈欠", tags=[], group="困与睡"
+        )
+        result = run_async(plugin.tool_sticker_send(sticker_id=sticker.id, text="先困了"))
         assert result.get("ok") is True, result
         assert result.get("note") == NEXT_STEP_NOTE
 

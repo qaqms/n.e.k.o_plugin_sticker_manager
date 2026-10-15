@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.9.2
+
+- Prepare the 0.9.2 stable release on 2026-10-15, including the fixes exercised
+  in the unpublished 0.9.3 local test build. Publication is verified separately.
+- Replace autonomous category random picks and unique keyword auto-sends with
+  candidate descriptions followed by model selection of an explicit image ID.
+  No match sends no image; invalid IDs never fall back to unrelated images.
+- Match group and query together, exclude recent/disabled images from candidates,
+  and prefer positive usage tags over caption text mentioning unsuitable moods.
+- Review spaced animation frames and rewrite captions and usage tags for all
+  190 bundled images in content version 3, distinguishing sender, recipient,
+  tone, intensity, and unsuitable contexts. Keep all 380 media files unchanged.
+- Keep sticker search, selection and sending out of spoken text and parenthesized
+  actions. Apply the instruction to both tool descriptions, reminders and every
+  model-facing result, including empty candidates, refusals and queued sends.
+- Require image actions, targets, event stage and tone to fit the reply.
+  Broad happiness or affection alone does not justify unmentioned unboxing or licking.
+- After submitting an image, resume only unfinished text without repeating the
+  prior reply or restarting the selection workflow. Include the selected ID in
+  successful tool trace lines.
+- Preserve existing eagerness, reminder cadence, sender gates and library data.
+  Add selection, metadata-upgrade, private-instruction and no-delivery coverage.
+- Review the 16:52-17:32 host run: 39 user turns, 11 candidate queries and nine
+  successful ID-based submissions, with no selection narration in saved replies.
+  Some action mismatches remain; this observation does not guarantee compliance
+  or semantic correctness in all conversations.
+
 ## 0.9.1
 
 - Prepare the 0.9.1 stable maintenance release on 2026-10-08 with four

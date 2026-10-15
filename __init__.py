@@ -33,7 +33,6 @@ import asyncio
 import base64
 import binascii
 import math
-import random
 import time
 from pathlib import Path
 from typing import Any
@@ -57,10 +56,14 @@ from .core import (
     EAGERNESS_DEFAULT,
     EAGERNESS_LEVELS,
     GROUP_DESC_MAX_CHARS,
+    INTERNAL_SELECTION_NOTE,
     MAX_STICKER_BYTES,
     NEXT_STEP_NOTE,
     OFFICIAL_PACK_RELPATH,
     PREVIEW_CHUNK_BYTES,
+    SELECTION_HINT,
+    SELECTION_MATCH_RULE,
+    SEND_CANDIDATES_MAX,
     SEND_TEXT_MAX_CHARS,
     UPLOAD_CHUNK_BYTES,
     VISIBLE_TEXT_MAX_CHARS,
@@ -74,7 +77,7 @@ from .core import (
     normalize_tags,
     normalize_zone_name,
     parse_tags_field,
-    resolve_send_target,
+    search_intent_candidates,
     search_stickers,
     validate_desc,
     validate_desc_optional,
@@ -110,14 +113,15 @@ _SEND_HINTS: dict[str, str] = {
     "send_cooldown": "刚发过一张，她在冷却：这轮用文字回复。",
 }
 
-# 组内选图的随机尺（轮 F，对齐外部系统“模型只挑分类、组内随机”）：
-# 模块级可注入——测试里换掉即可钉死“选的是哪张”，生产就是 random.choice。
-_GROUP_PICK = random.choice
-
 # 运行账本的日志节流（v0.20.0）：读数原来只在面板上，判"今晚这次改动有没有用"得开着
 # WebUI 盯——而这条链路的证据必须在日志里离线可读。节流是照陷阱 31 加的（那天 363 行
 # 日志里 313 行是同一个入口的重复留痕）：指纹没变不吼，变了也最快两分钟一行。
 _LEDGER_LOG_MIN_SEC = 120.0
+
+
+def _private_selection_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Keep the reply boundary present on success, empty results and refusals."""
+    return {**result, "hint": str(result.get("hint") or "") + INTERNAL_SELECTION_NOTE}
 
 
 def _clean_id_list(value: Any, *, cap: int = 200) -> list[str]:
@@ -1083,9 +1087,11 @@ class StickerManagerPlugin(NekoPluginBase):
         if reason:
             outcome = f"refused reason={reason}"
         elif result.get("sent"):
-            outcome = "sent"
+            outcome = "sent id=" + str(result["sent"])
         elif result.get("queued"):
-            outcome = "queued"
+            outcome = "queued id=" + str(result["queued"])
+        elif result.get("candidate_ids"):
+            outcome = "candidates ids=" + ",".join(result["candidate_ids"])
         else:
             outcome = f"ok rows={result.get('count', '?')}" if name == "sticker_list" else "ok"
         self.logger.info(
@@ -1263,8 +1269,8 @@ class StickerManagerPlugin(NekoPluginBase):
         name=tr("entries.send.name", default="把这张表情发到聊天"),
         description=tr(
             "entries.send.description",
-            default="发一张表情包到当前聊天：可给 id、分类 group 或关键词 query。用户只要求发一个时可不填参数，"
-            "从当前区可用且最近未发的图中选一张；无需先知道 id。冷却、去重和概率仍生效。"
+            default="按 id 发送具体表情包。仅给 group、query 或不填参数时返回候选，不发送；"
+            "先阅读逐图说明，按回复意图、对象和语气选中后再给 id。没合适的就纯文字。"
             "面板仍可用 id 试发指定图片。"
         ),
         input_schema={
@@ -1278,7 +1284,7 @@ class StickerManagerPlugin(NekoPluginBase):
                     "maxLength": SEND_TEXT_MAX_CHARS,
                     "description": (
                         "额外配文（可选）：先单独发文字，再单独发图片。"
-                        "正常文字回复时仍可调用 sticker_send(group=分类名) 配一张独立表情包，text 无需填写；"
+                        "正常文字回复时可用 sticker_send(sticker_id=候选ID) 配一张独立表情包，text 无需填写；"
                         "只有额外配文才填 text，配文不要在正文重复"
                     ),
                 },
@@ -1294,8 +1300,9 @@ class StickerManagerPlugin(NekoPluginBase):
     ):  # noqa: A002
         if not id or group or query or text:
             result = await self._sticker_send_body(
-                sticker_id=id, group=group, query=query, text=text, _source="agent", _auto_pick=True, **kwargs
+                sticker_id=id, group=group, query=query, text=text, _source="agent", _browse_all=True, **kwargs
             )
+            result = _private_selection_result(result)
             self._note_tool_call(
                 name="agent_send",
                 result=result,
@@ -1926,14 +1933,17 @@ class StickerManagerPlugin(NekoPluginBase):
     @llm_tool(
         name="sticker_list",
         description=(
-            "看看你收藏的表情包里有什么。不填参数：先看套图分类（名字+张数+什么时候用），"
-            "再看你的常货；填 group 只看那一组的完整清单；填 query 按描述/梗义/标签/组名搜。"
-            "拿到后用 sticker_send 发（也可以 sticker_send 只给 group，组内帮你选）。"
+            f"{INTERNAL_SELECTION_NOTE}"
+            "为你准备回复的这句话查表情候选，不发送。填 group 看这一分类的逐图说明，"
+            "query 可给空格或逗号分隔的短关键词，如「安慰 摸头」；同时给时只在该分类检索。"
+            "按回复者的意图、对象和语气选具体图片，不照搬用户情绪；"
+            f"{SELECTION_MATCH_RULE}"
+            "有贴切图片再用 sticker_send(sticker_id=候选ID)，不贴切就纯文字。"
         ),
         parameters={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "想找什么样的表情（如：开心/无语/猫猫），可不填"},
+                "query": {"type": "string", "description": "表达意图的短关键词，空格或逗号分隔，如「安慰 摸头」；可不填"},
                 "group": {"type": "string", "description": "只看这个套图分组的全部图（组名从分类行里拿）"},
             },
             "required": [],
@@ -1944,6 +1954,7 @@ class StickerManagerPlugin(NekoPluginBase):
         # 薄壳只干一件事：把"她调了这个工具、结果如何"记成一痕（v0.17.1 观测轮）。
         # 判定逻辑一律留在 `_sticker_list_body` 里——本轮零行为变更，日志不参与决策。
         result = await self._sticker_list_body(query=query, group=group, **kwargs)
+        result = _private_selection_result(result)
         self._note_tool_call(
             name="sticker_list",
             result=result,
@@ -1956,10 +1967,15 @@ class StickerManagerPlugin(NekoPluginBase):
     async def _sticker_list_body(self, query: str = "", group: str = "", **kwargs: Any) -> dict[str, Any]:
         if not self._settings.enabled:
             return {"ok": False, "reason": "not_enabled"}
-        self._library.load()
+        loaded = self._library.load()
+        if not loaded.ok:
+            return {"ok": False, "reason": loaded.code}
+        query = query if isinstance(query, str) else ""
         limit = self._settings.storage.catalog_limit_for_model
         # J-1：目录只报激活区——她看不到的区，连名字都不该出现在分类行里。
-        all_stickers = self._library.active_pool()
+        lanlan = await self._resolve_lanlan(kwargs)
+        recent = self._sender.recent_sent_ids(lanlan, self._settings)
+        all_stickers = [s for s in self._library.active_pool() if not s.disabled and s.id not in recent]
         descs = self._library.group_descs()
         gname = normalize_group(group)
         if gname:
@@ -1980,27 +1996,41 @@ class StickerManagerPlugin(NekoPluginBase):
                     "ok": True,
                     "count": 0,
                     "catalog": "",
-                    "note": "没有这个分组；不填 group 可以看到分类列表",
+                    "note": "该分类没有可选候选，未发送；没有合适图片就纯文字。",
                 }
-            pool = search_stickers([s for s in all_stickers if s.group == matched[0]], query, include_disabled=False)
+            pool = search_intent_candidates([s for s in all_stickers if s.group == matched[0]], query)
+            if query.strip():
+                limit = min(limit, SEND_CANDIDATES_MAX)
             catalog = format_catalog_for_model(pool, limit, descs)
             header = f"「{matched[0]}」" + (f"：{descs[matched[0]]}" if descs.get(matched[0]) else "")
             return {
                 "ok": True,
                 "count": pool and len(pool) or 0,
-                "catalog": f"{header}\n{catalog}" if catalog else header,
+                "catalog": f"{header}\n{catalog}" if catalog else "",
+                "candidate_ids": [s.id for s in pool[:limit]],
+                "shown": min(len(pool), limit),
+                "hint": SELECTION_HINT,
             }
-        pool = search_stickers(all_stickers, query if isinstance(query, str) else "", include_disabled=False)
+        pool = search_intent_candidates(all_stickers, query if isinstance(query, str) else "")
+        if isinstance(query, str) and query.strip():
+            limit = min(limit, SEND_CANDIDATES_MAX)
         catalog = format_catalog_for_model(pool, limit, descs)
         if not catalog:
-            return {"ok": True, "count": 0, "catalog": "", "note": "库里还没有表情包，或没有匹配的"}
+            return {
+                "ok": True, "count": 0, "catalog": "",
+                "note": "没有可用或匹配的候选，未发送；没有合适图片就纯文字。",
+            }
         if not (isinstance(query, str) and query.strip()):
             # 轮 F 两级目录：无搜索词时先给分类行再给条目——她先看“有哪些套图”，
             # 下钻用 group 参数（对齐外部系统“分类即 prompt”的心智，只是我们在工具结果里给）。
             overview = format_group_overview(all_stickers, descs)
             if overview:
                 catalog = f"【套图分类】\n{overview}\n【条目】\n{catalog}"
-        return {"ok": True, "count": catalog.count("\n") + 1, "catalog": catalog}
+        return {
+            "ok": True, "count": len(pool), "catalog": catalog,
+            "candidate_ids": [s.id for s in pool[:limit]], "hint": SELECTION_HINT,
+            "shown": min(len(pool), limit),
+        }
 
     @llm_tool(
         name="sticker_send",
@@ -2010,10 +2040,10 @@ class StickerManagerPlugin(NekoPluginBase):
             "properties": {
                 "group": {
                     "type": "string",
-                    "description": "日常配图优先只填这个：从下方目录选分类名，组内自动选一张，无需先查列表。",
+                    "description": "分类名；只给分类时返回逐图候选，不会自动发图。",
                 },
-                "sticker_id": {"type": "string", "description": "仅指定某一张图时填写；日常配图只填 group 即可。"},
-                "query": {"type": "string", "description": "按梗义检索想表达的态度或场景；已知分类时只填 group 即可。"},
+                "sticker_id": {"type": "string", "description": "阅读候选说明并确认贴合回复后，填具体图片 ID 才会发送。"},
+                "query": {"type": "string", "description": "空格或逗号分隔的意图关键词，仅返回候选；可用 group 限定分类。"},
                 "force": {
                     "type": "boolean",
                     "description": "仅当主人明确点名要再看/再发这张时置 true：跳过最近不重复与概率闸（冷却仍生效）",
@@ -2044,6 +2074,7 @@ class StickerManagerPlugin(NekoPluginBase):
         result = await self._sticker_send_body(
             sticker_id=sticker_id, query=query, group=group, force=force, text=text, **kwargs
         )
+        result = _private_selection_result(result)
         self._note_tool_call(
             name="sticker_send",
             result=result,
@@ -2061,7 +2092,7 @@ class StickerManagerPlugin(NekoPluginBase):
         force: bool = False,
         text: str = "",
         _source: str = "tool",
-        _auto_pick: bool = False,
+        _browse_all: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
         if not self._settings.enabled:
@@ -2080,6 +2111,12 @@ class StickerManagerPlugin(NekoPluginBase):
             if (not bypass and settings.send.recent_dedup_count > 0)
             else set()
         )
+        caption = text.strip() if isinstance(text, str) else ""
+        if len(caption) > SEND_TEXT_MAX_CHARS:
+            return {
+                "ok": False, "reason": "text_too_long",
+                "hint": f"配文最多 {SEND_TEXT_MAX_CHARS} 字，普通回复照常说即可。",
+            }
         sticker = None
         has_id = isinstance(sticker_id, str) and bool(sticker_id.strip())
         has_query = isinstance(query, str) and bool(query.strip())
@@ -2087,23 +2124,15 @@ class StickerManagerPlugin(NekoPluginBase):
         # J-1：她的候选池 = 激活区。非激活区的图与分类对她不存在（id 点到了也算没找到）。
         pool = self._library.active_pool()
         known_ids = {s.id for s in pool}
-        if _auto_pick and not (has_id or has_query or has_group):
-            available = [s for s in pool if not s.disabled]
-            if not available:
-                return {"ok": False, "reason": "no_match"}
-            selectable = [s for s in available if s.id not in recent]
-            if not selectable:
-                return {"ok": False, "reason": "recent_repeat"}
-            sticker = _GROUP_PICK(selectable)
         if has_id:
             raw_sticker = self._library.get(sticker_id.strip())
             sticker = raw_sticker if raw_sticker is not None and raw_sticker.id in known_ids else None
             if sticker is not None and sticker.disabled:
                 sticker = None
+            if sticker is None:
+                return {"ok": False, "reason": "no_match", "hint": "该图片不可用，未发送；没有合适图片就纯文字。"}
         candidates: list[Sticker] = []
-        if sticker is None and has_group and not has_query:
-            # 轮 F 组内选图（对齐外部系统“模型只挑分类，图由系统定”）：候选池先过同一把
-            # 近期去重尺，再组内随机——她不需要逐图 id，节奏层照常把关。
+        if not has_id and has_group:
             gname = normalize_group(group)
             names = sorted({s.group for s in pool if s.group})
             matched = _match_group_names(names, gname)
@@ -2123,34 +2152,21 @@ class StickerManagerPlugin(NekoPluginBase):
                     "reason": "group_not_found",
                     "hint": f"没有这个分组。现有分组：\n{known}" if known else "库里还没有任何分组。",
                 }
-            group_pool = [s for s in pool if s.group == matched[0] and not s.disabled]
-            if not group_pool:
-                return {"ok": False, "reason": "group_empty", "hint": "这一组没有可用图——换个组或文字回。"}
-            selectable = [s for s in group_pool if s.id not in recent] if recent else group_pool
-            if not selectable:
+            pool = [s for s in pool if s.group == matched[0]]
+            if not any(not s.disabled for s in pool):
+                return {"ok": False, "reason": "group_empty", "hint": "这一分类没有可用图，继续纯文字回复。"}
+        if not has_id and (has_group or has_query or _browse_all):
+            available = search_intent_candidates(pool, query if has_query else "")
+            selectable = [s for s in available if s.id not in recent]
+            if available and not selectable:
                 return {
                     "ok": False,
                     "reason": "recent_repeat",
-                    "hint": "这一组最近的全发过了——换组、用文字回；主人点名才 force。",
+                    "hint": "贴切候选最近已发过，继续文字回复，不必找不相关的图。",
                 }
-            sticker = _GROUP_PICK(selectable)
-        if sticker is None and has_query:
-            filtered = [s for s in pool if s.id not in recent] if recent else pool
-            sticker, candidates = resolve_send_target(filtered, query)
-            if sticker is None and not candidates and recent:
-                # 区分"根本没匹配"和"匹配的全是刚发过的"——前者让她换词，
-                # 后者让她换一张而不是重试同一刀。
-                old_sticker, old_candidates = resolve_send_target(pool, query)
-                if old_sticker is not None or old_candidates:
-                    return {
-                        "ok": False,
-                        "reason": "recent_repeat",
-                        "hint": "匹配的全是最近发过的——换一张或干脆用文字回；"
-                        "只有主人点名要再看这张才用 force=true 重发。",
-                    }
+            limit = self._settings.storage.catalog_limit_for_model
+            candidates = selectable[: min(limit, SEND_CANDIDATES_MAX) if has_query else limit]
         if candidates:
-            # 头部并列：不替她拍板。回候选清单（行形状与 sticker_list 同一把尺），
-            # 不算失败——"看到了、还没选"是选图流程的中间态。
             catalog = format_catalog_for_model(candidates, len(candidates), self._library.group_descs())
             return {
                 "ok": True,
@@ -2158,23 +2174,14 @@ class StickerManagerPlugin(NekoPluginBase):
                 "note": "multi_candidates",
                 "count": len(candidates),
                 "candidates": catalog,
-                "hint": "分不清哪张最贴——用上面的 id 再发一次 sticker_send",
+                "candidate_ids": [s.id for s in candidates],
+                "hint": SELECTION_HINT,
             }
         if sticker is None:
-            # id 没点到东西→如实说没有；三者都没给→拒空枪（旧行为会"顺手"发常货，
-            # 轮 C 起选图必须有依据；轮 F 起 group 也是依据——那是它"发得准"的另一半）。
             return {
                 "ok": False,
-                "reason": "no_match" if (has_id or has_query or has_group) else "id_or_query_required",
-            }
-        # text 保留调用兼容，只用于额外配文；普通回复走她自己的回复通道。
-        # 只 trim 不改写，配文与图片在 sender 中分两次提交。
-        caption = text.strip() if isinstance(text, str) else ""
-        if len(caption) > SEND_TEXT_MAX_CHARS:
-            return {
-                "ok": False,
-                "reason": "text_too_long",
-                "hint": f"配文最多 {SEND_TEXT_MAX_CHARS} 字：那句话太长就别写在这里，正常回文字就好。",
+                "reason": "no_match" if (has_id or has_query or has_group or _browse_all) else "id_or_query_required",
+                "hint": "没有贴切候选，未发送；继续纯文字回复，不必换分类凑图。",
             }
         result = await self._sender.send(
             sticker,

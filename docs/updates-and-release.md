@@ -1,6 +1,6 @@
 # 更新与发布
 
-规则核对日期：2026-10-08。依据 [官方发布教程](https://project-neko.online/zh-CN/plugins/cli)、
+规则核对日期：2026-10-15。依据 [官方发布教程](https://project-neko.online/zh-CN/plugins/cli)、
 [官方 CLI 源码](https://github.com/Project-N-E-K-O/N.E.K.O/blob/main/plugin/neko_plugin_cli/commands/publish_cmd.py)
 和当前本地宿主 SDK。市场服务和 `main` 上的模板可能变化，正式发布前应重新核对。
 
@@ -106,7 +106,7 @@ uv run neko-plugin publish 'D:\neko kaifa3\n.e.k.o_plugin_sticker_manager'
 `publish` 是有外部副作用的发布命令，不是本地打包命令。它要求插件自己的 Git
 工作区干净、标准 `release.yml` 为当前模板、HEAD 已推到 origin；运行依赖同步、
 严格检查、测试、构建、包校验和固定规则的 Ruff 检查，然后创建或核对并推送
-对应版本标签（本次为 `v0.9.1`）。tag 去掉 `v` 后必须与 `plugin.toml` 版本完全一致，
+对应版本标签（本次为 `v0.9.2`）。tag 去掉 `v` 后必须与 `plugin.toml` 版本完全一致，
 不能让已发布的同一 tag 重新指向另一份代码。
 
 标准 GitHub Release 应包含以下三个可下载资产：
@@ -118,7 +118,7 @@ uv run neko-plugin publish 'D:\neko kaifa3\n.e.k.o_plugin_sticker_manager'
 CLI 等待资产就绪后，向市场发送 Release URL。市场只接受已通过首次审核、仓库匹配
 并由标准发布验证成功的插件。这个通知步骤不需市场密码或令牌；推 tag 则需要
 作者的 GitHub 凭据。只推标签、只创建 Release 或手动上传本地包都不等于完成市场发布。
-最后确认市场版本列表有本次版本（`0.9.1`）且 stable latest 指向该版本。
+最后确认市场版本列表有本次版本（`0.9.2`）且 stable latest 指向该版本。
 
 ### Beta 与后续版本
 

@@ -18,6 +18,15 @@
 
 ## Current Media And Update Contract (v0.20.18)
 
+Selection update (0.9.2, 2026-10-15): the reply model reads per-image captions and
+tags, then sends an explicit image ID. Groups only narrow browsing. Selector-only
+send calls return candidates, including single hits; keyword scores do not make
+semantic decisions. No match or unavailable ID triggers random substitution.
+Historical sections describing category random picks, one-call group sending or
+unique lexical-hit auto-sending are superseded by this selection contract.
+Built-in content version 3 reviews all 190 captions and tags with existing
+owner-edit protection. See `docs/intent-selection.md` for details and limits.
+
 - Source GIFs remain untouched and their exact bytes become the official collection.
   Details/exports retain full original quality. Separate animated WebP delivery files
   fit the default 256KiB inline budget. No deliberate frame sampling; lossy encoding

@@ -1,5 +1,5 @@
 # pyright: reportMissingImports=false
-"""Eager-only prompt changes preserve the delivered 0.20.14 runtime contracts."""
+"""Tier willingness and cadence survive private image selection guidance."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from sticker_manager.core.catalog import Sticker
 from sticker_manager.core.configuration import StickerManagerSettings
 from sticker_manager.core.eagerness import (
     DECISION_CHECKPOINT,
+    INTERNAL_SELECTION_NOTE,
     NEXT_STEP_NOTE,
     TOOL_NOTE,
     TRIGGER_CRITERIA,
@@ -56,12 +57,8 @@ _UNCHANGED_014 = {
     },
 }
 _SHARED_POINTER_014 = (
-    "回复有情绪或轻松互动时，按你想表达的态度选分类，调用 sticker_send(group=分类名)。"
+    "先用 sticker_list 看逐图说明，按回复意图挑图，再用 sticker_send(sticker_id=候选ID)。"
     "正常文字回复照常说，text 留空即可，图片独立发送；没有合适的就纯文字。"
-)
-_NEXT_STEP_014 = (
-    "表情包已提交到聊天，继续正常文字回复，不复述额外配文。"
-    "后续互动想配图时仍可调用 sticker_send(group=分类名)，text 留空即可；没合适的就纯文字。"
 )
 
 
@@ -79,9 +76,12 @@ def test_non_eager_text_is_byte_for_byte_014_baseline(tier):
 
 
 @pytest.mark.parametrize("tier", ["reserved", "natural", "eager"])
-def test_shared_pointer_and_next_step_keep_014_baseline(tier):
-    assert injection_pointer(tier) == _SHARED_POINTER_014
-    assert NEXT_STEP_NOTE == _NEXT_STEP_014
+def test_shared_pointer_adds_privacy_and_receipt_finishes_current_selection(tier):
+    assert injection_pointer(tier) == _SHARED_POINTER_014 + INTERNAL_SELECTION_NOTE
+    assert "本轮选图已完成" in NEXT_STEP_NOTE
+    assert "若已说完就结束" in NEXT_STEP_NOTE
+    assert "不复述原话" in NEXT_STEP_NOTE
+    assert "后续想配图" not in NEXT_STEP_NOTE
 
 
 @pytest.mark.parametrize("junk", ["wild", None, ["eager"]])
@@ -99,18 +99,19 @@ def test_unknown_tiers_keep_natural_text_on_actual_surfaces(junk):
 
 def test_eager_tool_surface_prioritizes_fitting_image_for_ordinary_chat():
     description = build_send_tool_description("・smile（1 张） — happy reaction", "eager")
-    assert description.startswith("每轮开口前先做这个判断：按自己要表达的态度找分类。")
+    assert description.startswith("每轮开口前先做这个判断：按自己要表达的态度找候选图。")
     for scene in ("轻松接话", "开心庆祝", "撒娇贴贴", "关心安慰", "玩笑吐槽", "犯困", "道晚安"):
         assert scene in description
-    assert "有贴切分类就优先调用 sticker_send 配一张" in description
+    assert "有贴切图片就优先查候选配一张" in description
     assert "不用等用户点名要图" in description
     assert "也别因文字已经说清楚就省掉" in description
-    assert "按自己回复要表达的态度选分类" in description
+    assert "按自己回复要表达的态度选具体图片" in description
     assert "分清安慰对方和说自己" in description
-    assert "无贴切分类、信息问答或正经办事就纯文字" in description
+    assert "无贴切图片、信息问答或正经办事就纯文字" in description
     assert "单回复最多一张" in description
     assert "正常文字回复照常说，text 留空即可，图片独立发送" in description
-    assert "日常只需 sticker_send(group=分类名)" in description
+    assert "先调用 sticker_list(group=分类名)" in description
+    assert "sticker_send(sticker_id=候选ID)" in description
 
 
 def test_eager_guidance_has_no_turn_quota_or_indiscriminate_fill():
@@ -124,10 +125,11 @@ def test_eager_guidance_has_no_turn_quota_or_indiscriminate_fill():
 def test_eager_reminder_budget_covers_190_stickers_and_both_triggers(event):
     text = build_awareness_text(_stickers(190), eagerness="eager", event=event)
     assert "190 张表情包" in text
-    assert "贴切就优先配一张，不等要图，文字说清也别省掉" in text
+    assert "有贴切候选就优先配一张，不等要图" in text
     assert "分清安慰与自述，不贴切或正经办事纯文字，单回复最多一张" in text
     assert _SHARED_POINTER_014 in text
-    assert len(text) < 220
+    assert INTERNAL_SELECTION_NOTE in text
+    assert len(text) < 300
     assert text.startswith("（表情包点名）") is event
 
 
@@ -164,7 +166,7 @@ def test_actual_awareness_push_gets_eager_text_without_changing_cadence_or_trans
     assert call["description"] == "sticker_manager:awareness"
     assert call["parts"][0]["type"] == "text"
     text = call["parts"][0]["text"]
-    assert "贴切就优先配一张，不等要图，文字说清也别省掉" in text
+    assert "有贴切候选就优先配一张，不等要图" in text
     assert "分清安慰与自述" in text and "单回复最多一张" in text
     assert _SHARED_POINTER_014 in text
     assert text.startswith("（表情包点名）") is (trigger == "signal")

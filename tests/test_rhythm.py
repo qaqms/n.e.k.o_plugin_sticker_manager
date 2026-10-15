@@ -206,13 +206,12 @@ class TestToolSurface:
     def test_query_only_matching_recent_returns_recent_repeat(self, tmp_path, run_async):
         plugin, _host, ids = self._tool_setup(tmp_path, recent_dedup_count=1)
         ctx = {"_ctx": {"lanlan_name": "K"}}
-        # 先把"开心"发出去（query 命中唯一→直发）
-        first = run_async(plugin.tool_sticker_send(query="开心", **ctx))
+        first = run_async(plugin.tool_sticker_send(sticker_id=ids["开心"], **ctx))
         assert first["ok"] and first["sent"] == ids["开心"]
         # 再按同一意图选图：命中只剩它，但它在"最近"集里——如实报 recent_repeat
         second = run_async(plugin.tool_sticker_send(query="开心", **ctx))
         assert second["ok"] is False and second["reason"] == "recent_repeat"
-        assert "force" in second["hint"]
+        assert "文字回复" in second["hint"]
 
     def test_explicit_id_in_recent_blocked_with_hint(self, tmp_path, run_async):
         plugin, _host, ids = self._tool_setup(tmp_path, recent_dedup_count=1)
@@ -247,6 +246,7 @@ class TestToolSurface:
         picked = first["candidates"].splitlines()[0]
         cid = picked[picked.index("[") + 1 : picked.index("]")]
         run_async(plugin.tool_sticker_send(sticker_id=cid, **ctx))
-        # cid 进了"最近"集；再按同 query 选图只剩另一张，严格最优直发
+        # 单个候选也必须确认，不因最近只剩一张就自动发送。
         second = run_async(plugin.tool_sticker_send(query="开心", **ctx))
-        assert second["ok"] and second["sent"] != cid
+        assert second["ok"] and second["sent"] == "" and second["count"] == 1
+        assert cid not in second["candidate_ids"]

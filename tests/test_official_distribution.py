@@ -19,7 +19,7 @@ def test_bundled_originals_and_delivery_are_verified():
     assert not PACK.exists(), "Tests must exercise the shipped split archive"
     with open_pack(PACK) as archive:
         manifest = json.loads(archive.read("manifest.json"))
-        assert manifest["pack_version"] == 2
+        assert manifest["pack_version"] == 3
         assert manifest["media_policy"] == "original_gif_with_full_motion_delivery"
         assert len(manifest["stickers"]) == 190
         assert len({row["group"] for row in manifest["stickers"]}) == 22
