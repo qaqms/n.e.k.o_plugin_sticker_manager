@@ -4,7 +4,7 @@
 // - 拆区是删分类的放大版：确认摊服务端张数（zone.total，陷阱 22 的对偶），
 //   并且主人拍板要 **等 3 秒才能按确认**（防误删；纯前端闸，服务端不装慢）；
 // - 零覆盖层弹窗（陷阱 20）：改名/说明都是就地展开的一行。
-import { Button, Inline, Input, Stack, Text } from "@neko/plugin-ui";
+import { Button, Inline, Input, Select, Text } from "@neko/plugin-ui";
 import { useEffect, useState } from "@neko/plugin-ui";
 import type { Surface, ZoneInfo } from "../shared";
 
@@ -89,36 +89,34 @@ export function ZoneBar(props: {
     }
   };
 
-  const tabLabel = (zone: ZoneInfo) => {
+  const optionLabel = (zone: ZoneInfo) => {
     const base = String(zone.name || "");
     const count = " (" + String(zone.total ?? 0) + ")";
-    // J-2：官方区挂「官方」徽章（builtin 位是真身尺，改名不丢）；激活徽章语义不变。
-    const tag = zone.builtin ? t("panel.zone.badge_builtin", { defaultValue: " ·官方" }) : "";
     return zone.active
-      ? base + count + tag + t("panel.zone.badge_active", { defaultValue: " ·她在用" })
-      : base + count + tag;
+      ? base + count + t("panel.zone.badge_active", { defaultValue: " ·使用中" })
+      : base + count;
   };
 
   return (
-    <Stack gap={6}>
-      <Inline gap={6} align="center" wrap>
-        {props.zones.map((zone) => (
-          <Button
-            key={zone.id}
-            tone={zone.id === props.view ? "primary" : "default"}
-            disabled={busy}
-            onClick={() => {
-              props.onSwitch(zone.id);
-            }}
-          >
-            {tabLabel(zone)}
-          </Button>
-        ))}
-      </Inline>
+    <div className="sticker-zones">
+      <label className="sticker-zone-picker">
+        <span>{t("panel.zone.browse", { defaultValue: "收藏区" })}</span>
+        <Select
+          value={props.view}
+          disabled={busy}
+          options={props.zones.map((zone) => ({ value: zone.id, label: optionLabel(zone) }))}
+          onChange={(next: any) => props.onSwitch(String(next ?? ""))}
+        />
+      </label>
+      {current && current.id === props.activeZone ? (
+        <span className="sticker-zone-state">
+          {t("panel.zone.in_use", { defaultValue: "猫娘正在使用" })}
+        </span>
+      ) : null}
       {current && current.id !== props.activeZone ? (
         <Inline gap={8} align="center" wrap>
           <Button
-            tone="primary"
+            tone="default"
             disabled={busy}
             onClick={() => {
               props.onActivate(current.id);
@@ -306,6 +304,6 @@ export function ZoneBar(props: {
           ) : null}
         </div>
       </details>
-    </Stack>
+    </div>
   );
 }

@@ -740,7 +740,7 @@ test("image buttons and named checkboxes are siblings with guarded disabled hand
   assert.equal(selections, 0);
 });
 
-test("library is the default view and sending settings and status are separate", () => {
+test("library is the default view with only library and settings navigation", () => {
   const env = environment();
   const Panel = env.load("ui/panel.tsx").default;
   const props = surface();
@@ -750,13 +750,13 @@ test("library is the default view and sending settings and status are separate",
   assert.equal(walk(node, (item) => item.type.name === "Card").length, 0);
   const navigation = walk(node, (item) => item.type.name === "SegmentedControl")[0];
   assert.equal(navigation.props.value, "library");
+  assert.deepEqual(Array.from(navigation.props.options, (option) => option.value), ["library", "settings"]);
   navigation.props.onChange("settings");
   node = runner.render();
   assert.equal(walk(node, (item) => item.type.name === "CategorySection").length, 0);
   assert.equal(walk(node, (item) => item.type.name === "AwarenessCard")[0].props.mode, "settings");
-  walk(node, (item) => item.type.name === "SegmentedControl")[0].props.onChange("status");
-  node = runner.render();
-  assert.equal(walk(node, (item) => item.type.name === "AwarenessCard")[0].props.mode, "status");
+  walk(node, (item) => item.type.name === "SegmentedControl")[0].props.onChange("library");
+  assert.equal(walk(runner.render(), (item) => item.type.name === "CategorySection").length, 1);
 });
 
 test("category navigation survives detail return and reports selections hidden by a filter", () => {
@@ -771,7 +771,7 @@ test("category navigation survives detail return and reports selections hidden b
   categories[0].props.onToggleSelect("s1");
   categories[1].props.onToggleSelect("s3");
   node = runner.render();
-  walk(node, (item) => item.type.name === "Select")[0].props.onChange("group:g1");
+  walk(node, (item) => item.type.name === "LibraryToolbar")[0].props.setCategoryFilter("group:g1");
   node = runner.render();
   assert.equal(walk(node, (item) => item.type.name === "CategorySection").length, 1);
   assert.equal(walk(node, (item) => item.type.name === "BatchBar")[0].props.hiddenCount, 1);
@@ -779,7 +779,7 @@ test("category navigation survives detail return and reports selections hidden b
   node = runner.render();
   walk(node, (item) => item.type.name === "FocusCard")[0].props.onExit();
   node = runner.render();
-  assert.equal(walk(node, (item) => item.type.name === "Select")[0].props.value, "group:g1");
+  assert.equal(walk(node, (item) => item.type.name === "LibraryToolbar")[0].props.categoryFilter, "group:g1");
   assert.equal(walk(node, (item) => item.type.name === "BatchBar")[0].props.hiddenCount, 1);
 });
 
@@ -795,4 +795,187 @@ test("malformed batch acknowledgements preserve every unconfirmed selection", as
   model = runner.render();
   assert.deepEqual(Array.from(model.selected), ["item-200"]);
   assert.match(model.libraryNote, /invalid_batch_result/);
+});
+
+test("send cooldown saves numeric zero independently and blocks duplicate saves while pending", async () => {
+  const calls = [];
+  let finish;
+  const props = surface((action, args) => {
+    calls.push({ action, args: { ...args } });
+    return new Promise((resolve) => { finish = resolve; });
+  });
+  props.state.config = { cooldown_sec: 20 };
+  props.state.awareness = { min_interval_sec: 0 };
+  const env = environment();
+  const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
+  const runner = env.runner(() => AwarenessCard({ surface: props, mode: "settings" }));
+  let node = runner.render();
+  const input = walk(node, (item) => item.type.name === "Input")[0];
+  assert.equal(input.props.type, "number");
+  assert.equal(input.props.value, "20");
+  assert.equal(input.props.max, 3600);
+  assert.equal(button(node, "保存发送冷却").props.disabled, true);
+  input.props.onChange("0");
+  node = runner.render();
+  assert.equal(walk(node, (item) => item.type.name === "Slider")[0].props.value, 0);
+  assert.match(text(node), /当前发送冷却：20 秒/);
+  const save = button(node, "保存发送冷却");
+  save.props.onClick();
+  save.props.onClick();
+  node = runner.render();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].action, "set_send_cooldown");
+  assert.deepEqual(calls[0].args, { cooldown_sec: 0 });
+  assert.equal(walk(node, (item) => item.type.name === "Input")[0].props.disabled, true);
+  props.state.config.cooldown_sec = 0;
+  finish({ result: { cooldown_sec: 0, note: "send_cooldown_set" } });
+  await settle();
+  node = runner.render();
+  assert.match(text(node), /关闭发送冷却/);
+  assert.match(walk(node, (item) => item.type.name === "Alert")[0].props.message, /发送冷却已保存/);
+  assert.equal(button(node, "保存发送冷却").props.disabled, true);
+});
+
+test("invalid cooldown drafts never invoke an action and an external update refreshes the input", () => {
+  const calls = [];
+  const props = surface(async (...args) => { calls.push(args); return { result: {} }; });
+  props.state.config = { cooldown_sec: 12.5 };
+  const env = environment();
+  const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
+  const runner = env.runner(() => AwarenessCard({ surface: props, mode: "settings" }));
+  let node = runner.render();
+  for (const value of ["", "-1", "3601", "NaN", "Infinity"]) {
+    walk(node, (item) => item.type.name === "Input")[0].props.onChange(value);
+    node = runner.render();
+    const save = button(node, "保存发送冷却");
+    assert.equal(save.props.disabled, true);
+    save.props.onClick();
+    assert.equal(calls.length, 0);
+  }
+  props.state.config.cooldown_sec = 60;
+  node = runner.render();
+  assert.equal(walk(node, (item) => item.type.name === "Input")[0].props.value, "60");
+  assert.equal(button(node, "保存发送冷却").props.disabled, true);
+});
+
+test("failed cooldown save keeps the draft and current setting and allows retry", async () => {
+  const props = surface(async () => { throw new Error("config_unavailable"); });
+  props.state.config = { cooldown_sec: 20 };
+  const env = environment();
+  const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
+  const runner = env.runner(() => AwarenessCard({ surface: props, mode: "settings" }));
+  let node = runner.render();
+  walk(node, (item) => item.type.name === "Input")[0].props.onChange("0");
+  button(runner.render(), "保存发送冷却").props.onClick();
+  await settle();
+  node = runner.render();
+  assert.equal(walk(node, (item) => item.type.name === "Input")[0].props.value, "0");
+  assert.match(text(node), /当前发送冷却：20 秒/);
+  assert.equal(walk(node, (item) => item.type.name === "Alert")[0].props.tone, "danger");
+  assert.equal(button(node, "保存发送冷却").props.disabled, false);
+});
+
+test("advanced reminder and diagnostics stay collapsed without hiding ordinary send controls", () => {
+  const env = environment();
+  const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
+  const node = env.runner(() => AwarenessCard({ surface: surface(), mode: "settings" })).render();
+  const panels = walk(node, (item) => item.type === "details");
+  assert.equal(panels.length, 2);
+  assert.ok(panels.every((item) => !item.props.open));
+  assert.equal(walk(panels[0], (item) => item.type.name === "Slider").length, 1);
+  assert.equal(walk(panels[1], (item) => item.type === "dl").length, 3);
+  assert.equal(walk(panels[0], (item) => item.type.name === "Input").length, 0);
+  assert.equal(walk(node, (item) => item.type.name === "SegmentedControl").length, 1);
+  assert.equal(walk(node, (item) => item.type.name === "Input").length, 1);
+});
+
+test("library management expands explicitly and category creation keeps the form visible", () => {
+  const env = environment();
+  const Toolbar = env.load("ui/components/library_toolbar.tsx").LibraryToolbar;
+  let creates = 0;
+  const filters = [];
+  const props = {
+    surface: surface(), query: "", categories: [], categoryFilter: "",
+    zipInputRef: { current: null }, imgInputRef: { current: null },
+    onToggleCreating: () => creates++,
+    setCategoryFilter: (value) => filters.push(value),
+  };
+  const runner = env.runner(() => Toolbar(props));
+  let node = runner.render();
+  const categorySelect = walk(node, (item) => item.type.name === "Select")[0];
+  assert.equal(categorySelect.props.value, "all");
+  assert.equal(categorySelect.props.options[0].value, "all");
+  categorySelect.props.onChange("group:g1");
+  categorySelect.props.onChange("all");
+  assert.deepEqual(filters, ["group:g1", ""]);
+  const menu = () => walk(node, (item) => item.props.id === "sticker-library-management")[0];
+  const more = () => walk(node, (item) => item.props.className === "sticker-more")[0];
+  assert.equal(menu().props.hidden, true);
+  more().props.onClick();
+  node = runner.render();
+  assert.equal(menu().props.hidden, false);
+  assert.equal(more().props["aria-expanded"], "true");
+  button(node, "新建分类").props.onClick();
+  node = runner.render();
+  assert.equal(creates, 1);
+  assert.equal(menu().props.hidden, true);
+  props.creating = true;
+  node = runner.render();
+  assert.ok(button(node, "创建分类"));
+});
+
+test("empty batch tags disable actions and stale clicks never dispatch a request", () => {
+  const env = environment();
+  const BatchBar = env.load("ui/components/batch_bar.tsx").BatchBar;
+  const calls = [];
+  const props = {
+    surface: surface(), selected: ["s1"], hiddenCount: 0, zone: "z1",
+    batchTags: "", batchGroup: "", onRun: (patch) => calls.push(patch),
+  };
+  for (const draft of ["", "  ", ",，、", "x".repeat(25)]) {
+    props.batchTags = draft;
+    const node = BatchBar(props);
+    for (const name of ["加标签", "删标签"]) {
+      const action = button(node, name);
+      assert.equal(action.props.disabled, true);
+      action.props.onClick();
+    }
+  }
+  assert.equal(calls.length, 0);
+  props.batchTags = "喜欢， 温柔";
+  let node = BatchBar(props);
+  assert.equal(button(node, "删标签").props.disabled, false);
+  button(node, "删标签").props.onClick();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].tags_remove, props.batchTags);
+  props.disabled = true;
+  node = BatchBar(props);
+  button(node, "加标签").props.onClick();
+  assert.equal(calls.length, 1);
+});
+
+test("batch model rejects empty tag edits while allowing valid edits and empty-category moves", async () => {
+  const calls = [];
+  const props = surface(async (action, args) => {
+    calls.push({ action, args });
+    return { result: { updated: args.ids.length, missing: [] } };
+  });
+  const env = environment();
+  const useModel = env.load("ui/library_model.ts").useLibraryModel;
+  const runner = env.runner(() => useModel(props));
+  let model = runner.render();
+  model.toggleSelected("s1");
+  model = runner.render();
+  for (const patch of [{}, { tags_add: " " }, { tags_remove: "，、" }, { tags_add: "x".repeat(25) }]) {
+    await model.runBatch(patch);
+  }
+  model = runner.render();
+  assert.equal(calls.length, 0);
+  assert.match(model.libraryNote, /请先填写有效标签/);
+  assert.deepEqual(Array.from(model.selected), ["s1"]);
+  await model.runBatch({ tags_add: "温柔，温柔, 喜欢" });
+  assert.equal(calls[0].args.tags_add, "温柔,喜欢");
+  await model.runBatch({ group: "", tags_remove: "" });
+  assert.equal(calls[1].args.group, "");
+  assert.equal("tags_remove" in calls[1].args, false);
 });

@@ -34,6 +34,35 @@ class TestReminderIntervalReadIn:
         settings = StickerManagerSettings.from_config({"sticker_manager": {"awareness": {}}})
         assert settings.awareness.min_interval_sec == 60.0
 
+    @pytest.mark.parametrize(("cooldown", "sent"), [(0, True), (0.0, True), (20.0, False)])
+    def test_reloaded_send_cooldown_is_separate_from_zero_reminder_interval(
+        self, tmp_path, run_async, caplog, cooldown, sent,
+    ):
+        caplog.set_level("INFO")
+        config = FakeConfig(data={"sticker_manager": {
+            "enabled": True,
+            "send": {"cooldown_sec": cooldown, "recent_dedup_count": 0},
+            "awareness": {"min_interval_sec": 0},
+        }})
+        plugin, host = build_plugin(FakeHostContext(data_root=tmp_path, config=config))
+        settings = run_async(plugin._reload_settings())
+        plugin._library.load()
+        sticker, error = plugin._library.add(data=PNG_BYTES, desc="smile", tags=[])
+        assert not error
+        assert settings.send.cooldown_sec == cooldown and settings.awareness.min_interval_sec == 0
+        assert run_async(
+            plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0),
+        ).ok
+        again = run_async(
+            plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1018.0),
+        )
+        assert again.ok is sent
+        if not sent:
+            assert again.code == "send_cooldown"
+        assert len(host.push.calls) == (2 if sent else 1)
+        assert f"send_cooldown_sec={float(cooldown)}" in caplog.text
+        assert "reminder_min_interval_sec=0.0" in caplog.text
+
     @pytest.mark.parametrize("raw", [0, 0.0, 1, 12.5, 59, 60, 60.0])
     def test_valid_numeric_values_are_preserved(self, raw: float):
         settings = StickerManagerSettings.from_config({

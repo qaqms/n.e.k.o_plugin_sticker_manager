@@ -4,7 +4,8 @@ import {
   Button,
   Field,
   Inline,
-  Select,
+  Input,
+  SegmentedControl,
   Slider,
   Stack,
   Text,
@@ -30,6 +31,11 @@ export function AwarenessCard(props: {
   const runState = state.run || {};
   const configuredInterval = awareness.min_interval_sec ?? 60;
   const [intervalDraft, setIntervalDraft] = useState(configuredInterval);
+  const configuredCooldown = state.config?.cooldown_sec ?? 20;
+  const [cooldownDraft, setCooldownDraft] = useState(String(configuredCooldown));
+  const cooldownValue = Number(cooldownDraft);
+  const cooldownValid = cooldownDraft.trim() !== "" && Number.isFinite(cooldownValue)
+    && cooldownValue >= 0 && cooldownValue <= 3600;
   const [note, setNote] = useState("");
   const [failed, setFailed] = useState(false);
   const [pending, setPending] = useState("");
@@ -38,6 +44,9 @@ export function AwarenessCard(props: {
   useEffect(() => {
     setIntervalDraft(configuredInterval);
   }, [configuredInterval]);
+  useEffect(() => {
+    setCooldownDraft(String(configuredCooldown));
+  }, [configuredCooldown]);
 
   const run = async (action: string, args: Record<string, unknown>) => {
     if (busyRef.current || props.disabled) return;
@@ -51,6 +60,9 @@ export function AwarenessCard(props: {
       if (action === "set_reminder_interval") {
         if (result?.min_interval_sec !== undefined) setIntervalDraft(result.min_interval_sec);
         setNote(t("panel.awareness.interval.saved", { defaultValue: "提醒间隔已保存" }));
+      } else if (action === "set_send_cooldown") {
+        if (result?.cooldown_sec !== undefined) setCooldownDraft(String(result.cooldown_sec));
+        setNote(t("panel.send.cooldown.saved", { defaultValue: "发送冷却已保存" }));
       } else if (action === "awareness_now" && result) {
         const status = String(result.status || "");
         setNote(t(`panel.awareness.status.${status}`, { defaultValue: status }));
@@ -136,87 +148,144 @@ export function AwarenessCard(props: {
     </dl>
   );
 
+  const diagnostics = (
+    <div className="sticker-diagnostics">
+      <h2 className="sticker-section-title">
+        {t("panel.library.overview", { defaultValue: "图库概况" })}
+      </h2>
+      {readouts(libraryItems)}
+      <h2 className="sticker-section-title">
+        {t("panel.run.title", { defaultValue: "本次运行（重启插件归零）" })}
+      </h2>
+      {readouts(runItems)}
+      {runState.last_call ? (
+        <Text>
+          {t("panel.run.last", { defaultValue: "最近一次" }) + "：" + runState.last_call +
+            (runState.last_reason ? " · " + runState.last_reason : "")}
+        </Text>
+      ) : null}
+      <h2 className="sticker-section-title">
+        {t("panel.awareness.title", { defaultValue: "配图提醒" })}
+      </h2>
+      {readouts(statusItems)}
+      <Inline gap={8}>
+        <Button tone="default" disabled={disabled} onClick={() => { run("awareness_now", {}); }}>
+          {pending === "awareness_now"
+            ? t("panel.awareness.checking", { defaultValue: "检查中…" })
+            : t("panel.awareness.button", { defaultValue: "测试提醒" })}
+        </Button>
+      </Inline>
+    </div>
+  );
+
   return (
     <div className="sticker-settings">
       {note ? <Alert tone={failed ? "danger" : "info"} message={note} /> : null}
       {props.mode === "settings" ? (
-        <Stack gap={16}>
-          <Field label={t("panel.awareness.eagerness", { defaultValue: "配表情积极度" })}>
-            <Select
+        <div className="sticker-preferences">
+          <section className="sticker-setting">
+            <h2 className="sticker-section-title">
+              {t("panel.awareness.eagerness", { defaultValue: "配图积极度" })}
+            </h2>
+            <SegmentedControl
               disabled={disabled}
               value={String(state.eagerness || "natural")}
               options={[
-                { value: "reserved", label: t("panel.eagerness.reserved", { defaultValue: "矜持：没有正合适的就不发" }) },
-                { value: "natural", label: t("panel.eagerness.natural", { defaultValue: "自然：贴切就发（默认）" }) },
-                { value: "eager", label: t("panel.eagerness.eager", { defaultValue: "爱发：情绪对得上就配一张" }) },
+                { value: "reserved", label: t("panel.preference.reserved", { defaultValue: "矜持" }) },
+                { value: "natural", label: t("panel.preference.natural", { defaultValue: "自然" }) },
+                { value: "eager", label: t("panel.preference.eager", { defaultValue: "爱发" }) },
               ]}
               onChange={(next: any) => {
                 run("set_eagerness", { eagerness: String(next || "natural") });
               }}
             />
-          </Field>
-          <Field label={t("panel.awareness.min_interval_sec", { defaultValue: "提醒最小间隔（秒）" })}>
-            <Stack gap={8}>
-              <Slider
-                value={intervalDraft}
-                min={0}
-                max={60}
-                step={1}
-                showValue
-                disabled={disabled}
-                onChange={setIntervalDraft}
-              />
-              <Inline gap={12} wrap>
-                <Text>
-                  {intervalDraft === 0
-                    ? t("panel.awareness.interval.off", { defaultValue: "无时间限制" })
-                    : t("panel.awareness.interval.seconds", {
-                      defaultValue: "最少间隔 {seconds} 秒",
-                    }).replace("{seconds}", String(intervalDraft))}
-                </Text>
-                <Button
-                  disabled={disabled || intervalDraft === configuredInterval}
-                  onClick={() => {
-                    run("set_reminder_interval", { min_interval_sec: intervalDraft });
-                  }}
-                >
-                  {pending === "set_reminder_interval"
-                    ? t("panel.awareness.interval.saving", { defaultValue: "保存中" })
-                    : t("panel.awareness.interval.save", { defaultValue: "保存" })}
-                </Button>
-              </Inline>
-            </Stack>
-          </Field>
-        </Stack>
-      ) : (
-        <Stack gap={16}>
-          <h2 className="sticker-section-title">
-            {t("panel.library.overview", { defaultValue: "图库概况" })}
-          </h2>
-          {readouts(libraryItems)}
-          <h2 className="sticker-section-title">
-            {t("panel.awareness.title", { defaultValue: "存在感注入" })}
-          </h2>
-          {readouts(statusItems)}
-          <Inline gap={8}>
-            <Button disabled={disabled} onClick={() => { run("awareness_now", {}); }}>
-              {pending === "awareness_now"
-                ? t("panel.awareness.checking", { defaultValue: "检查中…" })
-                : t("panel.awareness.button", { defaultValue: "现在注一条（调试）" })}
-            </Button>
-          </Inline>
-          <h2 className="sticker-section-title">
-            {t("panel.run.title", { defaultValue: "本次运行（重启插件归零）" })}
-          </h2>
-          {readouts(runItems)}
-          {runState.last_call ? (
-            <Text>
-              {t("panel.run.last", { defaultValue: "最近一次" }) + "：" + runState.last_call +
-                (runState.last_reason ? " · " + runState.last_reason : "")}
-            </Text>
-          ) : null}
-        </Stack>
-      )}
+          </section>
+          <section className="sticker-setting">
+            <div className="sticker-setting-control">
+              <Field
+                label={t("fields.cooldown_sec", { defaultValue: "发送冷却（秒）" })}
+                help={t("panel.send.cooldown.range", { defaultValue: "0–3600 秒，0 为关闭" })}
+                error={!cooldownValid
+                  ? t("panel.send.cooldown.invalid", { defaultValue: "请输入 0–3600 之间的数字" })
+                  : ""}
+              >
+                <Input
+                  type="number"
+                  value={cooldownDraft}
+                  min={0}
+                  max={3600}
+                  step={1}
+                  invalid={!cooldownValid}
+                  disabled={disabled}
+                  onChange={setCooldownDraft}
+                />
+              </Field>
+              <Button
+                tone="default"
+                disabled={disabled || !cooldownValid || cooldownValue === configuredCooldown}
+                onClick={() => {
+                  if (cooldownValid && cooldownValue !== configuredCooldown) {
+                    run("set_send_cooldown", { cooldown_sec: cooldownValue });
+                  }
+                }}
+              >
+                {pending === "set_send_cooldown"
+                  ? t("panel.awareness.interval.saving", { defaultValue: "保存中" })
+                  : t("actions.set_send_cooldown.label", { defaultValue: "保存发送冷却" })}
+              </Button>
+            </div>
+            <p className="sticker-setting-current">
+              {configuredCooldown === 0
+                ? t("panel.send.cooldown.off", { defaultValue: "关闭发送冷却" })
+                : t("panel.awareness.send_cooldown", {
+                  defaultValue: "当前发送冷却：{seconds} 秒",
+                }).replace("{seconds}", String(configuredCooldown))}
+            </p>
+          </section>
+          <details className="sticker-menu sticker-advanced">
+            <summary>{t("panel.settings.advanced", { defaultValue: "高级设置" })}</summary>
+            <div className="sticker-menu-body">
+              <Field label={t("panel.awareness.min_interval_sec", { defaultValue: "提醒最小间隔（秒）" })}>
+                <Stack gap={8}>
+                  <Slider
+                    value={intervalDraft}
+                    min={0}
+                    max={60}
+                    step={1}
+                    showValue
+                    disabled={disabled}
+                    onChange={setIntervalDraft}
+                  />
+                  <Inline gap={12} wrap>
+                    <Text>
+                      {intervalDraft === 0
+                        ? t("panel.awareness.interval.off", { defaultValue: "提醒无时间限制" })
+                        : t("panel.awareness.interval.seconds", {
+                          defaultValue: "提醒最少间隔 {seconds} 秒",
+                        }).replace("{seconds}", String(intervalDraft))}
+                    </Text>
+                    <Button
+                      tone="default"
+                      disabled={disabled || intervalDraft === configuredInterval}
+                      onClick={() => {
+                        run("set_reminder_interval", { min_interval_sec: intervalDraft });
+                      }}
+                    >
+                      {pending === "set_reminder_interval"
+                        ? t("panel.awareness.interval.saving", { defaultValue: "保存中" })
+                        : t("panel.awareness.interval.save", { defaultValue: "保存" })}
+                    </Button>
+                  </Inline>
+                </Stack>
+              </Field>
+            </div>
+          </details>
+          <details className="sticker-menu sticker-advanced">
+            <summary>{t("panel.settings.diagnostics", { defaultValue: "运行诊断" })}</summary>
+            <div className="sticker-menu-body">{diagnostics}</div>
+          </details>
+        </div>
+      ) : diagnostics}
     </div>
   );
 }

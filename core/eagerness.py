@@ -20,6 +20,7 @@ from .configuration import EAGERNESS_DEFAULT, EAGERNESS_LEVELS
 # Applies before, between and after tool calls, including parenthesized roleplay.
 INTERNAL_SELECTION_NOTE = (
     "选图只在内部完成；正文和括号动作中都不提找图、选图、工具或发送过程，也不照读图片说明。"
+    "空候选或未发送也不解释原因，不把检索状态写成动作；只继续当前聊天。"
     "调用后续接原话，不重复已说内容。"
 )
 

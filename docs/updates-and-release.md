@@ -1,5 +1,14 @@
 # 更新与发布
 
+## 本次 0.9.3 发行范围
+
+2026-10-16，维护者要求修复、提交推送并发行 `0.9.3`，明确不通知插件市场。
+本次使用 GitHub 标签 `v0.9.3` 触发标准 Release 工作流，检查远程 Verify、
+Release 和三个发行资产；不调用完整 `neko-plugin publish` 或任何市场发布接口。
+标准工作流中的 `market-release-check` 与 `market-evidence.json` 是 GitHub 构建验证资产，
+生成它们不等于向插件市场通知版本。本次不查询市场版本列表，也不宣称市场已更新。
+以下市场流程为历史维护文档，本次不执行。
+
 规则核对日期：2026-10-15。依据 [官方发布教程](https://project-neko.online/zh-CN/plugins/cli)、
 [官方 CLI 源码](https://github.com/Project-N-E-K-O/N.E.K.O/blob/main/plugin/neko_plugin_cli/commands/publish_cmd.py)
 和当前本地宿主 SDK。市场服务和 `main` 上的模板可能变化，正式发布前应重新核对。

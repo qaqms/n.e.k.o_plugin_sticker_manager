@@ -110,7 +110,8 @@ def test_eager_tool_surface_prioritizes_fitting_image_for_ordinary_chat():
     assert "无贴切图片、信息问答或正经办事就纯文字" in description
     assert "单回复最多一张" in description
     assert "正常文字回复照常说，text 留空即可，图片独立发送" in description
-    assert "先调用 sticker_list(group=分类名)" in description
+    assert "先调用 sticker_list(query=正向意图短词)" in description
+    assert "sticker_list(group=分类名)" in description
     assert "sticker_send(sticker_id=候选ID)" in description
 
 

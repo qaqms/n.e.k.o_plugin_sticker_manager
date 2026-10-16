@@ -1,6 +1,6 @@
 // The compact selection bar stays reachable; secondary actions expand in flow.
 import { Button, Field, Input, Select } from "@neko/plugin-ui";
-import { categoryOptions } from "../shared";
+import { categoryOptions, parseBatchTags } from "../shared";
 import type { Surface } from "../shared";
 
 export function BatchBar(props: {
@@ -20,6 +20,7 @@ export function BatchBar(props: {
 }) {
   const t = props.surface.t;
   if (!props.selected.length) return null;
+  const tagsReady = !props.disabled && parseBatchTags(props.batchTags).length > 0;
   return (
     <div className="sticker-batch">
       <div className="sticker-batch-main">
@@ -82,10 +83,14 @@ export function BatchBar(props: {
             />
           </Field>
           <div className="sticker-menu-actions" style={{ marginTop: "8px" }}>
-            <Button disabled={props.disabled} onClick={() => props.onRun({ tags_add: props.batchTags })}>
+            <Button disabled={!tagsReady} onClick={() => {
+              if (tagsReady) props.onRun({ tags_add: props.batchTags });
+            }}>
               {t("panel.batch.add_tags", { defaultValue: "加标签" })}
             </Button>
-            <Button disabled={props.disabled} onClick={() => props.onRun({ tags_remove: props.batchTags })}>
+            <Button disabled={!tagsReady} onClick={() => {
+              if (tagsReady) props.onRun({ tags_remove: props.batchTags });
+            }}>
               {t("panel.batch.remove_tags", { defaultValue: "删标签" })}
             </Button>
             <Button disabled={props.disabled} onClick={() => props.onRun({ disabled: false })}>

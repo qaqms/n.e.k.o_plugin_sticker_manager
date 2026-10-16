@@ -4,7 +4,7 @@
 // 隐藏输入框放这里是因为它们的宿主 DOM 就在这一排按钮旁边；
 // 目标分类走 ref 传递的纪律在 library_model.ts（轮 I）。
 
-import { Button, Field, Inline, Input, Stack } from "@neko/plugin-ui";
+import { Button, Field, Inline, Input, Select, Stack, useState } from "@neko/plugin-ui";
 import type { Surface } from "../shared";
 
 export function LibraryToolbar(props: {
@@ -16,6 +16,9 @@ export function LibraryToolbar(props: {
   collectBusy: boolean;
   disabled?: boolean;
   searchDisabled?: boolean;
+  categoryFilter: string;
+  setCategoryFilter: (next: string) => void;
+  categories: Array<{ value: string; label: string }>;
   newName: string;
   setNewName: (next: string) => void;
   newDesc: string;
@@ -32,10 +35,11 @@ export function LibraryToolbar(props: {
   onRepair: () => void;
 }) {
   const t = props.surface.t;
+  const [manageOpen, setManageOpen] = useState(false);
   return (
-    <Stack gap={10}>
+    <div className="sticker-toolbar">
       <div className="sticker-search">
-        <label style={{ minWidth: 0 }}>
+        <label className="sticker-search-field" style={{ minWidth: 0 }}>
           <span className="sticker-sr-only">
             {t("panel.library.search", { defaultValue: "搜索表情包" })}
           </span>
@@ -44,20 +48,21 @@ export function LibraryToolbar(props: {
             value={props.query}
             disabled={props.searchDisabled}
             onChange={props.setQuery}
-            placeholder={t("panel.search", { defaultValue: "按描述 / 标签 / id 过滤" })}
+            placeholder={t("panel.search", { defaultValue: "搜索名称、用途或标签" })}
           />
         </label>
-        {/* 轮 I：分类是第一等对象——先建分类，后面的区块头才有地方收图。 */}
-        <Button
-          className="sticker-new-category"
-          tone="primary"
-          disabled={props.disabled}
-          onClick={() => {
-            props.onToggleCreating();
-          }}
-        >
-          {t("panel.group.new_button", { defaultValue: "新建分类" })}
-        </Button>
+        <label style={{ minWidth: 0 }}>
+          <span className="sticker-sr-only">{t("panel.category.filter", { defaultValue: "分类" })}</span>
+          <Select
+            value={props.categoryFilter || "all"}
+            disabled={props.searchDisabled}
+            options={[
+              { value: "all", label: t("panel.category.all", { defaultValue: "全部分类" }) },
+              ...props.categories,
+            ]}
+            onChange={(next: any) => props.setCategoryFilter(next === "all" ? "" : String(next ?? ""))}
+          />
+        </label>
         <Button
           className="sticker-import"
           tone="primary"
@@ -70,6 +75,18 @@ export function LibraryToolbar(props: {
             ? t("panel.upload.busy", { defaultValue: "上传中…" })
             : t("panel.upload.pick", { defaultValue: "导入" })}
         </Button>
+        <button
+          type="button"
+          className="sticker-more"
+          title={t("panel.library.manage", { defaultValue: "图库管理" })}
+          aria-label={t("panel.library.manage", { defaultValue: "图库管理" })}
+          aria-expanded={manageOpen ? "true" : "false"}
+          aria-controls="sticker-library-management"
+          disabled={props.disabled}
+          onClick={() => setManageOpen(!manageOpen)}
+        >
+          <span aria-hidden="true">{"\u2026"}</span>
+        </button>
         <input
           ref={props.zipInputRef}
           type="file"
@@ -86,24 +103,26 @@ export function LibraryToolbar(props: {
           }}
         />
       </div>
-      <details className="sticker-menu">
-        <summary
-          aria-disabled={!!props.disabled}
-          onClick={(event: any) => {
-            if (props.disabled) event.preventDefault();
-          }}
-        >
-          {t("panel.library.manage", { defaultValue: "图库管理" })}
-        </summary>
+      <div
+        id="sticker-library-management"
+        className="sticker-toolbar-menu"
+        hidden={!manageOpen}
+      >
         <div className="sticker-menu-actions">
-          <Button disabled={props.disabled} onClick={props.onExport}>
+          <Button tone="default" disabled={props.disabled} onClick={() => {
+            props.onToggleCreating();
+            setManageOpen(false);
+          }}>
+            {t("panel.group.new_button", { defaultValue: "新建分类" })}
+          </Button>
+          <Button tone="default" disabled={props.disabled} onClick={props.onExport}>
             {t("panel.export.button", { defaultValue: "导出套图包" })}
           </Button>
-          <Button disabled={props.disabled} onClick={props.onRepair}>
+          <Button tone="default" disabled={props.disabled} onClick={props.onRepair}>
             {t("panel.repair.button", { defaultValue: "体检与修复" })}
           </Button>
         </div>
-      </details>
+      </div>
       {props.creating ? (
         <Stack gap={6}>
           <Field
@@ -170,6 +189,6 @@ export function LibraryToolbar(props: {
           event.target.value = "";
         }}
       />
-    </Stack>
+    </div>
   );
 }

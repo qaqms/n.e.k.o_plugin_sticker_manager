@@ -1,5 +1,5 @@
 // Category actions remain in normal flow; no clipped popover or overlay.
-import { Button, Divider, Field, Inline, Input, Stack, Text } from "@neko/plugin-ui";
+import { Button, Field, Inline, Input, Stack, Text } from "@neko/plugin-ui";
 import { StickerTile } from "./sticker_tile";
 import type { Section, Surface } from "../shared";
 
@@ -7,7 +7,6 @@ export function CategorySection(props: {
   key?: string;
   surface: Surface;
   section: Section;
-  showDivider: boolean;
   selected: string[];
   collectBusy: boolean;
   disabled?: boolean;
@@ -26,8 +25,7 @@ export function CategorySection(props: {
   const t = props.surface.t;
   const section = props.section;
   return (
-    <Stack gap={8}>
-      {props.showDivider ? <Divider /> : null}
+    <section className="sticker-category">
       <div className="sticker-category-header">
         <h2 className="sticker-category-name">
           {section.name}
@@ -36,32 +34,34 @@ export function CategorySection(props: {
             ? section.total
             : `${section.rows.length} / ${section.total}`}
         </h2>
-        <Button tone="primary" disabled={props.disabled || props.collectBusy} onClick={props.onCollect}>
+        <Button tone="default" disabled={props.disabled || props.collectBusy} onClick={props.onCollect}>
           {props.collectBusy
             ? t("panel.collect.busy_one", { defaultValue: "收藏中…" })
-            : t("panel.collect.button", { defaultValue: "收图进这一类" })}
+            : t("panel.collect.button", { defaultValue: "添加图片" })}
         </Button>
-        {section.rows.length ? (
-          <Button disabled={props.disabled} onClick={props.onSelectAll}>
-            {t("panel.section.select_all", { defaultValue: "全选本组" })}
-          </Button>
-        ) : null}
-      </div>
-      {section.desc || section.editable ? (
+      {section.desc || section.editable || section.rows.length ? (
         <details className="sticker-menu">
           <summary
+            aria-label={`${section.name} · ${t("panel.category.manage", { defaultValue: "分类管理" })}`}
             aria-disabled={!!props.disabled}
             onClick={(event: any) => {
               if (props.disabled) event.preventDefault();
             }}
           >
-            {t("panel.category.manage", { defaultValue: "分类详情与管理" })}
+            {t("panel.category.actions", { defaultValue: "更多" })}
           </summary>
           <div className="sticker-menu-body">
+            {section.rows.length ? (
+              <Inline gap={8}>
+                <Button tone="default" disabled={props.disabled} onClick={props.onSelectAll}>
+                  {t("panel.section.select_all", { defaultValue: "全选本组" })}
+                </Button>
+              </Inline>
+            ) : null}
             {section.desc && props.descEditing !== section.group ? <Text>{section.desc}</Text> : null}
             {section.editable ? (
               <div className="sticker-menu-actions">
-                <Button disabled={props.disabled} onClick={props.onToggleDescEditing}>
+                <Button tone="default" disabled={props.disabled} onClick={props.onToggleDescEditing}>
                   {t("panel.section.desc_edit", { defaultValue: "编辑说明" })}
                 </Button>
                 <Button tone="danger" disabled={props.disabled} onClick={props.onRemoveCategory}>
@@ -91,6 +91,7 @@ export function CategorySection(props: {
           </div>
         </details>
       ) : null}
+      </div>
       {section.total === 0 ? (
         <Text>{t("panel.category.empty", { defaultValue: "暂无表情包" })}</Text>
       ) : null}
@@ -107,6 +108,6 @@ export function CategorySection(props: {
           />
         ))}
       </div>
-    </Stack>
+    </section>
   );
 }

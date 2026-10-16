@@ -16,6 +16,23 @@
 给宿主主对话里的猫娘一个**自己的表情包收藏间**：主人在面板里收藏/描述/打标签/禁用/删除，
 她通过 llm_tool 在对话里自主挑一张发出去；每次成败记使用台账。
 
+## Current Panel Layout (2026-10-16)
+
+- Two main views: Library and Settings. Library is the default; running statistics
+  and reminder diagnostics live in a collapsed Settings section.
+- A compact zone selector only changes browsing. Activating a different zone
+  remains an explicit action. Search, category filtering and ZIP import share
+  one toolbar; its labelled overflow button reveals creation, export and repair.
+- Each category keeps its image grid expanded and its add-images action visible.
+  Selection, descriptions, editing and deletion expand in normal flow. Existing
+  batch locks, hidden-selection counts, deletion confirmation, refresh recovery
+  and detail scroll restoration remain in place.
+- Settings puts eagerness and send cooldown first. Reminder timing is collapsed
+  under Advanced settings; current values remain effective while collapsed.
+- Styling stays scoped to this plugin and uses host theme variables. The offline
+  visual harness uses the real host renderer with bundled sample images and
+  in-memory actions; it never connects to installed-plugin APIs or live data.
+
 ## Current Media And Update Contract (v0.20.18)
 
 Selection update (0.9.2, 2026-10-15): the reply model reads per-image captions and

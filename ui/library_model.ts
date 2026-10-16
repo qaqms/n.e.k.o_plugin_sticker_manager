@@ -12,6 +12,7 @@ import {
   callAction,
   dataUrlToBase64,
   extractCode,
+  parseBatchTags,
   readAsDataUrl,
   LONG_CALL,
   MAX_BATCH_FILES,
@@ -673,9 +674,21 @@ export function useLibraryModel(surface: Surface) {
   };
 
   const runBatch = async (patch: Record<string, unknown>) => {
-    if (!selected.length || !beginTask("batch_update")) return;
-    const ids = selected.slice();
+    if (!selected.length) return;
     const frozenPatch = { ...patch };
+    for (const key of ["tags_add", "tags_remove"]) {
+      if (!(key in frozenPatch)) continue;
+      const tags = parseBatchTags(frozenPatch[key]);
+      if (tags.length) frozenPatch[key] = tags.join(",");
+      else delete frozenPatch[key];
+    }
+    if (!frozenPatch.tags_add && !frozenPatch.tags_remove &&
+        typeof frozenPatch.group !== "string" && typeof frozenPatch.disabled !== "boolean") {
+      setLibraryNote(t("panel.batch.empty_tags", { defaultValue: "请先填写有效标签。" }));
+      return;
+    }
+    if (!beginTask("batch_update")) return;
+    const ids = selected.slice();
     try {
       const summary = await executeBatch("batch_update", ids, frozenPatch);
       setLibraryNote(summary.failure

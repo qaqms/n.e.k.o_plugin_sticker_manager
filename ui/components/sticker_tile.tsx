@@ -36,10 +36,8 @@ export function StickerTile(props: {
       borderRadius: "8px",
       overflow: "hidden",
       boxSizing: "border-box",
-      border: props.selected
-        ? "2px solid rgba(80, 160, 255, 0.9)"
-        : "2px solid rgba(128, 128, 128, 0.35)",
-      background: "rgba(128, 128, 128, 0.10)",
+      border: props.selected ? "2px solid var(--primary)" : "2px solid var(--border)",
+      background: "var(--surface)",
       outline: focused ? "2px solid var(--primary)" : "none",
       outlineOffset: "2px",
     };
@@ -61,6 +59,7 @@ export function StickerTile(props: {
   return (
     <div
       id={`sticker-tile-${row.id}`}
+      className="sticker-tile"
       ref={boxRef}
       style={tileBox({})}
     >

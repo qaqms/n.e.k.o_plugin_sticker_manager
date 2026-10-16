@@ -3,13 +3,9 @@ import {
   Alert,
   Button,
   EmptyState,
-  Field,
-  Inline,
   Page,
   SegmentedControl,
-  Select,
   Stack,
-  StatusBadge,
   Switch,
   Text,
   useEffect,
@@ -27,22 +23,52 @@ import { buildSections, callAction, extractCode } from "./shared";
 import type { Surface } from "./shared";
 
 const PANEL_STYLES = `
-.sticker-panel { display:grid; gap:16px; min-width:0; }
+.sticker-page { max-width:1120px; margin:0 auto; }
+.sticker-panel { display:grid; gap:20px; min-width:0; }
 .sticker-panel * { letter-spacing:0; }
+.sticker-panel .neko-button { border-radius:6px; box-shadow:none; font-size:13px; white-space:normal; overflow-wrap:anywhere; }
+.sticker-panel .neko-button[data-tone="default"] { color:var(--text); background:transparent; border-color:var(--border); }
+.sticker-panel .neko-button:hover { transform:none; box-shadow:none; }
 .sticker-panel .neko-input,.sticker-panel .neko-select { max-width:100%; }
+.sticker-panel .neko-input,.sticker-panel .neko-select { border-radius:6px; }
 .sticker-panel .neko-field { min-width:0; }
 .sticker-panel .neko-text { overflow-wrap:anywhere; }
+.sticker-header { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px 20px; }
+.sticker-current { margin:0; font-size:12px; color:var(--muted); overflow-wrap:anywhere; }
+.sticker-nav.neko-segmented { width:100%; display:flex; gap:24px; padding:0; border:0; border-bottom:1px solid var(--border); border-radius:0; background:transparent; }
+.sticker-nav .neko-segmented-button { flex:0 1 auto; border:0; border-bottom:2px solid transparent; border-radius:0; padding:10px 2px; background:transparent; color:var(--muted); font-size:14px; }
+.sticker-nav .neko-segmented-button.is-active { border-bottom-color:var(--primary); background:transparent; color:var(--text); box-shadow:none; }
+.sticker-panel :is(button,summary,input,select):focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
 .sticker-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
-.sticker-workspace { display:grid; gap:16px; min-width:0; }
+.sticker-workspace { display:grid; gap:20px; min-width:0; }
 .sticker-section-title { margin:0; font-size:15px; line-height:1.5; }
 .sticker-sticky { position:sticky; top:0; z-index:2; display:grid; gap:8px; padding:8px 0; background:var(--bg); border-bottom:1px solid var(--border); min-width:0; }
 .sticker-feedback { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:13px; min-width:0; }
 .sticker-feedback .neko-text { max-height:72px; overflow:auto; font-size:13px; }
-.sticker-filter-row { display:grid; grid-template-columns:minmax(160px,260px) minmax(0,1fr); gap:12px; align-items:end; }
+.sticker-zones { display:flex; flex-wrap:wrap; gap:8px 12px; align-items:center; min-width:0; }
+.sticker-zone-picker { display:flex; flex:1 1 220px; align-items:center; gap:10px; min-width:0; max-width:440px; font-size:13px; }
+.sticker-zone-picker > span { flex-shrink:0; color:var(--muted); }
+.sticker-zone-picker .neko-select { min-width:0; flex:1; }
+.sticker-zone-state { font-size:12px; color:var(--success); }
+.sticker-zones > .sticker-menu { width:auto; margin-left:auto; }
+.sticker-zones > .sticker-menu[open] { width:100%; }
+.sticker-toolbar { display:grid; gap:10px; min-width:0; }
+.sticker-search { display:grid; grid-template-columns:minmax(0,1fr) minmax(100px,180px) auto auto; align-items:center; gap:8px; }
+.sticker-search > * { min-width:0; }
+.sticker-toolbar-menu { border-bottom:1px solid var(--border); padding-bottom:12px; }
+.sticker-more { width:36px; height:36px; padding:0; border:1px solid var(--border); border-radius:6px; background:transparent; color:var(--text); font-size:20px; cursor:pointer; }
+.sticker-more:disabled { opacity:.5; cursor:default; }
 .sticker-category-header { display:flex; flex-wrap:wrap; align-items:center; gap:8px; min-width:0; }
 .sticker-category-name { flex:1 1 160px; min-width:0; margin:0; font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
+.sticker-category-header > .sticker-menu { width:auto; }
+.sticker-category-header > .sticker-menu[open] { flex-basis:100%; }
+.sticker-category-header > .sticker-menu > summary { padding:6px; }
+.sticker-category { display:grid; gap:10px; min-width:0; }
+.sticker-category + .sticker-category { border-top:1px solid var(--border); padding-top:20px; }
 .sticker-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(min(100%,128px),1fr)); gap:8px; min-width:0; }
 .sticker-grid > * { width:100%; max-width:176px; min-width:0; }
+.sticker-tile { transition:border-color 120ms ease,background 120ms ease; }
+.sticker-tile:hover { border-color:var(--primary) !important; }
 .sticker-menu { width:100%; min-width:0; }
 .sticker-menu > summary { width:fit-content; padding:6px 2px; color:var(--muted); cursor:pointer; font-size:13px; }
 .sticker-menu[open] > summary { color:var(--text); }
@@ -55,23 +81,37 @@ const PANEL_STYLES = `
 .sticker-batch-count { margin:0; font-size:13px; line-height:1.5; overflow-wrap:anywhere; }
 .sticker-batch-more { max-height:min(220px,40vh); overflow:auto; padding:8px 0 0; }
 .sticker-batch .sticker-menu > summary { padding:4px 2px; }
-.sticker-settings { display:grid; gap:16px; max-width:720px; min-width:0; }
+.sticker-settings { display:grid; gap:24px; max-width:760px; min-width:0; }
+.sticker-preferences { display:grid; gap:24px; min-width:0; }
+.sticker-setting { display:grid; gap:12px; min-width:0; }
+.sticker-setting + .sticker-setting { border-top:1px solid var(--border); padding-top:24px; }
+.sticker-setting .neko-segmented { display:flex; width:100%; border-radius:6px; }
+.sticker-setting .neko-segmented-button { flex:1; min-width:0; border-radius:4px; font-size:13px; white-space:normal; }
+.sticker-setting-control { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; align-items:end; max-width:400px; }
+.sticker-setting-control .neko-field-label { line-height:20px; }
+.sticker-setting-control > .neko-button { align-self:start; margin-top:26px; }
+.sticker-setting-current { margin:0; font-size:12px; color:var(--muted); }
+.sticker-advanced { padding-top:16px; border-top:1px solid var(--border); }
+.sticker-advanced > summary { font-weight:600; color:var(--text); }
+.sticker-advanced > .sticker-menu-body { gap:20px; padding-top:16px; }
+.sticker-diagnostics { display:grid; gap:16px; min-width:0; }
 .sticker-readouts { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,180px),1fr)); gap:12px; margin:0; min-width:0; }
 .sticker-readouts > div { display:grid; gap:4px; min-width:0; padding:8px 0; border-bottom:1px solid var(--border); }
 .sticker-readouts dt { font-size:12px; color:var(--muted); }
 .sticker-readouts dd { margin:0; font-size:14px; line-height:1.5; overflow-wrap:anywhere; }
-.sticker-search { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:8px; }
-.sticker-search > * { min-width:0; }
 .sticker-collection-count { margin:0; font-size:13px; color:var(--muted); line-height:1.6; }
 @media (max-width:480px) {
+  .sticker-page.neko-page { padding:12px; }
   .sticker-workspace { gap:12px; }
   .sticker-workspace .neko-button { padding:7px 10px; font-size:13px; }
-  .sticker-filter-row { grid-template-columns:1fr; gap:8px; }
+  .sticker-zone-picker { flex-basis:100%; max-width:none; }
   .sticker-batch-main { grid-template-columns:1fr auto; gap:6px; }
   .sticker-batch-move { grid-template-columns:minmax(0,1fr) auto auto; }
-  .sticker-search { grid-template-columns:minmax(0,1fr) auto; }
-  .sticker-search .sticker-new-category { grid-column:1 / -1; grid-row:2; justify-self:start; }
-  .sticker-search .sticker-import { grid-column:2; grid-row:1; }
+  .sticker-search { grid-template-columns:minmax(0,1fr) auto 36px; }
+  .sticker-search-field { grid-column:1 / -1; }
+  .sticker-grid { grid-template-columns:repeat(auto-fill,minmax(min(100%,96px),1fr)); }
+  .sticker-category-name { flex-basis:120px; }
+  .sticker-setting-control { grid-template-columns:minmax(0,1fr) auto; }
 }
 `;
 
@@ -146,7 +186,8 @@ export default function Panel(props: Surface) {
 
   if (focusRow) {
     return (
-      <Page title={t("panel.focus.title", { defaultValue: "表情详情" })}>
+      <Page className="sticker-page" title={t("panel.focus.title", { defaultValue: "表情详情" })}>
+        <style>{PANEL_STYLES}</style>
         <FocusCard
           key={focusRow.id}
           surface={props}
@@ -160,40 +201,34 @@ export default function Panel(props: Surface) {
   }
 
   return (
-    <Page title={t("panel.title", { defaultValue: "表情包管理" })} subtitle={state.lanlan || ""}>
+    <Page className="sticker-page" title={t("panel.title", { defaultValue: "表情包管理" })} subtitle={state.lanlan || ""}>
       <style>{PANEL_STYLES}</style>
       <div className="sticker-panel">
         {state.error_code ? (
           <Alert tone="danger" message={t(`panel.error.${state.error_code}`, { defaultValue: state.error_code })} />
         ) : null}
         {switchNote ? <Alert tone="danger" message={switchNote} /> : null}
-        <Inline gap={12} align="center" wrap>
+        <div className="sticker-header">
           <Switch
             checked={!!state.enabled}
             disabled={managementBusy}
             label={t("panel.switch.compact", { defaultValue: "猫娘发表情包" })}
             onChange={changeEnabled}
           />
-          <div style={{ minWidth: 0, flex: "1 1 160px", overflowWrap: "anywhere" }}>
-            <Text>
+          <p className="sticker-current">
               {t("panel.zone.current", {
                 name: activeZone?.name || "—",
                 defaultValue: "使用区：{name}",
               })}
-            </Text>
-          </div>
-          <StatusBadge
-            tone="info"
-            label={`${t("panel.stat.total", { defaultValue: "收藏" })} ${state.counts?.total || 0}`}
-          />
-        </Inline>
+          </p>
+        </div>
         <SegmentedControl
+          className="sticker-nav"
           value={viewTab}
           disabled={operationBusy}
           options={[
             { value: "library", label: t("panel.view.library", { defaultValue: "图库" }) },
-            { value: "settings", label: t("panel.view.settings", { defaultValue: "发送设置" }) },
-            { value: "status", label: t("panel.view.status", { defaultValue: "运行状态" }) },
+            { value: "settings", label: t("panel.view.settings", { defaultValue: "设置" }) },
           ]}
           onChange={(next: any) => setViewTab(String(next))}
         />
@@ -256,6 +291,12 @@ export default function Panel(props: Surface) {
               collectBusy={lib.collectBusy}
               disabled={managementBusy}
               searchDisabled={operationBusy}
+              categoryFilter={categoryFilter}
+              setCategoryFilter={setCategoryFilter}
+              categories={allSections.map((section) => ({
+                value: sectionValue(section.group),
+                label: `${section.name} (${section.total})`,
+              }))}
               newName={lib.newName}
               setNewName={lib.setNewName}
               newDesc={lib.newDesc}
@@ -271,21 +312,6 @@ export default function Panel(props: Surface) {
               onExport={() => { lib.exportPack(); }}
               onRepair={() => { lib.repair(); }}
             />
-            <div className="sticker-filter-row">
-              <Field label={t("panel.category.filter", { defaultValue: "分类" })}>
-                <Select
-                  value={categoryFilter}
-                  disabled={operationBusy}
-                  options={[
-                    { value: "", label: t("panel.category.all", { defaultValue: "全部分类" }) },
-                    ...allSections.map((section) => ({
-                      value: sectionValue(section.group),
-                      label: `${section.name} (${section.total})`,
-                    })),
-                  ]}
-                  onChange={(next: any) => setCategoryFilter(String(next ?? ""))}
-                />
-              </Field>
               <p className="sticker-collection-count">
                 {t("panel.library.visible", {
                   visible: visibleIds.length,
@@ -294,7 +320,6 @@ export default function Panel(props: Surface) {
                   defaultValue: "显示 {visible} / {total} 张 · {categories} 个分类",
                 })}
               </p>
-            </div>
             {sections.length === 0 ? (
               <Stack gap={8}>
                 <EmptyState
@@ -308,12 +333,11 @@ export default function Panel(props: Surface) {
                   </Button>
                 ) : null}
               </Stack>
-            ) : sections.map((section, index) => (
+            ) : sections.map((section) => (
               <CategorySection
                 key={section.key}
                 surface={props}
                 section={section}
-                showDivider={index > 0}
                 selected={lib.selected}
                 collectBusy={lib.collectBusy}
                 disabled={managementBusy}
@@ -337,7 +361,7 @@ export default function Panel(props: Surface) {
         ) : (
           <AwarenessCard
             surface={props}
-            mode={viewTab === "settings" ? "settings" : "status"}
+            mode="settings"
             disabled={!!lib.pending || switchBusy || lib.refreshFailed}
             onBusyChange={setSettingsBusy}
             onRefreshFailed={lib.reportRefreshFailure}

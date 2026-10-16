@@ -121,7 +121,13 @@ _LEDGER_LOG_MIN_SEC = 120.0
 
 def _private_selection_result(result: dict[str, Any]) -> dict[str, Any]:
     """Keep the reply boundary present on success, empty results and refusals."""
-    return {**result, "hint": str(result.get("hint") or "") + INTERNAL_SELECTION_NOTE}
+    private = {**result, "hint": str(result.get("hint") or "") + INTERNAL_SELECTION_NOTE}
+    if not result.get("candidate_ids") and (
+        result.get("count") == 0 or result.get("reason") in {"no_match", "group_not_found", "id_or_query_required"}
+    ):
+        private["note"] = "直接续接当前聊天，保持原有回复意图；本结果仅供内部判断。"
+        private["hint"] = INTERNAL_SELECTION_NOTE
+    return private
 
 
 def _clean_id_list(value: Any, *, cap: int = 200) -> list[str]:
@@ -978,6 +984,7 @@ class StickerManagerPlugin(NekoPluginBase):
         if not id_list:
             return Err(SdkError("batch_empty"))
         add_tags = parse_tags_field(tags_add) if isinstance(tags_add, (str, list)) else None
+        add_tags = add_tags or None
         remove_tags = (
             {t.casefold() for t in parse_tags_field(tags_remove)} if isinstance(tags_remove, (str, list)) else set()
         )
@@ -1543,6 +1550,51 @@ class StickerManagerPlugin(NekoPluginBase):
         return Ok({"note": "eagerness_set", "eagerness": self._settings.send.eagerness})
 
     @ui.action(
+        id="set_send_cooldown",
+        label=tr("actions.set_send_cooldown.label", default="Save send cooldown"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="set_send_cooldown",
+        metadata={"agent_auto": False},
+        name=tr("entries.set_send_cooldown.name", default="设置发送冷却"),
+        description=tr(
+            "entries.set_send_cooldown.description",
+            default="设置同一角色两次发图的最小间隔，0 到 3600 秒；0 关闭发送冷却",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "cooldown_sec": {
+                    "type": "number", "minimum": 0, "maximum": 3600,
+                    "description": tr("fields.cooldown_sec", default="发送冷却（秒）"),
+                },
+            },
+            "required": ["cooldown_sec"],
+        },
+        llm_result_fields=["note", "cooldown_sec"],
+    )
+    async def set_send_cooldown_entry(self, cooldown_sec: float = 20.0, **_):
+        if (
+            isinstance(cooldown_sec, bool)
+            or not isinstance(cooldown_sec, (int, float))
+            or not 0 <= cooldown_sec <= 3600
+            or not math.isfinite(cooldown_sec)
+        ):
+            return Err(SdkError("invalid_value"))
+        try:
+            await self.config.set("sticker_manager.send.cooldown_sec", float(cooldown_sec))
+        except Exception:
+            self.logger.warning("failed to persist [sticker_manager.send].cooldown_sec", exc_info=True)
+            return Err(SdkError("config_unavailable"))
+        await self._reload_settings()
+        if self._settings.send.cooldown_sec != cooldown_sec:
+            self.logger.warning("send cooldown saved but effective value differs from requested value")
+            return Err(SdkError("config_unavailable"))
+        return Ok({"note": "send_cooldown_set", "cooldown_sec": self._settings.send.cooldown_sec})
+
+    @ui.action(
         id="set_reminder_interval",
         label=tr("actions.set_reminder_interval.label", default="Save reminder interval"),
         tone="default",
@@ -1934,8 +1986,13 @@ class StickerManagerPlugin(NekoPluginBase):
         name="sticker_list",
         description=(
             f"{INTERNAL_SELECTION_NOTE}"
-            "为你准备回复的这句话查表情候选，不发送。填 group 看这一分类的逐图说明，"
-            "query 可给空格或逗号分隔的短关键词，如「安慰 摸头」；同时给时只在该分类检索。"
+            "为你准备回复的这句话查表情候选，不发送。优先用 query 给空格或逗号分隔的正向短关键词，"
+            "如「自己被摸头 舒服」；也可填 group 浏览逐图说明，同时给时只在该分类检索。"
+            "明确动作会筛选候选，情绪词不能补入不同动作；写清谁对谁做，不填不想表达的词。"
+            "有具体动作时写动作、对象和阶段，如「给对方泡茶 已完成 开心」，不只写「茶 开心」。"
+            "尚未收到用「等待收到 期待」，等人过来用「等待来访 期待」；"
+            "已经收礼或见面才用「收到礼物 开心」「见面问候 开心」。"
+            "宽泛情绪查询不靠未提及的红包、奖杯或见面情节补足候选，明确阶段排除冲突候选，仍须阅读说明。"
             "按回复者的意图、对象和语气选具体图片，不照搬用户情绪；"
             f"{SELECTION_MATCH_RULE}"
             "有贴切图片再用 sticker_send(sticker_id=候选ID)，不贴切就纯文字。"
@@ -1943,7 +2000,14 @@ class StickerManagerPlugin(NekoPluginBase):
         parameters={
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "表达意图的短关键词，空格或逗号分隔，如「安慰 摸头」；可不填"},
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "正向意图短词，空格或逗号分隔，如「自己被摸头 舒服」「给对方泡茶 已完成 开心」；"
+                        "等待用「等待收到 期待」「等待来访 期待」，已发生用「收到礼物 开心」「见面问候 开心」；"
+                        "写具体动作、对象及阶段，不只写话题或情绪。明确动作至少匹配一项，可不填"
+                    ),
+                },
                 "group": {"type": "string", "description": "只看这个套图分组的全部图（组名从分类行里拿）"},
             },
             "required": [],
@@ -2043,7 +2107,13 @@ class StickerManagerPlugin(NekoPluginBase):
                     "description": "分类名；只给分类时返回逐图候选，不会自动发图。",
                 },
                 "sticker_id": {"type": "string", "description": "阅读候选说明并确认贴合回复后，填具体图片 ID 才会发送。"},
-                "query": {"type": "string", "description": "空格或逗号分隔的意图关键词，仅返回候选；可用 group 限定分类。"},
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "空格或逗号分隔的正向意图短词，写清动作、对象及阶段，不只写话题或情绪；"
+                        "明确动作至少匹配一项，仅查候选，可用 group 限定分类。"
+                    ),
+                },
                 "force": {
                     "type": "boolean",
                     "description": "仅当主人明确点名要再看/再发这张时置 true：跳过最近不重复与概率闸（冷却仍生效）",
@@ -2146,11 +2216,10 @@ class StickerManagerPlugin(NekoPluginBase):
                     "hint": "组名撞了多个——用更准的组名或组内某张的 id 再发一次。",
                 }
             if not matched:
-                known = "\n".join(f"・{n}" for n in names)
                 return {
                     "ok": False,
                     "reason": "group_not_found",
-                    "hint": f"没有这个分组。现有分组：\n{known}" if known else "库里还没有任何分组。",
+                    "groups": names,
                 }
             pool = [s for s in pool if s.group == matched[0]]
             if not any(not s.disabled for s in pool):
@@ -2242,6 +2311,10 @@ class StickerManagerPlugin(NekoPluginBase):
             self.logger.warning("config dump failed; keeping previous settings", exc_info=True)
             return self._settings
         self._settings = StickerManagerSettings.from_config(config if isinstance(config, dict) else {})
+        self.logger.info(
+            f"sticker_manager settings applied: send_cooldown_sec={self._settings.send.cooldown_sec}"
+            f" reminder_min_interval_sec={self._settings.awareness.min_interval_sec}"
+        )
         if not self._settings.enabled:
             self._note_deferred_outcomes(self._sender.cancel_pending(settings=self._settings))
         return self._settings

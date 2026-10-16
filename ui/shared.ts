@@ -138,6 +138,15 @@ export const MAX_STICKER_BYTES = 8 * 1024 * 1024;
 //（runtime.js 实测）——不对齐的话大包导入服务端在继续、面板先报假失败。这些调用显式传 opts。
 export const LONG_CALL = { timeoutMs: 120000 };
 
+export function parseBatchTags(value: unknown): string[] {
+  const parts = typeof value === "string" ? value.split(/[,，、]/) : Array.isArray(value) ? value : [];
+  const tags = parts.filter((tag) => typeof tag === "string").map((tag) => tag.trim())
+    .filter((tag) => tag && Array.from(tag).length <= 24);
+  return tags.filter((tag, index) =>
+    tags.findIndex((other) => other.toLowerCase() === tag.toLowerCase()) === index,
+  ).slice(0, 12);
+}
+
 // 后端 Err 抛出的 message 里抓稳定 ASCII 码（^[a-z][a-z0-9_]*$，DESIGN.md 错误码契约）；
 // 抓不到就原样直出（宿主/网络错误的原文比编一个码诚实）。
 export function extractCode(raw: string): string {

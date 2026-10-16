@@ -13,6 +13,7 @@ import io
 import json
 import zipfile
 
+import pytest
 from conftest import PNG_BYTES, FakeConfig, FakeHostContext, build_plugin
 from sticker_manager.core.catalog import Sticker, format_group_overview
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings, StorageSettings
@@ -268,6 +269,19 @@ class TestBatchEntries:
         assert result.value["updated"] == 0 and result.value["missing"] == ["幽灵"]
         assert str(run_async(plugin.batch_remove_entry(ids=[])).error) == "batch_empty"
 
+    @pytest.mark.parametrize("patch", [
+        {"tags_add": ""}, {"tags_remove": "， 、 "}, {"tags_add": ["", " "], "tags_remove": []},
+        {"tags_add": "x" * 25},
+    ])
+    def test_empty_tag_operations_do_not_write_or_report_updates(self, tmp_path, run_async, patch):
+        plugin = _plugin(tmp_path)
+        run_async(_add(plugin, desc="留", tags="旧"))
+        ids = self._ids(plugin, run_async)
+        before = plugin._library.catalog_path.read_bytes()
+        result = run_async(plugin.batch_update_entry(ids=ids, **patch))
+        assert not result.is_ok() and str(result.error) == "batch_noop"
+        assert plugin._library.catalog_path.read_bytes() == before
+
     def test_batch_remove(self, tmp_path, run_async):
         plugin = _plugin(tmp_path)
         run_async(_add(plugin, desc="留"))
@@ -327,7 +341,7 @@ class TestSendGroup:
         run_async(_add(plugin, desc="乙", group="猫猫日常B"))
         missing = run_async(plugin.tool_sticker_send(group="没有这组", **_ctx("K")))
         assert missing["ok"] is False and missing["reason"] == "group_not_found"
-        assert "猫猫日常A" in missing["hint"]
+        assert missing["groups"] == ["猫猫日常A", "猫猫日常B"]
         ambiguous = run_async(plugin.tool_sticker_send(group="猫猫日常", **_ctx("K")))
         assert ambiguous["ok"] is True and ambiguous["note"] == "group_candidates"
         assert "猫猫日常A" in ambiguous["candidates"]

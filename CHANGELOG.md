@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.9.3
+
+- Prepare the 0.9.3 GitHub release on 2026-10-16. Do not notify the plugin
+  Market; GitHub release assets are the delivery for this version.
+- Replace empty-candidate narration with a private continuation instruction;
+  explicitly keep lookup failures out of ordinary replies and roleplay actions.
+  This is model guidance, not a host-output interception guarantee.
+- Recall common equivalent mood words and fully recognized compact combinations
+  without splitting unknown actions or negation. Preserve action, recipient,
+  stage, scene and recent-use filters; never fill misses with unrelated pictures.
+- Keep unrequested toasts and drinks out of broad mood results.
+- Disable empty or invalid batch-tag actions, validate again before dispatch,
+  and reject empty tag updates without reporting false successful edits.
+- Simplify the panel into Library and Settings. Combine search, category filtering
+  and import; move secondary management behind explicit menus and keep images
+  visible. Use a compact collection selector without changing the active zone
+  when browsing.
+- Put eagerness and send cooldown first in Settings; collapse reminder controls
+  and diagnostics. Shorten image-editing labels and preserve all existing actions,
+  saved values, selection state and detail return behavior.
+- Add an offline preview and browser layout checks using the actual host renderer
+  and bundled sample images, with no installed-plugin or live-data writes.
+- Distinguish waiting to receive a gift or meet a visitor from already holding,
+  opening or greeting. Prefer explicit waiting evidence and preserve future
+  wording in image descriptions instead of treating it as a completed event.
+- Stop filling broad mood candidates with unrequested money, trophy, gift,
+  greeting or other known scene cues; return fewer images or none after recent
+  filtering. Preserve explicit scene queries, category browsing and exact-ID sends.
+- Cover the latest waiting/unboxing and waiting/greeting mismatches with the
+  shipped official pack and custom regression cases; keep all send settings.
+- Add an independent send-cooldown input in the plugin panel, supporting
+  0–3600 seconds with explicit save and immediate application; 0 disables it.
+  Preserve the 20-second default, reminder settings and other send gates.
+- Distinguish brewing, serving and drinking tea; reject explicit event-stage
+  conflicts and rank simple expressions ahead of unrequested gift, trophy,
+  dance, drink or food plots. Keep model review and exact-ID confirmation.
+- Clarify that the panel's zero reminder interval does not disable the separate
+  send cooldown. Show the configured send cooldown and log both effective values;
+  preserve all existing defaults and live settings.
+- Prefer reply-intent queries with a small vocabulary of common action phrases.
+  Filter recognized actions before ranking, reject explicitly reversed roles,
+  and prefer literal matches over equally annotated synonym expansions.
+- Ignore explicit unsuitable-usage clauses during chat retrieval and avoid
+  matching negated intent as positive intent. Keep full model descriptions and
+  management search unchanged; category names do not supply per-image evidence.
+- Emphasize core attitude and concrete action when selecting an image. Preserve
+  explicit-ID sends, no-match exits, group boundaries and all frequency settings.
+- Add regression coverage using custom examples and the existing official pack.
+
 ## 0.9.2
 
 - Prepare the 0.9.2 stable release on 2026-10-15, including the fixes exercised

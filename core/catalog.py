@@ -9,8 +9,8 @@
    逐图零文本也能用）——两者都空时回落分组描述，再没有就如实标「未标注」。
 1.5. **分组（group）是“分类=描述”的单元**（轮 F）：`groups: {组名: 一句话说明}` 挂在库上，
    分类用来缩小候选范围，具体图片由模型阅读逐图说明后选择。
-2. **检索是"够用就好"**：子串匹配 desc/caption/tags/visible_text/id，不做分词、不做语义。
-   聊天检索支持空格或逗号分隔的关键词；是否贴合回复仍由模型判断。
+2. **管理检索按原文子串匹配**；聊天检索忽略限制性用途，支持少量常用短语，
+   明确动作先筛选、其他关键词再排序。不是语义理解，是否贴合回复仍由模型判断。
 4. 目录文案的纪律沿用 our_life 的注入契约：不给模型看原始路径、
    不堆砌形容词，一行一条。
 5. **查重只认内容指纹（sha256），不认文件名/扩展名**——与魔数嗅探同理，
@@ -81,8 +81,14 @@ UPLOAD_MAX_TOTAL_BYTES = 128 * 1024 * 1024
 SEND_CANDIDATES_MAX = 5
 SELECTION_MATCH_RULE = (
     "动作、对象、发生阶段和语气强度都要符合上下文，不能只因同属开心或亲昵就选。"
-    "开箱图只用于表达收礼或拆礼物的反应，期待不等于已经收到，抱抱不等于舔人；"
-    "图片不能凭空增加拆礼盒、进食、嘲笑等核心情节，也不为迁就图片改写回复态度。"
+    "先核对核心态度：抗议不是害羞，主动蹭人不是被摸头，求摸头不是被戳鼻尖；"
+    "等待收到不等于已经收到或拆开，明天带来时不选抱着或打开礼盒的图；"
+    "等待来访不等于已经见面，等你来时不选看到你啦、见面挥手的图；抱抱不等于舔人；"
+    "给对方泡茶或递茶不等于自己喝茶，展示已经做好的东西不等于期待它发生。"
+    "只匹配茶、礼物等话题或开心等情绪还不够；候选不贴合动作或阶段时，"
+    "可选符合当前态度的单纯表情，否则纯文字。"
+    "图片不能凭空增加红包、拆礼盒、获奖、见面问候、跳舞、进食、嘲笑等核心情节，"
+    "也不为迁就图片改写回复态度。"
 )
 SELECTION_HINT = (
     "这些是候选，尚未发送。阅读逐图说明，按你准备回复的意图、对象和语气强度选择，"
@@ -446,40 +452,309 @@ def resolve_send_target(
 
 
 def search_intent_candidates(stickers: list[Sticker], query: str) -> list[Sticker]:
-    """聊天候选召回：关键词取并集，多词命中优先；不把词法分数当语义结论。"""
+    """聊天召回：动作和阶段筛选，宽泛情绪不补入未提及的情节；不解析完整回复。"""
     term = (query or "").strip().casefold()[:300]
     if not term:
         return search_stickers(stickers, "")
-    terms = list(dict.fromkeys(re.split(r"[\s,，、;；/]+", term)))[:8]
-    terms = [word for word in terms if word]
+    terms = _query_terms(term)
+    actions = [request for word in terms if (request := _requested_action(word)) is not None]
+    stages = {stage for word in terms if (stage := _requested_stage(word))}
+    awaiting_receipt = any(_intent_word(word) in _RECEIPT_PENDING_WORDS for word in terms)
+    awaiting_visit = any(_intent_word(word) in _VISIT_PENDING_WORDS for word in terms)
+    if awaiting_receipt or awaiting_visit:
+        stages = {1}
+    variants = [_intent_variants(word) for word in terms]
     scored = []
     for sticker in stickers:
         if sticker.disabled:
             continue
-        scores = [_candidate_term_score(sticker, word) for word in terms]
+        fields = [_positive_usage_text(value) for value in (sticker.desc, sticker.caption, *sticker.tags)]
+        # Explicit IDs remain exact lookups. Broad mood words cannot admit a different action.
+        exact_id = sticker.id.casefold() in terms
+        if actions and not exact_id and not any(_matches_action(fields, *request) for request in actions):
+            continue
+        image_stages = {
+            index for index, words in enumerate(_INTENT_STAGES, start=1)
+            if any(
+                (_contains_completed_intent if index == 3 else _contains_intent)(value, word)
+                for value in fields for word in words
+            )
+        }
+        if not exact_id:
+            if stages and image_stages and (
+                stages.isdisjoint(image_stages) or (stages == {1} and 3 in image_stages)
+            ):
+                continue
+            # Holding a gift is ambiguous for giving, but cannot depict waiting to receive it.
+            if awaiting_receipt and any(
+                _contains_completed_intent(value, word) for value in fields for word in _HELD_GIFT_WORDS
+            ):
+                continue
+        scores = [_candidate_term_score(sticker, fields, words) for words in variants]
         score = sum(scores)
         if score:
-            scored.append((sum(value > 0 for value in scores), score, sticker))
-    scored.sort(key=lambda item: (-item[0], -item[1], -item[2].use_count, -item[2].last_used_at))
-    return [sticker for _, _, sticker in scored]
+            extra_scene = not exact_id and any(
+                any(_contains_intent(value, word) for value in fields for word in words)
+                and not any(_contains_intent(term, word) for word in words)
+                for words in _CONTEXT_SCENES
+            )
+            # Return fewer candidates instead of filling broad mood results with unrelated plots.
+            if extra_scene and not actions:
+                continue
+            pending_fit = exact_id or ((awaiting_receipt or awaiting_visit) and 1 in image_stages)
+            scored.append((extra_scene, pending_fit, sum(value > 0 for value in scores), score, sticker))
+    scored.sort(key=lambda item: (
+        item[0], not item[1], -item[2], -item[3], -item[4].use_count, -item[4].last_used_at,
+    ))
+    return [sticker for _, _, _, _, sticker in scored]
 
 
-def _candidate_term_score(sticker: Sticker, term: str) -> int:
-    # Positive usage tags outrank prose, which may mention an unsuitable emotion.
-    if sticker.id.casefold() == term:
+@dataclass(frozen=True)
+class _ActionWords:
+    aliases: tuple[str, ...]
+    receiving: tuple[str, ...] = ()
+    giving: tuple[str, ...] = ()
+
+
+# Deliberately small vocabulary for short intent queries, not a sentence parser.
+_INTENT_ACTIONS = (
+    _ActionWords(
+        ("摸头", "揉头", "摸摸", "揉揉", "摸脑袋", "揉脑袋", "抚摸头"),
+        ("被摸头", "被揉头", "被摸摸", "被摸脑袋", "被揉脑袋", "求摸摸", "求摸头",
+         "求揉揉", "求揉头", "想被摸头", "想被揉头", "接受摸摸", "接受抚摸"),
+        ("摸对方的头", "摸对方", "揉对方的头", "揉对方", "摸你的头", "摸你脑袋",
+         "给你摸头", "给对方摸头", "帮你揉头", "主动摸头", "主动揉头"),
+    ),
+    _ActionWords(
+        ("戳鼻尖", "戳鼻子"),
+        ("被戳鼻尖", "被戳鼻子"),
+        ("戳对方鼻尖", "戳你的鼻尖", "戳对方鼻子"),
+    ),
+    _ActionWords(
+        ("捏脸", "挤脸"),
+        ("被捏脸", "被挤脸", "求捏脸"),
+        ("捏对方的脸", "捏你的脸", "主动捏脸"),
+    ),
+    _ActionWords(("梳尾巴毛", "梳尾巴", "梳理尾巴", "顺尾巴毛")),
+    _ActionWords(
+        ("蹭蹭", "蹭人", "蹭脑袋", "蹭头", "蹭一蹭"),
+        ("被蹭",),
+        ("蹭对方", "蹭你", "主动蹭人"),
+    ),
+    _ActionWords(
+        ("抱抱", "拥抱", "搂抱", "抱住", "抱在怀里"),
+        ("被抱", "求抱抱", "求拥抱"),
+        ("抱对方", "抱你", "主动拥抱"),
+    ),
+    _ActionWords(
+        ("舔舔", "舔人"),
+        ("被舔",),
+        ("舔对方", "舔你", "主动舔人"),
+    ),
+    _ActionWords(("拆礼物", "拆礼盒", "开箱", "打开礼盒", "拆开礼物", "拆开礼盒")),
+    _ActionWords(("打招呼", "见面问候", "见面打招呼", "问好", "说你好", "说嗨", "见到你", "看到你啦")),
+    _ActionWords(
+        ("泡茶", "沏茶", "冲茶", "准备茶水", "做茶"),
+        giving=("给对方泡茶", "给你泡茶", "为你泡茶", "为对方泡茶"),
+    ),
+    _ActionWords(
+        ("递茶", "送茶", "奉茶", "上茶"),
+        receiving=("接过茶", "接过茶杯", "被递茶"),
+        giving=("给对方递茶", "给你递茶", "给对方端茶", "端茶给对方", "请你喝茶", "请对方喝茶"),
+    ),
+    _ActionWords(("喝茶", "饮茶", "品茶", "喝热茶", "喝热饮")),
+    _ActionWords(("跳舞", "舞蹈", "跳小舞", "跳节奏舞")),
+    _ActionWords(
+        ("安慰", "安抚", "哄哄"),
+        ("被安慰", "被安抚", "求安慰", "想被安慰", "求哄", "被哄"),
+        ("安慰对方", "安慰你", "安抚对方", "哄对方", "哄你", "主动安慰"),
+    ),
+    _ActionWords(("加油", "鼓励", "打气", "应援")),
+    _ActionWords(("抗议", "轻度抗议", "气鼓鼓", "闹脾气", "轻度不满", "有点恼", "炸毛")),
+)
+_ANTICIPATION_WORDS = ("期待", "盼着", "盼望", "盼好事", "迫不及待", "跃跃欲试")
+_INTENT_SYNONYMS = (
+    ("陪伴", "陪着", "陪着你", "陪在身边"),
+    ("难过", "伤心", "悲伤", "低落", "失落"),
+    ("害羞", "羞涩", "不好意思"),
+    ("开心", "高兴", "快乐", "愉快", "欢喜"),
+    ("感谢", "谢谢", "感激", "谢意", "感谢心意"),
+    ("喜欢", "喜爱"),
+    ("亲昵", "亲近"),
+    ("轻松", "放松"),
+    _ANTICIPATION_WORDS,
+)
+# Split only complete combinations of known moods; unknown actions and negation stay intact.
+_MOOD_WORDS = sorted(
+    {word for family in _INTENT_SYNONYMS for word in family}
+    | {"温柔", "温暖", "舒服", "满足", "兴奋"},
+    key=lambda word: (-len(word), word),
+)
+_MOOD_WORD_PATTERN = "|".join(re.escape(word) for word in _MOOD_WORDS)
+_COMPACT_MOODS = re.compile(f"(?:{_MOOD_WORD_PATTERN}){{2,}}")
+_RECEIPT_PENDING_WORDS = (
+    "等待收到", "等待收到礼物", "等着收到", "等收到", "等待收礼", "等着收礼", "等收礼", "期待收礼", "期待收到",
+    "期待收到礼物", "等待礼物", "等礼物", "还没收到", "尚未收到", "等待投喂", "等投喂", "等待送达",
+    "等待拆礼物", "期待拆礼物", "等待开箱", "期待开箱",
+)
+_VISIT_PENDING_WORDS = (
+    "等待来访", "等候来访", "等待见面", "期待见面", "等你来", "等您来", "等对方来",
+    "等你过来", "等您过来", "等对方过来", "等你到", "等您到", "等对方到",
+    "明天见", "还没见面", "尚未见面",
+)
+_RECEIVED_WORDS = (
+    "已经收到", "已收到", "收到礼物", "收礼后", "收到礼物后", "拆礼物", "拆礼盒",
+    "开箱", "打开礼盒", "拆开礼物", "拆开礼盒", "已经拆开", "已拆开",
+)
+_GREETING_WORDS = (
+    "打招呼", "见面问候", "见面打招呼", "问候对方", "问好", "见到你", "看到你啦",
+    "说嗨", "说你好", "已经见面", "已见面",
+)
+_HELD_GIFT_WORDS = ("自己抱礼物", "抱着礼盒", "抱着礼物", "展示礼盒", "展示礼物")
+# Only explicit stage phrases count; an unmarked image still needs model judgment.
+_INTENT_STAGES = (
+    (*_ANTICIPATION_WORDS, "等待", "等好事发生", "尚未发生", "尚未开始", "还没开始", "准备开始",
+     *_RECEIPT_PENDING_WORDS, *_VISIT_PENDING_WORDS),
+    ("进行中", "正在进行", "制作中", "正在做", "还在处理", "处理中", "还在想", "没想好"),
+    ("已完成", "已经完成", "完成了", "做完了", "做好了", "做成了", "已经成功", "已成功",
+     "已经取得成果", "庆祝成果", "庆祝成功", "祝贺成功", "达成", "获胜", "赢啦",
+     *_RECEIVED_WORDS, *_GREETING_WORDS),
+)
+# Short scene cues, not a complete ontology of image content.
+_CONTEXT_SCENES = (
+    ("礼物", "礼盒", "收礼", "送礼", "开箱"),
+    ("奖杯", "获胜", "获奖", "得奖", "赢啦", "赢了", "庆祝成果", "成功", "达成"),
+    ("跳舞", "舞蹈", "音乐", "节奏舞"),
+    ("茶", "热饮", "饮茶", "品茶"),
+    ("干杯", "碰杯", "敬酒", "啤酒", "酒杯"),
+    ("喝饮料", "饮料", "可乐", "吸管"),
+    ("进食", "吃饭", "开吃", "吃得", "吃瓜", "开饭", "投喂", "甜点", "零食", "甜甜圈", "好吃的"),
+    ("红包", "金币", "金钱", "钞票", "奖励", "节庆", "收款", "付钱", "奖金"),
+    ("打招呼", "问候", "问好", "招呼", "你好", "说嗨", "见到你", "看到你啦", "已经见面", "已见面", "报到"),
+    ("应援", "打call", "打 call", "荧光棒", "表演", "演出"),
+)
+_USAGE_CLAUSES = re.compile(r"[，,。.!！?？；;\n]+")
+_USAGE_RESTRICTION = re.compile(
+    r"不适合|不适用于|不用于|不宜用于|不要用于|不能用于|不应配|不配|不作|"
+    r"不当作|不当成|不能当成|不表示|不代表|不表达|不等于|不是|也不是|"
+    r"不把|不能把|不直接评价|不凭|不能仅凭|不要只按|不泛指|"
+    r"不自动|不因|不据此|不推断|不夸大|不承载|不带|不从|不假装|不宣称|"
+    r"不要描述成|不能默认|比(?:普通|轻微|轻度)|强于普通|"
+    r"没有(?:明确|明显)?|非主动"
+)
+_INTENT_NEGATION = re.compile(r"(?:不|没|非|无|未)(?:再|被|想|要|会|能|太|很|愿意)*$")
+_PENDING_EVENT_PREFIX = re.compile(r"(?:等待|等着|等|期待|盼着|盼望|准备|即将|将要|想要|想|会|要)(?:能|再|去|来)*$")
+
+
+def _positive_usage_text(value: str) -> str:
+    """只去掉明确限制性分句；保留「不开心、不满、我不行了」等实际表达。"""
+    clauses = []
+    for clause in _USAGE_CLAUSES.split(value.casefold()):
+        restriction = _USAGE_RESTRICTION.search(clause)
+        clauses.append(clause[:restriction.start()] if restriction else clause)
+    return "，".join(clauses)
+
+
+def _intent_word(term: str) -> str:
+    return re.sub(r"^(?:自己|本喵|我)", "", term)
+
+
+def _query_terms(term: str) -> list[str]:
+    words = []
+    for raw in re.split(r"[\s,，、;；/]+", term):
+        if not raw:
+            continue
+        word = _intent_word(raw)
+        if _COMPACT_MOODS.fullmatch(word):
+            words.extend(match.group() for match in re.finditer(_MOOD_WORD_PATTERN, word))
+        else:
+            words.append(raw)
+    return list(dict.fromkeys(words))[:8]
+
+
+def _requested_action(term: str) -> tuple[_ActionWords, str] | None:
+    # Role prefixes are meaningful inside the alias, e.g. 被 / 对方 / 求.
+    word = _intent_word(term)
+    for action in _INTENT_ACTIONS:
+        if word in action.receiving:
+            return action, "receiving"
+        if word in action.giving:
+            return action, "giving"
+        if word in action.aliases:
+            return action, ""
+    return None
+
+
+def _requested_stage(term: str) -> int:
+    word = _intent_word(term)
+    return next((index for index, words in enumerate(_INTENT_STAGES, start=1) if word in words), 0)
+
+
+def _matches_action(fields: list[str], action: _ActionWords, direction: str) -> bool:
+    receiving = any(_contains_intent(value, word) for word in action.receiving for value in fields)
+    giving = any(_contains_intent(value, word) for word in action.giving for value in fields)
+    if direction == "receiving" and giving and not receiving:
+        return False
+    if direction == "giving" and receiving and not giving:
+        return False
+    return receiving or giving or any(_contains_intent(value, word) for word in action.aliases for value in fields)
+
+
+def _contains_intent(value: str, term: str) -> bool:
+    # Preserve the complete phrase 不开心, without also matching it as 开心.
+    return any(
+        not _INTENT_NEGATION.search(value[:match.start()])
+        for match in re.finditer(re.escape(term), value)
+    )
+
+
+def _contains_completed_intent(value: str, term: str) -> bool:
+    return any(
+        not _INTENT_NEGATION.search(value[:match.start()])
+        and not _PENDING_EVENT_PREFIX.search(value[:match.start()])
+        for match in re.finditer(re.escape(term), value)
+    )
+
+
+def _intent_variants(term: str) -> tuple[str, ...]:
+    request = _requested_action(term)
+    if request:
+        action, direction = request
+        role_words = getattr(action, direction) if direction else action.receiving + action.giving
+        return tuple(dict.fromkeys((term, *action.aliases, *role_words)))
+    for family in _INTENT_SYNONYMS:
+        if _intent_word(term) in family:
+            return tuple(dict.fromkeys((term, *family)))
+    stage = _requested_stage(term)
+    if stage == 1:
+        return tuple(dict.fromkeys((term, *_ANTICIPATION_WORDS)))
+    if stage > 1:
+        return tuple(dict.fromkeys((term, *_INTENT_STAGES[stage - 1])))
+    return (term,)
+
+
+def _candidate_term_score(sticker: Sticker, fields: list[str], variants: tuple[str, ...]) -> int:
+    if sticker.id.casefold() == variants[0]:
         return 120
-    if any(term == tag.casefold() for tag in sticker.tags):
+    # Literal intent evidence outranks an equivalent phrase in the same field.
+    return max(
+        _candidate_usage_score(sticker, fields, variants[:1]),
+        _candidate_usage_score(sticker, fields, variants[1:]) - 15,
+    )
+
+
+def _candidate_usage_score(sticker: Sticker, fields: list[str], variants: tuple[str, ...]) -> int:
+    desc, caption, *tags = fields
+    if any(term == tag for term in variants for tag in tags):
         return 100
-    if any(term in tag.casefold() for tag in sticker.tags):
+    if any(_contains_intent(tag, term) for term in variants for tag in tags):
         return 90
-    if term in sticker.desc.casefold():
+    if any(_contains_intent(desc, term) for term in variants):
         return 80
-    if term in sticker.caption.casefold():
+    if any(_contains_intent(caption, term) for term in variants):
         return 20
-    if term in sticker.visible_text.casefold():
+    if any(_contains_intent(sticker.visible_text.casefold(), term) for term in variants):
         return 10
-    if sticker.group and term in sticker.group.casefold():
-        return 5
     return 0
 
 
