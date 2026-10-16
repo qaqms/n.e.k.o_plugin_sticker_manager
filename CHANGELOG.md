@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.9.4
+
+- Release only the host-capability image transport changes. Preserve the 0.9.3
+  panel, recall rules, explicit-ID selection and model guidance.
+- Repeated speech and sticker-operation narration remain known limitations.
+  This release does not filter host speech or include local diagnostic tooling.
+- On compatible SDKs, request original-reply context for candidate lookup too,
+  avoiding extra bus/current-role probes and retaining per-role recent filtering.
+  Add elapsed-time logs for lookup, send and host tail registration. Model tool
+  round trips remain; this does not promise pure-text response latency.
+- Preserve original image bytes up to 1 MiB on the compatible host reply-tail
+  HTTP channel instead of applying the ordinary 256 KiB message budget first.
+  All 190 bundled GIF originals fit; immediate delivery keeps its WebP variants.
+- Port host-capability reply-tail delivery onto the 0.9.3 mainline, retaining
+  precise candidate recall, explicit-ID selection, the simplified panel and
+  the original/animation-preserving official delivery assets.
+- Register the selected image promptly and let the matching host place it after
+  the original text queue and final presentation. Preserve immediate delivery
+  on hosts without this capability; this does not wait for TTS completion.
+- Revalidate image availability after uploads before captions or registrations.
+  Reconcile uncertain receipts without immediate replay and count confirmed
+  host submissions once, including cancellation and shutdown races.
+
 ## 0.9.3
 
 - Prepare the 0.9.3 GitHub release on 2026-10-16. Do not notify the plugin

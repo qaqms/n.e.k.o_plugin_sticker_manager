@@ -49,6 +49,7 @@ def _dataclass_defaults() -> dict[str, object]:
     return {
         "sticker_manager.enabled": settings.enabled,
         "sticker_manager.send.cooldown_sec": float(settings.send.cooldown_sec),
+        "sticker_manager.send.host_reply_tail": settings.send.host_reply_tail,
         "sticker_manager.send.defer_tool_sends": settings.send.defer_tool_sends,
         "sticker_manager.send.reply_tail_display_buffer_sec": float(settings.send.reply_tail_display_buffer_sec),
         "sticker_manager.send.inline_max_bytes": settings.send.inline_max_bytes,
@@ -94,6 +95,6 @@ def test_manifest_matches_dataclass_defaults():
 
 def test_dataclass_section_dataclasses_have_no_undeclared_extra():
     """dataclass 加了键但没进 _dataclass_defaults —— 用字段数钉住。"""
-    assert len(SendSettings.__dataclass_fields__) == 9
+    assert len(SendSettings.__dataclass_fields__) == 10
     assert len(StorageSettings.__dataclass_fields__) == 2
     assert len(AwarenessSettings.__dataclass_fields__) == 6

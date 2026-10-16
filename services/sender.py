@@ -5,6 +5,7 @@
    GIF/动画 WebP 默认走这条——上传会归一成 JPEG，压平动画；内联保留原字节。
 2. **上传换 URL**（大图 / 显式配置）：`await ctx.images.upload(data)` 拿回
    `{"type":"image","url":...,"mime":"image/jpeg"}` 的 part 再投递。
+配套宿主的尾发 HTTP 通道独立于普通消息通道，允许直接保留最多 1 MiB 的原图。
 
 投递用 `visibility=["chat"]`（用户在聊天里看到图）；工具选图无论即时还是排队都用
 `ai_behavior="blind"`，避免自产配文与图片反灌到下一轮上下文；
@@ -25,10 +26,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import math
 import random
 import threading
 import time
-from dataclasses import dataclass
+from collections import OrderedDict
+from dataclasses import dataclass, replace
 from typing import Any
 
 from ..core.catalog import Sticker, detect_image_format
@@ -53,6 +57,9 @@ ERR_PROBABILITY = "probability_declined"
 _RNG = random.Random()
 _TAIL_TIMEOUT_SEC = 300.0
 _MAX_PENDING = 8
+_MAX_HOST_ACCOUNTED = 512
+# V1 accepts 2 MiB of JSON parts. One 1 MiB image leaves ample base64 headroom.
+_HOST_REPLY_TAIL_INLINE_MAX_BYTES = 1024 * 1024
 
 
 @dataclass
@@ -64,6 +71,8 @@ class SendResult:
     desc: str = ""
     queued: bool = False
     text_submitted: bool = False
+    failure_recorded: bool = False
+    delivery_recorded: bool = False
 
     @classmethod
     def failure(
@@ -93,6 +102,23 @@ class PendingSend:
     end_observed_at: float | None = None
 
 
+@dataclass
+class PendingHostSend:
+    sticker: Sticker
+    context: dict[str, Any]
+    registration_id: str
+    client: Any
+    started: float
+    text_len: int
+    duplicate: bool = False
+    registering: bool = True
+    uncertain: bool = False
+    cancel_reason: str = ""
+    reservation: object | None = None
+    terminal_result: SendResult | None = None
+    terminal_deferred: bool = False
+
+
 class Sender:
     """发送器。`plugin` 提供 `ctx`（push_message / images）。"""
 
@@ -105,9 +131,12 @@ class Sender:
         self._last_sent: dict[str, float] = {}  # lanlan -> 上次成功投递的时刻
         self._prob_rolls: dict[str, tuple[float, bool]] = {}  # lanlan -> (掷骰时刻, 命中)
         self._inflight: set[str] = set()
+        self._inflight_owners: dict[str, object] = {}
         self._inflight_lock = threading.Lock()
         self._turn_end = turn_end
         self._pending: dict[str, PendingSend] = {}
+        self._host_pending: dict[str, PendingHostSend] = {}
+        self._host_accounted: OrderedDict[tuple[str, str, str], None] = OrderedDict()
         self._drain_lock = threading.Lock()
         self._closed = False
         self._epoch = 0
@@ -193,6 +222,7 @@ class Sender:
         now: float | None = None,
         force: bool = False,
         text: str = "",
+        host_reply: dict[str, Any] | None = None,
     ) -> SendResult:
         """投递一张表情包并记账。source 为 tool / agent / panel，不面向用户。
 
@@ -202,6 +232,15 @@ class Sender:
         两条消息署名仍是插件，不冒充她自己的回复气泡。
         """
         moment = time.time() if now is None else now
+        if source == "tool" and host_reply is not None:
+            with self._inflight_lock:
+                previous = self._host_pending.get(lanlan)
+                reconcile = previous is not None and not previous.registering
+            if reconcile:
+                outcomes = await self._drain_host(settings=settings, target_lanlan=lanlan)
+                observer = getattr(self._plugin, "_note_deferred_outcomes", None)
+                if callable(observer):
+                    observer(outcomes)
         # Reservation spans awaits and works across the host's separate event loops.
         with self._inflight_lock:
             if self._closed:
@@ -209,19 +248,25 @@ class Sender:
             if lanlan in self._inflight:
                 return SendResult.failure(ERR_COOLDOWN, sticker_id=sticker.id)
             self._inflight.add(lanlan)
+            reservation = object()
+            self._inflight_owners[lanlan] = reservation
             epoch = self._epoch
         handed_off = False
         try:
             result = await self._send_reserved(
                 sticker, lanlan=lanlan, settings=settings, source=source, now=moment,
                 force=force, text=text, epoch=epoch,
+                host_reply=host_reply,
             )
             handed_off = result.queued
             return result
         finally:
-            if not handed_off:
-                with self._inflight_lock:
-                    self._inflight.discard(lanlan)
+            with self._inflight_lock:
+                if (
+                    not handed_off and lanlan not in self._host_pending
+                    and self._inflight_owners.get(lanlan) is reservation
+                ):
+                    self._release_reservation(lanlan, reservation)
 
     async def _send_reserved(
         self,
@@ -234,6 +279,7 @@ class Sender:
         force: bool,
         text: str,
         epoch: int,
+        host_reply: dict[str, Any] | None,
     ) -> SendResult:
         moment = now
         started = time.monotonic()
@@ -264,7 +310,21 @@ class Sender:
         if detected is None:
             return SendResult.failure(ERR_BAD_IMAGE, sticker_id=sticker.id)
         _ext, mime = detected
-        if len(data) > settings.send.inline_max_bytes:
+        host_client = None
+        if source == "tool" and settings.send.host_reply_tail and host_reply is not None:
+            try:
+                host_client = getattr(self._plugin.ctx, "reply_tail", None)
+            except (AttributeError, RuntimeError):
+                host_client = None
+            if not all(callable(getattr(host_client, name, None)) for name in ("register", "status", "cancel")):
+                host_client = None
+            if host_client is not None and host_reply.get("role") != lanlan:
+                return SendResult.failure("reply_tail_target_mismatch", sticker_id=sticker.id)
+
+        inline_budget = (
+            _HOST_REPLY_TAIL_INLINE_MAX_BYTES if host_client is not None else settings.send.inline_max_bytes
+        )
+        if len(data) > inline_budget:
             pack_path = getattr(self._plugin, "_official_pack_path", None)
             if callable(pack_path):
                 try:
@@ -280,7 +340,7 @@ class Sender:
                     self._log(f"official delivery variant: id={sticker.id} bytes={len(data)}")
 
         ticket = None
-        if self._turn_end is not None and (
+        if host_client is None and self._turn_end is not None and (
             source == "agent" or (source == "tool" and settings.send.defer_tool_sends)
         ):
             # Tool ordering is opt-in: log-based waiting can lose selections
@@ -294,13 +354,40 @@ class Sender:
                 if ticket is None:
                     return SendResult.failure("turn_end_unavailable", sticker_id=sticker.id)
 
-        part = await self._build_part(data, mime, settings=settings)
+        part = await self._build_part(data, mime, settings=settings, inline_budget=inline_budget)
         if part is None:
             return SendResult.failure(ERR_TOO_LARGE, sticker_id=sticker.id)
 
         # 图片准备完成后才允许投配文；有配文的两条消息共用这次预约与排队。
         parts: list[dict[str, Any]] = [{"type": "text", "text": text}] if text else []
         parts.append(part)
+        if host_client is not None:
+            # Extra captions keep their existing independent channel; the
+            # normal reply is never moved into plugin-generated text.
+            text_submitted = False
+            if text:
+                with self._inflight_lock:
+                    if self._closed or self._epoch != epoch:
+                        return SendResult.failure("send_stopped", sticker_id=sticker.id)
+                    with self._library.locked():
+                        current, code = self._current_for_submission(sticker.id, source=source)
+                        if current is None or code:
+                            return SendResult.failure(code or ERR_MISSING_FILE, sticker_id=sticker.id)
+                        sticker = current
+                        try:
+                            text_submitted = bool(
+                                self._push([parts[0]], lanlan=lanlan, ai_behavior="blind").get("submitted")
+                            )
+                        except Exception:
+                            text_submitted = False
+                if not text_submitted:
+                    return SendResult.failure(ERR_TRANSPORT, sticker_id=sticker.id)
+            result = await self._submit_host(
+                sticker, part, lanlan=lanlan, settings=settings, client=host_client,
+                context=host_reply, text_len=len(text), epoch=epoch,
+            )
+            result.text_submitted = text_submitted
+            return result
         with self._inflight_lock:
             if self._closed:
                 return SendResult.failure("send_stopped", sticker_id=sticker.id)
@@ -386,7 +473,17 @@ class Sender:
             if part["type"] == "text":
                 text_submitted = True
 
-        # 只有图片真交给传输了才前进冷却与计数，配文单独提交不算成功。
+        self._record_submission(
+            sticker, lanlan=lanlan, settings=settings, source=source,
+            moment=moment, text_len=text_len,
+        )
+        return SendResult.success(sticker, text_submitted=text_submitted)
+
+    def _record_submission(
+        self, sticker: Sticker, *, lanlan: str, settings: StickerManagerSettings,
+        source: str, moment: float, text_len: int,
+    ) -> None:
+        # Registration is not submission. Neither path counts merely queued images.
         self._last_sent[lanlan] = moment
         self._library.touch_used(sticker.id, now=moment)
         self._library.append_usage(
@@ -403,10 +500,244 @@ class Sender:
             keep=settings.storage.usage_history_keep,
         )
         self._log(
-            f"sticker sent: id={sticker.id} source={source} ai_behavior={ai_behavior}"
+            f"sticker sent: id={sticker.id} source={source} "
+            f"ai_behavior={'blind' if source == 'tool' else 'read'}"
             + (f" text_len={text_len}" if text_len else "")
         )
-        return SendResult.success(sticker, text_submitted=text_submitted)
+
+    async def _submit_host(
+        self, sticker: Sticker, part: dict[str, Any], *, lanlan: str,
+        settings: StickerManagerSettings, client: Any, context: dict[str, Any],
+        text_len: int, epoch: int,
+    ) -> SendResult:
+        call_key = hashlib.sha256(str(context.get("token", "")).encode("utf-8")).hexdigest()[:16]
+        pending = PendingHostSend(
+            sticker, dict(context), f"sticker:{sticker.id}:{call_key}", client, time.monotonic(), text_len,
+        )
+        with self._inflight_lock:
+            if self._closed or self._epoch != epoch:
+                return SendResult.failure("send_stopped", sticker_id=sticker.id)
+            with self._library.locked():
+                current, code = self._current_for_submission(sticker.id, source="tool")
+                if current is None or code:
+                    return SendResult.failure(code or ERR_MISSING_FILE, sticker_id=sticker.id)
+                pending.sticker = current
+            if len(self._host_pending) >= _MAX_PENDING:
+                return SendResult.failure("send_queue_full", sticker_id=sticker.id)
+            pending.reservation = self._inflight_owners.get(lanlan)
+            self._host_pending[lanlan] = pending
+        registration_started = time.perf_counter()
+        try:
+            receipt = await client.register(
+                pending.context, registration_id=pending.registration_id,
+                parts=[part], ai_behavior="blind", timeout=5.0,
+            )
+        except asyncio.CancelledError:
+            with self._inflight_lock:
+                pending.uncertain = True
+                pending.registering = False
+            raise
+        except Exception:
+            # The HTTP request may have reached the host. Query this identity,
+            # never fall back to another immediate image on uncertainty.
+            receipt = {"status": "uncertain", "accepted": False}
+        if not isinstance(receipt, dict):
+            receipt = {"status": "uncertain", "accepted": False}
+        state = receipt.get("status")
+        self._log(
+            f"sticker host tail registration: id={sticker.id}"
+            f" elapsed_ms={(time.perf_counter() - registration_started) * 1000:.1f} state={state}"
+        )
+        with self._inflight_lock:
+            still_owned = self._host_pending.get(lanlan) is pending and not self._closed and self._epoch == epoch
+            pending.uncertain = state == "uncertain"
+            pending.duplicate = bool(receipt.get("duplicate"))
+            pending.registering = False
+            if receipt.get("accepted") is True and state == "submitted":
+                return self._settle_host(
+                    pending, lanlan=lanlan, settings=settings, receipt=receipt,
+                )
+            if pending.terminal_result is not None:
+                return self._late_host_result(pending)
+            if still_owned:
+                if state in {"registered", "uncertain"}:
+                    self._log(f"sticker host tail queued: id={sticker.id} state={state}")
+                    return SendResult(
+                        ok=True, queued=True, sticker_id=sticker.id, desc=pending.sticker.desc,
+                        detail="host_reply_tail_uncertain" if state == "uncertain" else "host_reply_tail",
+                    )
+                return self._settle_host(
+                    pending, lanlan=lanlan, settings=settings, receipt=receipt,
+                )
+        try:
+            cancellation = await client.cancel(
+                pending.context, registration_id=pending.registration_id, timeout=5.0,
+            )
+        except Exception:
+            cancellation = {"status": "uncertain"}
+        if not isinstance(cancellation, dict):
+            cancellation = {"status": "uncertain"}
+        with self._inflight_lock:
+            if cancellation.get("status") == "submitted" and cancellation.get("accepted") is True:
+                return self._settle_host(
+                    pending, lanlan=lanlan, settings=settings, receipt=cancellation,
+                )
+            if pending.terminal_result is not None:
+                return self._late_host_result(pending)
+            if cancellation.get("status") in {"registered", "uncertain"}:
+                if (
+                    self._host_pending.get(lanlan) is pending and not self._closed
+                    and time.monotonic() - pending.started < _TAIL_TIMEOUT_SEC
+                ):
+                    pending.cancel_reason = pending.cancel_reason or "send_stopped"
+                    pending.uncertain = True
+                    return SendResult(
+                        ok=True, queued=True, sticker_id=sticker.id, desc=sticker.desc,
+                        detail="host_reply_tail_uncertain",
+                    )
+                reason = "reply_tail_cancel_uncertain"
+            else:
+                reason = pending.cancel_reason or "send_stopped"
+            return self._settle_host(
+                pending, lanlan=lanlan, settings=settings, receipt=cancellation, reason=reason,
+            )
+
+    def _release_reservation(self, lanlan: str, reservation: object | None = None) -> None:
+        if reservation is not None and self._inflight_owners.get(lanlan) is not reservation:
+            return
+        self._inflight.discard(lanlan)
+        self._inflight_owners.pop(lanlan, None)
+
+    @staticmethod
+    def _late_host_result(pending: PendingHostSend) -> SendResult:
+        result = pending.terminal_result
+        assert result is not None
+        if not pending.terminal_deferred and not result.delivery_recorded:
+            return result
+        # Claiming the original for the observer also covers its cross-loop delivery window.
+        return replace(
+            result, delivery_recorded=True,
+            detail="host_reply_tail_duplicate" if result.ok else result.detail,
+        )
+
+    def _settle_host(
+        self, pending: PendingHostSend, *, lanlan: str, settings: StickerManagerSettings,
+        receipt: dict[str, Any], reason: str = "",
+    ) -> SendResult:
+        """Claim a terminal receipt once while the caller holds the role lock."""
+        submitted = receipt.get("status") == "submitted" and receipt.get("accepted") is True
+        previous = pending.terminal_result
+        if previous is not None and (previous.ok or not submitted):
+            return self._late_host_result(pending)
+        if self._host_pending.get(lanlan) is pending:
+            self._host_pending.pop(lanlan)
+            self._release_reservation(lanlan, pending.reservation)
+        if submitted:
+            identity = (
+                str(pending.context.get("reply_id", "")),
+                str(pending.context.get("source", "")),
+                pending.registration_id,
+            )
+            duplicate = pending.duplicate or identity in self._host_accounted
+            if not duplicate:
+                self._record_submission(
+                    pending.sticker, lanlan=lanlan, settings=settings, source="tool",
+                    moment=self._submission_time(receipt), text_len=pending.text_len,
+                )
+            self._host_accounted[identity] = None
+            self._host_accounted.move_to_end(identity)
+            while len(self._host_accounted) > _MAX_HOST_ACCOUNTED:
+                self._host_accounted.popitem(last=False)
+            result = SendResult.success(pending.sticker)
+            if duplicate:
+                result.detail = "host_reply_tail_duplicate"
+        else:
+            code = str(reason or receipt.get("reason") or "reply_tail_rejected")
+            self.note_attempt_failed(
+                lanlan=lanlan, sticker_id=pending.sticker.id, code=code,
+                settings=settings, now=time.time(), source="tool",
+                text_submitted=pending.text_len > 0,
+            )
+            result = SendResult.failure(code, sticker_id=pending.sticker.id)
+            result.failure_recorded = True
+        pending.terminal_result = result
+        pending.terminal_deferred = False
+        return result
+
+    @staticmethod
+    def _submission_time(receipt: dict[str, Any]) -> float:
+        now = time.time()
+        value = receipt.get("submitted_at")
+        if type(value) in (int, float) and math.isfinite(value) and value > 0:
+            return min(now, value)
+        return now
+
+    async def _drain_host(
+        self, *, settings: StickerManagerSettings, cancel: bool = False, target_lanlan: str | None = None,
+    ) -> list[tuple[str, SendResult]]:
+        outcomes: list[tuple[str, SendResult]] = []
+        with self._inflight_lock:
+            snapshot = list(self._host_pending.items())
+        loaded = self._library.load() if snapshot else None
+        for lanlan, pending in snapshot:
+            if target_lanlan is not None and lanlan != target_lanlan:
+                continue
+            if pending.registering and not cancel and settings.enabled and not self._closed:
+                continue
+            sticker = self._library.get(pending.sticker.id)
+            code = pending.cancel_reason
+            if cancel or self._closed:
+                code = "send_stopped"
+            elif not settings.enabled:
+                code = ERR_NOT_ENABLED
+            elif not settings.send.host_reply_tail:
+                code = "reply_tail_disabled"
+            elif loaded is not None and not loaded.ok:
+                code = loaded.code
+            elif sticker is None or not self._library.image_path(sticker).is_file():
+                code = ERR_MISSING_FILE
+            elif sticker.disabled:
+                code = "sticker_disabled"
+            elif sticker.id not in {item.id for item in self._library.active_pool()}:
+                code = "sticker_zone_changed"
+            elif time.monotonic() - pending.started >= _TAIL_TIMEOUT_SEC:
+                code = "reply_tail_timeout"
+            if code:
+                pending.cancel_reason = code
+            try:
+                method = pending.client.cancel if code else pending.client.status
+                receipt = await method(pending.context, registration_id=pending.registration_id, timeout=5.0)
+            except Exception:
+                receipt = {"status": "uncertain"}
+            state = receipt.get("status") if isinstance(receipt, dict) else "uncertain"
+            # A submission that won the cancellation race cannot be undone.
+            submitted = state == "submitted" and receipt.get("accepted") is True
+            if code and state in {"registered", "uncertain"}:
+                if not self._closed and time.monotonic() - pending.started < _TAIL_TIMEOUT_SEC:
+                    continue
+                code = "reply_tail_cancel_uncertain"
+            if (
+                not code and pending.uncertain and state == "failed"
+                and receipt.get("reason") == "registration_not_found"
+            ):
+                continue
+            if not submitted and not code and state in {"registered", "uncertain"}:
+                continue
+            with self._inflight_lock:
+                if self._host_pending.get(lanlan) is not pending:
+                    continue
+                result = self._settle_host(
+                    pending, lanlan=lanlan, settings=settings,
+                    receipt=receipt if isinstance(receipt, dict) else {}, reason=code,
+                )
+                pending.terminal_deferred = True
+                outcomes.append(("tool", result))
+        return outcomes
+
+    async def cancel_host_pending(self, *, settings: StickerManagerSettings) -> list[tuple[str, SendResult]]:
+        # May overlap a status poll during shutdown. The ownership check after
+        # each await ensures that only one path records the terminal outcome.
+        return await self._drain_host(settings=settings, cancel=True)
 
     async def drain(self, *, settings: StickerManagerSettings) -> list[tuple[str, SendResult]]:
         """Buffer display after generation ends, watching for superseding input.
@@ -414,10 +745,13 @@ class Sender:
         The buffer is a configurable compatibility aid, not a frontend completion
         signal. Each timer tick continues to read new logs and the busy guard.
         """
-        if self._turn_end is None or not self._drain_lock.acquire(blocking=False):
+        if not self._drain_lock.acquire(blocking=False):
             return []
         outcomes: list[tuple[str, SendResult]] = []
         try:
+            outcomes.extend(await self._drain_host(settings=settings))
+            if self._turn_end is None:
+                return outcomes
             with self._inflight_lock:
                 snapshot = list(self._pending.items())
             states = None
@@ -490,7 +824,7 @@ class Sender:
                         outcomes.append((pending.source, result))
                     finally:
                         self._pending.pop(lanlan, None)
-                        self._inflight.discard(lanlan)
+                        self._release_reservation(lanlan)
             return outcomes
         finally:
             self._drain_lock.release()
@@ -509,18 +843,19 @@ class Sender:
                     settings=settings, now=time.time(), source=pending.source,
                 )
                 outcomes.append((pending.source, SendResult.failure(code, sticker_id=pending.sticker.id)))
-                self._inflight.discard(lanlan)
+                self._release_reservation(lanlan)
             self._pending.clear()
         return outcomes
 
     async def _build_part(
-        self, data: bytes, mime: str, *, settings: StickerManagerSettings,
+        self, data: bytes, mime: str, *, settings: StickerManagerSettings, inline_budget: int | None = None,
     ) -> dict[str, Any] | None:
         """构造 push_message 的 image part；无法投递时返回 None。
 
         配文是独立消息，不占用图片的内联预算。
         """
-        inline_budget = settings.send.inline_max_bytes
+        if inline_budget is None:
+            inline_budget = settings.send.inline_max_bytes
         if preserves_animation(data, mime) and not settings.send.animated_via_upload:
             # GIF and animated WebP must keep their original bytes.
             if len(data) > inline_budget:

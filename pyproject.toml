@@ -1,6 +1,6 @@
 [project]
 name = "sticker_manager"
-version = "0.9.3"
+version = "0.9.4"
 license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = []

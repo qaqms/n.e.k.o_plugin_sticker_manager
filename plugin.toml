@@ -13,7 +13,7 @@ keywords = [
     "meme",
     "gallery",
 ]
-version = "0.9.3"
+version = "0.9.4"
 type = "plugin"
 entry = "plugin.plugins.sticker_manager:StickerManagerPlugin"
 
@@ -61,6 +61,8 @@ enabled = false
 [sticker_manager.send]
 # 同一角色卡两次发送之间的最小间隔（秒）。防刷屏，也防模型连着甩图。
 cooldown_sec = 20.0
+# 可信宿主上下文与新 SDK 同时可用时，把图片排在本轮全部文字显示之后。
+host_reply_tail = true
 # 工具选图默认即时发送；true 沿用回复后排队，下一轮输入可能取消待发图。
 defer_tool_sends = false
 # 仅排队发送：生成结束后的逐段显示兼容缓冲（秒，0..30），不代表前端或 TTS 真正结束。
