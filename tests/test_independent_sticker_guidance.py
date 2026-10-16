@@ -11,6 +11,7 @@ from conftest import PNG_BYTES, FakeHostContext, build_plugin
 from sticker_manager.core.catalog import SEND_TEXT_MAX_CHARS
 from sticker_manager.core.configuration import EAGERNESS_LEVELS, StickerManagerSettings
 from sticker_manager.core.eagerness import (
+    INTERNAL_SELECTION_NOTE,
     TOOL_NOTE,
     WILL,
     effective_inject_interval_n,
@@ -154,7 +155,8 @@ def test_dynamic_registration_keeps_real_schema_and_positive_group_only_guidance
     assert "配文不要在正文重复" in description
     assert _GROUP in description and description.endswith(_TIER_NOTES[tier])
     if tier == "eager":
-        assert description.startswith("每轮开口前先做这个判断：按自己要表达的态度找候选图。")
+        assert description.startswith(INTERNAL_SELECTION_NOTE)
+        assert "每轮做一次配图判断：按自己要表达的态度找候选图。" in description
         assert "有贴切图片就优先查候选配一张" in description
         assert "不用等用户点名要图，也别因文字已经说清楚就省掉" in description
         assert "分清安慰对方和说自己" in description

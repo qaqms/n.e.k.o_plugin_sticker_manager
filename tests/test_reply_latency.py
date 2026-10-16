@@ -3,10 +3,33 @@
 from copy import deepcopy
 from unittest.mock import AsyncMock
 
+import pytest
 from conftest import PNG_BYTES, FakeHostContext, build_plugin
+from sticker_manager.core.awareness import build_awareness_text
 from sticker_manager.core.configuration import StickerManagerSettings
+from sticker_manager.core.eagerness import REPLY_PACING_NOTE
+from sticker_manager.core.tool_surface import build_send_tool_description
 
 from .test_host_reply_tail import CONTEXT
+
+
+@pytest.mark.parametrize("tier", ["reserved", "natural", "eager"])
+def test_speech_pacing_is_consistent_across_tools_and_reminder(tmp_path, tier):
+    plugin, _ = build_plugin(FakeHostContext(data_root=tmp_path))
+    plugin._library.load()
+    sticker, error = plugin._library.add(data=PNG_BYTES, desc="happy", tags=[])
+    assert not error
+    send_description = build_send_tool_description("happy", tier)
+    list_meta = plugin.tool_sticker_list.__neko_stub_meta__
+    list_description = next(row["kwargs"]["description"] for row in list_meta if "description" in row["kwargs"])
+    for text in (send_description, list_description):
+        assert REPLY_PACING_NOTE in text
+        assert "开口前先" not in text and "开口之前先" not in text
+        assert "sticker_send(sticker_id=候选ID)" in text
+    assert "sticker_list" in send_description
+    reminder = build_awareness_text([sticker], eagerness=tier)
+    assert "本轮可先接话，用 sticker_list" in reminder
+    assert "sticker_send(sticker_id=候选ID)" in reminder
 
 
 def _surface(plugin, *, modern=True, reject_context=False):

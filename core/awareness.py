@@ -104,10 +104,9 @@ def injection_due_for_turn(
 # 她是自愿用表情的主人，不是被执行分支的脚本；给的是"有什么 + 现在判断 + 怎么发"。
 # 轮 C 起中段多一条**使用规则**（学习外部系统 提示词里"区分安慰与自述、不贴切就不发"
 # 与数量软提示）：硬闸在发送层的冷却，软提示进这段文案——两层分离，各管各的。
-_HEADER = "【表情包】你的收藏间里有 {count} 张表情包。"
-# 事件门控点名的落点句（v0.20.0）：形状照同门 `emotion_sense` 的 `（语气感知提醒）`——
-# 先陈述刚发生的事（这句有情绪），再点名工具，最后留退路（不贴切就别配）。
-_EVENT_LEDE = "（表情包点名）最近的对话有互动或情绪反应，回复时想一下配不配图。"
+_HEADER = "收藏间有 {count} 张表情包。"
+# Keep the event cue declarative, without a parenthesized roleplay example.
+_EVENT_LEDE = "轻松或情绪互动可配贴切图片。"
 # v0.17.0：**目录与常货行从注入里退场**。它们搬去了常驻面（`core/tool_surface.py`
 # 拼进 `sticker_send` 的工具描述，每轮都在场），注入只剩"想起来"这一件事。
 # 理由不是省字——是载体错了：`ai_behavior="read"` 是排干即弃的一次性 cue，文字模式
@@ -126,10 +125,8 @@ def build_awareness_text(
 ) -> str:
     """拼一条注入文本。空库回空串——调用方拿空串当"这拍不该注"。
 
-    v0.20.0 的 `event=True` 是**事件门控点名**那一支：开头先给她一句"就是现在这句"
-    的落点（同门 `emotion_sense` 的 `（语气感知提醒）` 结构：先陈述刚发生的事实，
-    再点名工具，最后留退路）。计数兜底那一支不带这句 lede，免得把"每 6 轮例行点名"
-    伪装成"这句有情绪"。
+    `event=True` adds a short interaction cue after the private instructions.
+    Keep it out of roleplay parentheses so it cannot double as an action example.
 
     v0.20.11 起只保留库大小、group 路径与档位意愿；拒绝规则留在实际失败回执。
     轮 F 那版还会附套图分类概览与最近常用前 N 行——那是把一次性 cue 当目录载体用，
@@ -139,7 +136,8 @@ def build_awareness_text(
     total = sum(1 for s in stickers if not s.disabled)
     if total <= 0:
         return ""
-    lines = [_HEADER.format(count=total), injection_pointer(eagerness), injection_guidance(eagerness)]
+    lines = [injection_pointer(eagerness), _HEADER.format(count=total)]
     if event:
-        lines.insert(0, _EVENT_LEDE)
+        lines.append(_EVENT_LEDE)
+    lines.append(injection_guidance(eagerness))
     return "\n".join(lines)

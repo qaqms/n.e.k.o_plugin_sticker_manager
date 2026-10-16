@@ -84,6 +84,7 @@ from .core import (
     validate_desc_optional,
     validate_optional_text,
 )
+from .core.eagerness import REPLY_CONTINUATION_NOTE, REPLY_PACING_NOTE
 from .services import Awareness, LanlanResolver, Library, RunStats, Sender, ToolWatch, gave_shape
 from .services.bundled_pack import pack_exists
 from .services.turn_end import TurnEndLogs, log_directories
@@ -122,12 +123,14 @@ _LEDGER_LOG_MIN_SEC = 120.0
 
 def _private_selection_result(result: dict[str, Any]) -> dict[str, Any]:
     """Keep the reply boundary present on success, empty results and refusals."""
-    private = {**result, "hint": str(result.get("hint") or "") + INTERNAL_SELECTION_NOTE}
+    private = {**result, "hint": INTERNAL_SELECTION_NOTE}
     if not result.get("candidate_ids") and (
         result.get("count") == 0 or result.get("reason") in {"no_match", "group_not_found", "id_or_query_required"}
     ):
-        private["note"] = "直接续接当前聊天，保持原有回复意图；本结果仅供内部判断。"
-        private["hint"] = INTERNAL_SELECTION_NOTE
+        private["note"] = "本结果仅供内部判断。只续接尚未说完的内容，已说完就结束。"
+    elif result.get("hint"):
+        private["hint"] += "\n" + str(result["hint"])
+    private["hint"] += "\n" + REPLY_CONTINUATION_NOTE
     return private
 
 
@@ -1317,7 +1320,8 @@ class StickerManagerPlugin(NekoPluginBase):
         name=tr("entries.send.name", default="把这张表情发到聊天"),
         description=tr(
             "entries.send.description",
-            default="按 id 发送具体表情包。仅给 group、query 或不填参数时返回候选，不发送；"
+            default=INTERNAL_SELECTION_NOTE
+            + "按 id 发送具体表情包。仅给 group、query 或不填参数时返回候选，不发送；"
             "先阅读逐图说明，按回复意图、对象和语气选中后再给 id。没合适的就纯文字。"
             "面板仍可用 id 试发指定图片。"
         ),
@@ -1332,7 +1336,8 @@ class StickerManagerPlugin(NekoPluginBase):
                     "maxLength": SEND_TEXT_MAX_CHARS,
                     "description": (
                         "额外配文（可选）：先单独发文字，再单独发图片。"
-                        "正常文字回复时可用 sticker_send(sticker_id=候选ID) 配一张独立表情包，text 无需填写；"
+                        "正常文字回复时可实际调用工具 sticker_send，sticker_id 填选中的候选 ID，text 无需填写；"
+                        "正文和配文不写工具名、参数或选图过程。"
                         "只有额外配文才填 text，配文不要在正文重复"
                     ),
                 },
@@ -2027,6 +2032,7 @@ class StickerManagerPlugin(NekoPluginBase):
         name="sticker_list",
         description=(
             f"{INTERNAL_SELECTION_NOTE}"
+            f"{REPLY_PACING_NOTE}"
             "为你准备回复的这句话查表情候选，不发送。优先用 query 给空格或逗号分隔的正向短关键词，"
             "如「自己被摸头 舒服」；也可填 group 浏览逐图说明，同时给时只在该分类检索。"
             "明确动作会筛选候选，情绪词不能补入不同动作；写清谁对谁做，不填不想表达的词。"
@@ -2327,7 +2333,7 @@ class StickerManagerPlugin(NekoPluginBase):
                 out["hint"] = hint
             if result.text_submitted:
                 out["text_submitted"] = True
-                out["hint"] = "配文已提交，但图片未提交成功。不要重复发送这段配文，继续正常回复。"
+                out["hint"] = "配文已提交，但图片未提交成功。不要重复发送这段配文；只续接未说完的内容。"
             return out
         if result.queued:
             if result.detail.startswith("host_reply_tail"):
@@ -2353,7 +2359,7 @@ class StickerManagerPlugin(NekoPluginBase):
                 "queued": sticker.id,
                 "desc": sticker.catalog_body(self._library.group_descs()),
                 "note": (
-                    "表情包已排队，会在本轮回复与显示缓冲结束后发出。继续正常回复，无需等待；"
+                    "表情包已排队，会在本轮回复与显示缓冲结束后发出。无需等待；"
                     "仅同一轮同一张图不重复提交。"
                     + NEXT_STEP_NOTE.removeprefix("表情包已提交到聊天，")
                 ),

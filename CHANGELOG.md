@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased (0.9.5)
+
+These reply-guidance changes are held for a later release. Live testing still
+observed sticker-operation narration; do not describe them as a complete fix
+for repetition or private-operation leakage.
+
+- Put private-operation guidance before reminder cues, tool decisions and receipt
+  hints. Keep queries in tool arguments and selection reasons out of speech,
+  roleplay actions and captions; remove the parenthesized event-reminder form.
+  This is model guidance, not a host speech filter.
+- Make text-first pacing optional once at the start of a reply. Carry a shared
+  continuation boundary on candidate, empty, refusal and send receipts, allowing
+  finished text to end silently while necessary image tools complete. Remove
+  queued-result instructions that unconditionally request more normal speech.
+  This mitigates model restarts; it is not a host output deduplication filter.
+- Stop requiring image selection before the first spoken text. Keep candidate
+  review and exact-ID sends, but guide the model to respond naturally first.
+
 ## 0.9.4
 
 - Release only the host-capability image transport changes. Preserve the 0.9.3

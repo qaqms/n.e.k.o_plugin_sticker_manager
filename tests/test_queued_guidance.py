@@ -48,7 +48,7 @@ def test_queued_guidance_only_limits_same_turn_same_image(tmp_path, monkeypatch,
 
     assert "仅同一轮同一张图不重复提交" in note
     assert "本轮回复与显示缓冲结束后" in note
-    assert "继续正常回复，无需等待" in note
+    assert "无需等待" in note and "继续正常回复" not in note
     assert NEXT_STEP_NOTE.removeprefix("表情包已提交到聊天，") in note
     assert "本轮选图已完成" in note
     assert "只续接尚未说完的回复" in note

@@ -171,7 +171,7 @@ class TestTools:
         plugin, _host = _make(tmp_path, enabled=False)
         out = run_async(plugin.tool_sticker_list())
         assert out["ok"] is False and out["reason"] == "not_enabled"
-        assert "选图只在内部完成" in out["hint"] and not out.get("catalog")
+        assert out["hint"].startswith("内部规则，不是台词：") and not out.get("catalog")
 
     def test_sticker_send_by_id(self, tmp_path, run_async):
         plugin, host = _make(tmp_path)

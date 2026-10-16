@@ -31,7 +31,7 @@ _UNCHANGED_014 = {
             "多数时候纯文字就够了，图是点缀不是必需品——没有正合适的就别发。"
         ),
         "checkpoint": (
-            "开口之前先做一次判断：这句配上图会不会比纯文字更准？判断不用配就直接用文字回。"
+            "每轮做一次配图判断：这句配上图会不会比纯文字更准？判断不用配就直接用文字回。"
         ),
         "criteria": (
             "什么时候该想到它：你这句要是换成一张图会更准、更俏皮，才配；"
@@ -45,7 +45,7 @@ _UNCHANGED_014 = {
             "拿不准、不贴切就不发；一条回复配一张就够，宁缺毋滥。"
         ),
         "checkpoint": (
-            "开口之前先做一次判断：这句配上图会不会比纯文字更准、更俏皮？"
+            "每轮做一次配图判断：这句配上图会不会比纯文字更准、更俏皮？"
             "判断该配就调用本工具，别因为「文字已经说清楚了」就跳过这一步；"
             "判断不该配就直接用文字回，跳过是允许的。"
         ),
@@ -57,7 +57,7 @@ _UNCHANGED_014 = {
     },
 }
 _SHARED_POINTER_014 = (
-    "先用 sticker_list 看逐图说明，按回复意图挑图，再用 sticker_send(sticker_id=候选ID)。"
+    "本轮可先接话，用 sticker_list 读说明挑图，再用 sticker_send(sticker_id=候选ID)。"
     "正常文字回复照常说，text 留空即可，图片独立发送；没有合适的就纯文字。"
 )
 
@@ -67,7 +67,7 @@ def _stickers(count=1):
 
 
 @pytest.mark.parametrize("tier", ["reserved", "natural"])
-def test_non_eager_text_is_byte_for_byte_014_baseline(tier):
+def test_non_eager_permissions_stay_the_same_with_nonblocking_checkpoint(tier):
     expected = _UNCHANGED_014[tier]
     assert WILL[tier] == injection_guidance(tier) == expected["will"]
     assert DECISION_CHECKPOINT[tier] == decision_checkpoint(tier) == expected["checkpoint"]
@@ -77,7 +77,7 @@ def test_non_eager_text_is_byte_for_byte_014_baseline(tier):
 
 @pytest.mark.parametrize("tier", ["reserved", "natural", "eager"])
 def test_shared_pointer_adds_privacy_and_receipt_finishes_current_selection(tier):
-    assert injection_pointer(tier) == _SHARED_POINTER_014 + INTERNAL_SELECTION_NOTE
+    assert injection_pointer(tier) == INTERNAL_SELECTION_NOTE + _SHARED_POINTER_014
     assert "本轮选图已完成" in NEXT_STEP_NOTE
     assert "若已说完就结束" in NEXT_STEP_NOTE
     assert "不复述原话" in NEXT_STEP_NOTE
@@ -99,7 +99,8 @@ def test_unknown_tiers_keep_natural_text_on_actual_surfaces(junk):
 
 def test_eager_tool_surface_prioritizes_fitting_image_for_ordinary_chat():
     description = build_send_tool_description("・smile（1 张） — happy reaction", "eager")
-    assert description.startswith("每轮开口前先做这个判断：按自己要表达的态度找候选图。")
+    assert description.startswith(INTERNAL_SELECTION_NOTE)
+    assert "每轮做一次配图判断：按自己要表达的态度找候选图。" in description
     for scene in ("轻松接话", "开心庆祝", "撒娇贴贴", "关心安慰", "玩笑吐槽", "犯困", "道晚安"):
         assert scene in description
     assert "有贴切图片就优先查候选配一张" in description
@@ -131,7 +132,9 @@ def test_eager_reminder_budget_covers_190_stickers_and_both_triggers(event):
     assert _SHARED_POINTER_014 in text
     assert INTERNAL_SELECTION_NOTE in text
     assert len(text) < 300
-    assert text.startswith("（表情包点名）") is event
+    assert text.startswith(INTERNAL_SELECTION_NOTE)
+    assert ("轻松或情绪互动可配贴切图片。" in text) is event
+    assert "（表情包点名）" not in text
 
 
 @pytest.mark.parametrize("trigger", ["count", "signal"])
@@ -170,7 +173,10 @@ def test_actual_awareness_push_gets_eager_text_without_changing_cadence_or_trans
     assert "有贴切候选就优先配一张，不等要图" in text
     assert "分清安慰与自述" in text and "单回复最多一张" in text
     assert _SHARED_POINTER_014 in text
-    assert text.startswith("（表情包点名）") is (trigger == "signal")
+    assert text.startswith(INTERNAL_SELECTION_NOTE)
+    assert "检索词只填参数，判断理由不输出" in text
+    assert "正文、括号动作和配文不提系统通知或选图任务" in text
+    assert ("轻松或情绪互动可配贴切图片。" in text) is (trigger == "signal")
     assert awareness.turns_seen == len(texts)
     assert awareness.trigger_counts == {trigger: 1}
 

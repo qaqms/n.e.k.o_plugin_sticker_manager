@@ -408,7 +408,7 @@ class TestTurnDrivenAwareness:
         settings = _turns(mode="interval_n", interval_n=12, floor=0.0)
         result = run_async(plugin._awareness.maybe_run(settings=settings, now=50.0))
         assert result["status"] == "injected" and result["trigger"] == "signal"
-        assert "（表情包点名）" in host.push.calls[-1]["parts"][0]["text"]
+        assert "轻松或情绪互动可配贴切图片。" in host.push.calls[-1]["parts"][0]["text"]
         assert plugin._awareness.trigger_counts["signal"] == 1
 
     def test_business_turn_still_follows_the_count(self, tmp_path, run_async):

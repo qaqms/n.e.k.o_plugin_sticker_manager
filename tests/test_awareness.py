@@ -29,6 +29,7 @@ from sticker_manager.core.configuration import (  # pyright: ignore[reportMissin
     StickerManagerSettings,
     StorageSettings,
 )
+from sticker_manager.core.eagerness import INTERNAL_SELECTION_NOTE
 from sticker_manager.services.lanlan import latest_lanlan  # pyright: ignore[reportMissingImports] — 同上
 
 
@@ -77,7 +78,7 @@ class TestCoreSelection:
         stickers = [_st("a", desc="猫猫挥手", use=2), _st("b", desc="大哭", use=1)]
         text = build_awareness_text(stickers)
         assert "2" in text  # 总数按未禁用算
-        assert "sticker_send" in text and "逐图说明" in text
+        assert "sticker_send" in text and "sticker_list 读说明" in text
         assert "[a]" not in text and "猫猫挥手" not in text and "大哭" not in text  # 无逐图行
         assert "最近常用" not in text and "你的套图" not in text  # 无目录块
         assert len(text) < 300, f"注入正文涨回目录复读机了：{len(text)} 字"
@@ -88,18 +89,15 @@ class TestCoreSelection:
         assert "安慰对方" in text and "宁缺毋滥" in text
         assert "最近不重复" not in text and "别重试" not in text
 
-    def test_event_pointer_leads_with_the_landing_line(self):
-        """v0.20.0：事件门控那一支要有一句"就是现在这句"的落点，计数那一支不许有。
-
-        带上 lede 是给她的定位锚（同门 `（语气感知提醒）` 的形状）；计数兜底那一支
-        披上它就等于把例行点名伪装成"这句有情绪"，是撒谎的提醒。
-        """
+    def test_event_pointer_keeps_the_private_boundary_before_its_cue(self):
+        """Event cues stay internal and do not resemble character actions."""
         event = build_awareness_text([_st("a")], event=True)
         routine = build_awareness_text([_st("a")])
-        assert "（表情包点名）" in event
-        assert "（表情包点名）" not in routine
-        assert event.startswith("（表情包点名）")
-        assert event.endswith(routine)
+        cue = "轻松或情绪互动可配贴切图片。"
+        assert event.startswith(INTERNAL_SELECTION_NOTE)
+        assert routine.startswith(INTERNAL_SELECTION_NOTE)
+        assert event.replace(cue + "\n", "") == routine
+        assert "（表情包点名）" not in event
 
     def test_unlisted_tier_degrades_to_default_wording(self):
         natural = build_awareness_text([_st("a")])

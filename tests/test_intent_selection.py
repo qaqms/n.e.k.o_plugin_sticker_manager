@@ -16,7 +16,7 @@ from sticker_manager.core.catalog import (
     search_stickers,
 )
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings
-from sticker_manager.core.eagerness import INTERNAL_SELECTION_NOTE
+from sticker_manager.core.eagerness import INTERNAL_SELECTION_NOTE, REPLY_CONTINUATION_NOTE
 from sticker_manager.core.tool_surface import build_send_tool_description
 from sticker_manager.services.bundled_pack import open_pack
 from sticker_manager.services.library import Library
@@ -430,7 +430,9 @@ def test_model_receipts_keep_selection_private_even_without_a_send(tmp_path, run
         plugin._library.catalog_path.write_text("broken", encoding="utf-8")
         assert not plugin._library.load(force=True).ok
     result = run_async(getattr(plugin, tool_name)(query=query))
-    assert INTERNAL_SELECTION_NOTE in result["hint"]
+    assert result["hint"].startswith(INTERNAL_SELECTION_NOTE)
+    assert REPLY_CONTINUATION_NOTE in result["hint"]
+    assert "允许不再输出文字" in result["hint"]
     if outcome == "candidate":
         assert result["candidate_ids"] == [sticker.id]
         assert SELECTION_MATCH_RULE in result["hint"]
@@ -450,7 +452,7 @@ def test_empty_results_use_private_continuation_instead_of_failure_narration(
     _add(plugin, "one")
     out = run_async(getattr(plugin, tool_name)(**selector))
     assert not out.get("candidate_ids") and not out.get("sent")
-    assert "直接续接当前聊天" in out["note"]
+    assert "只续接尚未说完的内容，已说完就结束" in out["note"]
     assert "本结果仅供内部判断" in out["note"]
     assert "不把检索状态写成动作" in out["hint"]
     assert "空候选或未发送也不解释原因" in out["hint"]
@@ -467,7 +469,8 @@ def test_success_and_refusal_continue_privately_without_repeating_text(tmp_path,
     assert sent["sent"] == sticker.id and refused["reason"] == "recent_repeat"
     assert len(host.push.calls) == 1 and host.push.calls[0]["parts"][0]["type"] == "image"
     for result in (sent, refused):
-        assert INTERNAL_SELECTION_NOTE in result["hint"]
+        assert result["hint"].startswith(INTERNAL_SELECTION_NOTE)
+        assert REPLY_CONTINUATION_NOTE in result["hint"]
     assert "本轮选图已完成" in sent["note"] and "若已说完就结束" in sent["note"]
     assert f"outcome=sent id={sticker.id}" in caplog.text
 
@@ -480,11 +483,11 @@ def test_agent_candidates_and_both_registered_tools_keep_selection_private(tmp_p
     assert not host.push.calls
     for tool in (plugin.tool_sticker_list, plugin.tool_sticker_send):
         metadata = next(record["kwargs"] for record in tool.__neko_stub_meta__ if "parameters" in record["kwargs"])
-        assert INTERNAL_SELECTION_NOTE in metadata["description"]
+        assert metadata["description"].startswith(INTERNAL_SELECTION_NOTE)
         assert SELECTION_MATCH_RULE in metadata["description"]
     for tier in ("reserved", "natural", "eager"):
         surface = build_send_tool_description(plugin._send_tool_catalog(), tier)
-        assert INTERNAL_SELECTION_NOTE in surface and SELECTION_MATCH_RULE in surface
+        assert surface.startswith(INTERNAL_SELECTION_NOTE) and SELECTION_MATCH_RULE in surface
 
 
 def test_reviewed_builtin_labels_match_shipped_pack_and_keep_role_distinctions():
