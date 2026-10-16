@@ -46,9 +46,6 @@ def test_actual_sender_sdk_host_transport(tmp_path, run_async, monkeypatch, outc
     # The plugin and host both have a services package; transport uses the host.
     monkeypatch.syspath_prepend(str(Path(host_tail.__file__).parents[1]))
     import httpx
-
-    # Normal server startup binds the real image validator used by reply-tail.
-    from app.main_server import character_runtime  # noqa: F401
     from fastapi import FastAPI
     from main_logic.core._shared import _ReplyTurn
     from main_logic.core.turn import TurnMixin
@@ -59,6 +56,9 @@ def test_actual_sender_sdk_host_transport(tmp_path, run_async, monkeypatch, outc
     from plugin.sdk.shared.core import reply_tail as sdk
     from plugin.sdk.shared.core.context import SdkContext
     from starlette.websockets import WebSocketState
+
+    # Normal server startup binds the real image validator used by reply-tail.
+    importlib.import_module("app.main_server.character_runtime")
 
     image = BytesIO()
     Image.new("RGB", (2, 2), "red").save(
