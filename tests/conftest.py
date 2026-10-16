@@ -187,7 +187,11 @@ def ensure_sdk_stub() -> bool:
         sdk_pkg = existing_sdk
     else:
         sdk_pkg = types.ModuleType("plugin.sdk")
-        sdk_pkg.__path__ = []  # type: ignore[attr-defined]
+        # Keep the real shared SDK importable for transport integration tests.
+        sdk_pkg.__path__ = [  # type: ignore[attr-defined]
+            str(Path(directory) / "sdk") for directory in getattr(plugin_pkg, "__path__", [])
+            if (Path(directory) / "sdk").is_dir()
+        ]
     plugin_pkg.sdk = sdk_pkg  # type: ignore[attr-defined]
     sdk_pkg.plugin = facade  # type: ignore[attr-defined]
     sys.modules["plugin"] = plugin_pkg

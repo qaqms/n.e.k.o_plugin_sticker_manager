@@ -1,7 +1,10 @@
 """Actual Sender/Library -> SDK -> ASGI host -> WebSocket display contract."""
 import asyncio
 import base64
+import importlib.machinery
+import importlib.util
 import json
+import sys
 from dataclasses import replace
 from io import BytesIO
 from pathlib import Path
@@ -9,9 +12,31 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import FakeHostContext, build_plugin
+from conftest import FakeHostContext, build_plugin, ensure_sdk_stub
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings
 from sticker_manager.services.bundled_pack import open_pack
+
+
+def test_facade_stub_keeps_a_real_shared_sdk_importable(tmp_path, monkeypatch):
+    from types import ModuleType
+
+    plugin_path = tmp_path / "plugin"
+    shared = plugin_path / "sdk" / "shared"
+    shared.mkdir(parents=True)
+    (shared / "__init__.py").write_text("sentinel = 'real shared SDK'\n", encoding="utf-8")
+    package = ModuleType("plugin")
+    package.__path__ = [str(plugin_path)]
+    monkeypatch.setitem(sys.modules, "plugin", package)
+    monkeypatch.setitem(sys.modules, "plugin.sdk", None)
+    monkeypatch.setitem(sys.modules, "plugin.sdk.plugin", None)
+    ensure_sdk_stub()
+    # Resolve from the new namespace, ignoring any preloaded shared SDK.
+    spec = importlib.machinery.PathFinder.find_spec("plugin.sdk.shared", sys.modules["plugin.sdk"].__path__)
+    assert spec is not None and spec.loader is not None
+    actual = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(actual)
+    assert actual.sentinel == "real shared SDK"
+    assert sys.modules["plugin.sdk.plugin"].llm_tool is not None
 
 
 @pytest.mark.parametrize("outcome", ["submitted", "cancelled", "lost_ack"])
