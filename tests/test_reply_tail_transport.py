@@ -46,6 +46,8 @@ def test_actual_sender_sdk_host_transport(tmp_path, run_async, monkeypatch, outc
     # The plugin and host both have a services package; transport uses the host.
     monkeypatch.syspath_prepend(str(Path(host_tail.__file__).parents[1]))
     import httpx
+    # Normal server startup binds the real image validator used by reply-tail.
+    from app.main_server import character_runtime  # noqa: F401
     from fastapi import FastAPI
     from main_logic.core._shared import _ReplyTurn
     from main_logic.core.turn import TurnMixin
@@ -106,7 +108,7 @@ def test_actual_sender_sdk_host_transport(tmp_path, run_async, monkeypatch, outc
 
             client.register = lost
         result = await plugin.tool_sticker_send(sticker_id=sticker.id, _ctx={"host_reply": context})
-        assert result["queued"] == sticker.id and result["sent"] == ""
+        assert result.get("queued") == sticker.id and result.get("sent") == "", result
         assert plugin._library.get(sticker.id).use_count == 0
         assert not host.push.calls
         manager.websocket.send_json.assert_not_awaited()
