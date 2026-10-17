@@ -495,7 +495,7 @@ class TestConfigReadIn:
     def test_defaults_are_turn_driven(self):
         settings = self._awareness()
         assert settings.inject_mode == "interval_n"
-        # v0.19.0：默认 0 = **跟随「配表情积极度」档位**（矜持 12 / 自然 6 / 爱发 3）。
+        # 默认 0 跟随档位；矜持承接 0.9.8（3），自然承接 0.9.10（1），爱发为 1。
         # 上一版这里是写死的 8，而实机证明"密度"不是主因、"什么时候该想到"才是——
         # 于是节奏改由档位统一驱动，主人想定死仍可在文件里写正数（下一条测试钉着）。
         assert settings.inject_interval_n == 0

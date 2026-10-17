@@ -20,7 +20,7 @@ from __future__ import annotations
 from conftest import PNG_BYTES, FakeConfig, FakeHostContext, build_plugin
 from sticker_manager.core.catalog import Sticker
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings, StorageSettings
-from sticker_manager.core.eagerness import TOOL_NOTE
+from sticker_manager.core.eagerness import REPLY_FIRST_NOTE, TOOL_NOTE
 from sticker_manager.core.tool_surface import build_send_tool_description, catalog_for_tool
 from sticker_manager.services.library import Library
 
@@ -88,14 +88,11 @@ class TestStandingDescription:
                 assert word not in text, f"{tier} 档的描述里又写回禁令了：{word}"
 
     def test_checkpoint_leads_the_description_in_every_tier(self):
-        # v0.20.0（陷阱 34）把这条从"不许有祈使句"翻成"必须有决策检查点"：
-        # 参考那边的"只给许可"建立在零往返的标记协议上，搬到"停下来调一次工具"就变成
-        # "没事我就不做"。宿主里她真会自主调用的先例靠的正是系统提示一句"先调用它"
-        # （宿主 `config/prompts/prompts_chara.py:121`）。
-        # 翻掉的旧尺是 test_says_all_three_forms_are_allowed_without_an_imperative。
+        # The first instruction must not put two model round trips before speech.
         for tier in TOOL_NOTE:
             text = build_send_tool_description(_ONE_CATEGORY, tier)
-            assert "开口之前先做一次判断" in text or "先做这个判断" in text, f"{tier} 档丢了检查点"
+            assert text.startswith(REPLY_FIRST_NOTE)
+            assert "开口前" not in text and "开口之前" not in text
             assert text.index("判断") < text.index("发一张你收藏间"), f"{tier} 档的检查点没排在最前"
 
     def test_checkpoint_still_grants_a_text_only_exit(self):

@@ -63,7 +63,6 @@ from .core import (
     OFFICIAL_PACK_RELPATH,
     PREVIEW_CHUNK_BYTES,
     SELECTION_HINT,
-    SELECTION_MATCH_RULE,
     SEND_CANDIDATES_MAX,
     SEND_TEXT_MAX_CHARS,
     UPLOAD_CHUNK_BYTES,
@@ -84,8 +83,12 @@ from .core import (
     validate_desc_optional,
     validate_optional_text,
 )
+from .core.quick_candidates import quick_candidates_for_tool
+from .core.tool_surface import build_list_tool_description
 from .services import Awareness, LanlanResolver, Library, RunStats, Sender, ToolWatch, gave_shape
 from .services.bundled_pack import pack_exists
+from .services.eager_attachment import EagerAttachment
+from .services.reply_diagnostics import reply_context_fields
 from .services.turn_end import TurnEndLogs, log_directories
 
 __all__ = ["StickerManagerPlugin"]
@@ -110,8 +113,8 @@ _SEND_TOOL_DESCRIPTION_DEFAULT = build_send_tool_description("", EAGERNESS_DEFAU
 # 消费方是模型不是面板，不走 i18n；reason 码本身才是给面板/日志的稳态契约）。
 _SEND_HINTS: dict[str, str] = {
     "recent_repeat": "这张最近发过了——换一张或干脆用文字回；只有主人点名要再看这张时才 force=true 重发。",
-    "probability_declined": "这一轮不配图：直接用文字回复，别重试、也别换一张再试。",
-    "send_cooldown": "刚发过一张，她在冷却：这轮用文字回复。",
+    "probability_declined": "这一轮不配图，别重试、也别换一张再试；正文已说完就结束。",
+    "send_cooldown": "刚发过一张，她在冷却；正文已说完就结束。",
 }
 
 # 运行账本的日志节流（v0.20.0）：读数原来只在面板上，判"今晚这次改动有没有用"得开着
@@ -126,7 +129,7 @@ def _private_selection_result(result: dict[str, Any]) -> dict[str, Any]:
     if not result.get("candidate_ids") and (
         result.get("count") == 0 or result.get("reason") in {"no_match", "group_not_found", "id_or_query_required"}
     ):
-        private["note"] = "直接续接当前聊天，保持原有回复意图；本结果仅供内部判断。"
+        private["note"] = "本结果仅供内部判断；若已说完就结束，仅续接未说完的话。"
         private["hint"] = INTERNAL_SELECTION_NOTE
     return private
 
@@ -194,6 +197,7 @@ class StickerManagerPlugin(NekoPluginBase):
         )
         # 本次运行读数（v0.17.1 观测轮）：只记账不参与任何决策，进程重启归零。
         self._runstats = RunStats()
+        self._eager_attachment = EagerAttachment(self)
         # 运行账本的日志面（v0.20.0）：上一次报出去的指纹 + 时刻。见 `_maybe_log_run_ledger`。
         self._ledger_fingerprint: tuple[Any, ...] = ()
         self._ledger_logged_at = 0.0
@@ -244,6 +248,7 @@ class StickerManagerPlugin(NekoPluginBase):
 
     @lifecycle(id="shutdown")
     async def on_shutdown(self, **_):
+        self._eager_attachment.invalidate(closing=True)
         self._note_deferred_outcomes(self._sender.cancel_pending(settings=self._settings, closing=True))
         self._note_deferred_outcomes(await self._sender.cancel_host_pending(settings=self._settings))
         # Observe retained turns without injecting a new cue during shutdown.
@@ -268,6 +273,10 @@ class StickerManagerPlugin(NekoPluginBase):
     # ------------------------------------------------------------------
     # 工具注册心跳（v0.1.4）
     # ------------------------------------------------------------------
+
+    @timer_interval(id="eager_attachment", seconds=1, name="sticker_manager eager attachment")
+    async def on_eager_attachment(self, **_):
+        return Ok(await self._eager_attachment.poll())
 
     @timer_interval(id="sticker_tail", seconds=1, name="sticker_manager reply tail")
     async def on_sticker_tail(self, **_):
@@ -1192,6 +1201,25 @@ class StickerManagerPlugin(NekoPluginBase):
         """她该看见的分类全表：**激活区**里有未禁用图的那些分类（陷阱 23 那把尺）。"""
         return catalog_for_tool(self._library.active_pool(), self._library.group_descs())
 
+    def _send_tool_candidates(self) -> str:
+        # Shared metadata rotates past the latest successful images across roles.
+        # Per-role lookup and send gates still use their own authoritative history.
+        recent: set[str] = set()
+        count = self._settings.send.recent_dedup_count
+        if count > 0:
+            for row in self._library.read_usage(limit=self._settings.storage.usage_history_keep):
+                sid = str(row.get("id") or "")
+                if row.get("ok") and sid:
+                    recent.add(sid)
+                    if len(recent) >= count:
+                        break
+        return quick_candidates_for_tool(
+            self._library.active_pool(), self._library.group_descs(),
+            limit=self._settings.storage.catalog_limit_for_model,
+            recent_ids=recent,
+            eager=self._settings.send.eagerness in ("natural", "eager"),
+        )
+
     def _refresh_send_tool_surface(self, *, force: bool = True) -> bool:
         """需要时把 `sticker_send` 的描述按当前库重挂一遍。
 
@@ -1201,8 +1229,7 @@ class StickerManagerPlugin(NekoPluginBase):
         if not force and not self._surface_dirty:
             return True
         ok = self._apply_send_tool_surface()
-        if ok:
-            self._surface_dirty = False
+        self._surface_dirty = not ok
         return ok
 
     def _apply_send_tool_surface(self) -> bool:
@@ -1234,9 +1261,14 @@ class StickerManagerPlugin(NekoPluginBase):
             self.logger.warning("sticker_send surface skipped: 工具不在册")
             return False
         catalog = self._send_tool_catalog()
-        description = build_send_tool_description(catalog, self._settings.send.eagerness)
+        quick_candidates = self._send_tool_candidates()
+        description = build_send_tool_description(
+            catalog, self._settings.send.eagerness, quick_candidates=quick_candidates,
+        )
         tail_supported = "reply_tail" in inspect.signature(register).parameters
-        if tail_supported and not self._apply_list_reply_context(metas.get("sticker_list"), register, unregister):
+        if not self._apply_list_tool_surface(
+            metas.get("sticker_list"), register, unregister, tail_supported=tail_supported,
+        ):
             return False
         if (
             str(previous.get("description") or "") == description
@@ -1265,6 +1297,7 @@ class StickerManagerPlugin(NekoPluginBase):
                 self.logger.info(
                     f"sticker_send surface applied: chars={len(description)}"
                     f" categories={categories} tier={self._settings.send.eagerness}"
+                    f" quick_chars={len(quick_candidates)}"
                 )
             return applied
         except Exception:  # noqa: BLE001 - 换档失败不许带走她的工具
@@ -1280,29 +1313,43 @@ class StickerManagerPlugin(NekoPluginBase):
                 self.logger.error("sticker_send 回滚注册也失败，等工具心跳补挂", exc_info=True)
             return False
 
-    def _apply_list_reply_context(self, previous, register, unregister) -> bool:
-        """Let candidate lookup reuse the original role without bus/HTTP probes."""
-        if not isinstance(previous, dict) or previous.get("reply_tail") is True:
+    def _apply_list_tool_surface(self, previous, register, unregister, *, tail_supported: bool) -> bool:
+        """Keep lookup willingness in sync with send, retaining original role context."""
+        if not isinstance(previous, dict):
+            return True
+        description = build_list_tool_description(self._settings.send.eagerness)
+        if (
+            previous.get("description") == description
+            and (not tail_supported or previous.get("reply_tail") is True)
+        ):
             return True
         params = {
             "name": "sticker_list",
-            "description": str(previous.get("description") or ""),
+            "description": description,
             "parameters": previous.get("parameters"),
             "handler": self.tool_sticker_list,
             "timeout": float(previous.get("timeout_seconds") or 10.0),
             "role": previous.get("role"),
+            **({"reply_tail": True} if tail_supported else {}),
         }
         try:
             unregister("sticker_list")
-            if register(**params, reply_tail=True):
+            if register(**params):
+                self.logger.info(
+                    f"sticker_list surface applied: chars={len(description)}"
+                    f" tier={self._settings.send.eagerness}"
+                )
                 return True
         except Exception:
-            self.logger.warning("sticker_list reply context registration failed", exc_info=True)
+            self.logger.warning("sticker_list surface registration failed", exc_info=True)
         try:
             unregister("sticker_list")
-            register(**params, reply_tail=bool(previous.get("reply_tail")))
+            restore = {**params, "description": str(previous.get("description") or "")}
+            if tail_supported:
+                restore["reply_tail"] = bool(previous.get("reply_tail"))
+            register(**restore)
         except Exception:
-            self.logger.error("sticker_list reply context restore failed", exc_info=True)
+            self.logger.error("sticker_list surface restore failed", exc_info=True)
         return False
 
     @ui.action(
@@ -2004,6 +2051,7 @@ class StickerManagerPlugin(NekoPluginBase):
             # v0.17.1 观测轮：本次运行的四把读数（内存态，重启归零——面板必须标"本次运行"）。
             # 摆在这里是为了回答"到底断在哪一环"：话轮有多少 → 她调了几次 → 成了几次 → 拦了几次。
             "run": self._runstats.snapshot(turns=self._awareness.turns_seen),
+            "eager_attachment": self._eager_attachment.snapshot(),
             "config": {
                 "cooldown_sec": settings.send.cooldown_sec,
                 "inline_max_bytes": settings.send.inline_max_bytes,
@@ -2025,19 +2073,7 @@ class StickerManagerPlugin(NekoPluginBase):
 
     @llm_tool(
         name="sticker_list",
-        description=(
-            f"{INTERNAL_SELECTION_NOTE}"
-            "为你准备回复的这句话查表情候选，不发送。优先用 query 给空格或逗号分隔的正向短关键词，"
-            "如「自己被摸头 舒服」；也可填 group 浏览逐图说明，同时给时只在该分类检索。"
-            "明确动作会筛选候选，情绪词不能补入不同动作；写清谁对谁做，不填不想表达的词。"
-            "有具体动作时写动作、对象和阶段，如「给对方泡茶 已完成 开心」，不只写「茶 开心」。"
-            "尚未收到用「等待收到 期待」，等人过来用「等待来访 期待」；"
-            "已经收礼或见面才用「收到礼物 开心」「见面问候 开心」。"
-            "宽泛情绪查询不靠未提及的红包、奖杯或见面情节补足候选，明确阶段排除冲突候选，仍须阅读说明。"
-            "按回复者的意图、对象和语气选具体图片，不照搬用户情绪；"
-            f"{SELECTION_MATCH_RULE}"
-            "有贴切图片再用 sticker_send(sticker_id=候选ID)，不贴切就纯文字。"
-        ),
+        description=build_list_tool_description(EAGERNESS_DEFAULT),
         parameters={
             "type": "object",
             "properties": {
@@ -2059,6 +2095,7 @@ class StickerManagerPlugin(NekoPluginBase):
         # 薄壳只干一件事：把"她调了这个工具、结果如何"记成一痕（v0.17.1 观测轮）。
         # 判定逻辑一律留在 `_sticker_list_body` 里——本轮零行为变更，日志不参与决策。
         started = time.perf_counter()
+        self.logger.info("reply tool enter: name=sticker_list " + reply_context_fields(kwargs))
         result = await self._sticker_list_body(query=query, group=group, **kwargs)
         result = _private_selection_result(result)
         self._note_tool_call(
@@ -2069,7 +2106,28 @@ class StickerManagerPlugin(NekoPluginBase):
             gave=gave_shape(query=query, group=group),
             elapsed_ms=(time.perf_counter() - started) * 1000,
         )
+        self.logger.info("reply tool return: name=sticker_list " + reply_context_fields(kwargs))
         return result
+
+    def _find_candidates(
+        self, pool: list[Sticker], query: str, *, recent: set[str],
+    ) -> tuple[list[Sticker], list[Sticker]]:
+        diagnostics: dict[str, int] = {}
+        available = search_intent_candidates(pool, query, diagnostics=diagnostics)
+        selectable = [s for s in available if s.id not in recent]
+        diagnostics["recent_filtered"] = len(available) - len(selectable)
+        diagnostics["selectable"] = len(selectable)
+        self.logger.info(
+            "candidate lookup: " + " ".join(f"{key}={value}" for key, value in diagnostics.items())
+        )
+        return available, selectable
+
+    def _note_candidate_scope_miss(self, pool: list[Sticker], recent: set[str]) -> None:
+        self.logger.info(
+            f"candidate lookup: scope_unavailable=1 active={len(pool)}"
+            f" disabled={sum(s.disabled for s in pool)}"
+            f" recent_filtered={sum(not s.disabled and s.id in recent for s in pool)}"
+        )
 
     async def _sticker_list_body(self, query: str = "", group: str = "", **kwargs: Any) -> dict[str, Any]:
         if not self._settings.enabled:
@@ -2082,7 +2140,8 @@ class StickerManagerPlugin(NekoPluginBase):
         # J-1：目录只报激活区——她看不到的区，连名字都不该出现在分类行里。
         lanlan = await self._resolve_lanlan(kwargs)
         recent = self._sender.recent_sent_ids(lanlan, self._settings)
-        all_stickers = [s for s in self._library.active_pool() if not s.disabled and s.id not in recent]
+        active = self._library.active_pool()
+        all_stickers = [s for s in active if not s.disabled and s.id not in recent]
         descs = self._library.group_descs()
         gname = normalize_group(group)
         if gname:
@@ -2099,13 +2158,16 @@ class StickerManagerPlugin(NekoPluginBase):
                     "note": "group 撞了多个组名——更准的名字再来一次",
                 }
             if not matched:
+                self._note_candidate_scope_miss(active, recent)
                 return {
                     "ok": True,
                     "count": 0,
                     "catalog": "",
                     "note": "该分类没有可选候选，未发送；没有合适图片就纯文字。",
                 }
-            pool = search_intent_candidates([s for s in all_stickers if s.group == matched[0]], query)
+            _, pool = self._find_candidates(
+                [s for s in active if s.group == matched[0]], query, recent=recent,
+            )
             if query.strip():
                 limit = min(limit, SEND_CANDIDATES_MAX)
             catalog = format_catalog_for_model(pool, limit, descs)
@@ -2118,7 +2180,7 @@ class StickerManagerPlugin(NekoPluginBase):
                 "shown": min(len(pool), limit),
                 "hint": SELECTION_HINT,
             }
-        pool = search_intent_candidates(all_stickers, query if isinstance(query, str) else "")
+        _, pool = self._find_candidates(active, query, recent=recent)
         if isinstance(query, str) and query.strip():
             limit = min(limit, SEND_CANDIDATES_MAX)
         catalog = format_catalog_for_model(pool, limit, descs)
@@ -2185,6 +2247,10 @@ class StickerManagerPlugin(NekoPluginBase):
         # 同 `tool_sticker_list`：薄壳只留痕，判定一律在 `_sticker_send_body`。
         # 这一痕就是本轮的要害——"她没调"与"她调了被闸拦下"以前在日志里长得一模一样。
         started = time.perf_counter()
+        self.logger.info(
+            "reply tool enter: name=sticker_send " + reply_context_fields(kwargs)
+            + f" caption_chars={len(text) if isinstance(text, str) else 0}"
+        )
         result = await self._sticker_send_body(
             sticker_id=sticker_id, query=query, group=group, force=force, text=text, **kwargs
         )
@@ -2197,6 +2263,7 @@ class StickerManagerPlugin(NekoPluginBase):
             gave=gave_shape(sticker_id=sticker_id, query=query, group=group, force=force, text=text),
             elapsed_ms=(time.perf_counter() - started) * 1000,
         )
+        self.logger.info("reply tool return: name=sticker_send " + reply_context_fields(kwargs))
         return result
 
     async def _sticker_send_body(
@@ -2261,6 +2328,7 @@ class StickerManagerPlugin(NekoPluginBase):
                     "hint": "组名撞了多个——用更准的组名或组内某张的 id 再发一次。",
                 }
             if not matched:
+                self._note_candidate_scope_miss(pool, recent)
                 return {
                     "ok": False,
                     "reason": "group_not_found",
@@ -2268,10 +2336,10 @@ class StickerManagerPlugin(NekoPluginBase):
                 }
             pool = [s for s in pool if s.group == matched[0]]
             if not any(not s.disabled for s in pool):
+                self._note_candidate_scope_miss(pool, recent)
                 return {"ok": False, "reason": "group_empty", "hint": "这一分类没有可用图，继续纯文字回复。"}
         if not has_id and (has_group or has_query or _browse_all):
-            available = search_intent_candidates(pool, query if has_query else "")
-            selectable = [s for s in available if s.id not in recent]
+            available, selectable = self._find_candidates(pool, query if has_query else "", recent=recent)
             if available and not selectable:
                 return {
                     "ok": False,
@@ -2359,7 +2427,11 @@ class StickerManagerPlugin(NekoPluginBase):
                 ),
             }
         if result.detail == "host_reply_tail_duplicate":
-            return {"ok": True, "sent": "", "note": "同一轮这张图已登记，不必再次发送。"}
+            return {
+                "ok": True, "sent": "",
+                "note": "同一轮这张图已登记，不必再次发送。"
+                + NEXT_STEP_NOTE.removeprefix("表情包已提交到聊天，"),
+            }
         return {
             "ok": True,
             "sent": sticker.id,
@@ -2379,7 +2451,9 @@ class StickerManagerPlugin(NekoPluginBase):
         except Exception:
             self.logger.warning("config dump failed; keeping previous settings", exc_info=True)
             return self._settings
-        self._settings = StickerManagerSettings.from_config(config if isinstance(config, dict) else {})
+        with self._eager_attachment.control_lock:
+            self._eager_attachment.invalidate()
+            self._settings = StickerManagerSettings.from_config(config if isinstance(config, dict) else {})
         self.logger.info(
             f"sticker_manager settings applied: send_cooldown_sec={self._settings.send.cooldown_sec}"
             f" reminder_min_interval_sec={self._settings.awareness.min_interval_sec}"

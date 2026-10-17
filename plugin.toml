@@ -13,7 +13,7 @@ keywords = [
     "meme",
     "gallery",
 ]
-version = "0.9.4"
+version = "0.9.5"
 type = "plugin"
 entry = "plugin.plugins.sticker_manager:StickerManagerPlugin"
 
@@ -23,6 +23,12 @@ name = "qaqms"
 [plugin.sdk]
 recommended = ">=0.1.0,<0.2.0"
 supported = ">=0.1.0,<0.3.0"
+
+[plugin.models.eager_attachment]
+label = "爱发补图选图"
+description = "爱发档连续两轮未配图时，为已完成回复独立选图。仅返回图片 ID 或跳过；需绑定文字模型，增加模型调用，不续写对话。"
+required = false
+capabilities = ["text"]
 
 [plugin.i18n]
 default_locale = "zh-CN"
@@ -85,7 +91,7 @@ probability_reuse_sec = 60.0
 # 配表情积极度（v0.14.0）：三档 reserved / natural / eager，只管**她有多想配图**
 # （存在感注入里的许可强度）。与上面三把尺各管各的：cooldown 是节奏、
 # recent_dedup_count 是"最近不重复"、probability 是她决定发了之后的放行闸。
-# 默认 natural = 老行为一字不变；想让她更常配图选 eager，想安静选 reserved。
+# natural 承接 0.9.10 实测策略；reserved 固定 0.9.8，eager 继续加强配图意愿。
 eagerness = "natural"
 
 [sticker_manager.storage]
@@ -105,7 +111,7 @@ enabled = true
 # every_user_message=每轮都注 | interval_n=攒够 N 条用户轮注一次。
 inject_mode = "interval_n"
 # interval_n 档下每 N 条用户轮注一次。v0.19.0：**0 = 跟随「配表情积极度」档位**
-# （矜持 12 / 自然 6 / 爱发 3 轮，同门实机在跑的就是 3）；写正数 = 您自己定死，档位不再插手。
+# （矜持 3 / 自然 1 / 爱发 1 轮）；写正数 = 您自己定死，档位不再插手。
 inject_interval_n = 0
 # 相邻两次提醒的最小间隔（秒，0..60），面板可调；0 关闭时间限制，轮数门槛仍生效。
 min_interval_sec = 60.0

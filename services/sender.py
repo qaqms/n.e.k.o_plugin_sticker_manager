@@ -32,6 +32,8 @@ import random
 import threading
 import time
 from collections import OrderedDict
+from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -141,6 +143,16 @@ class Sender:
         self._closed = False
         self._epoch = 0
         self._official_delivery: OfficialDelivery | None = None
+        self._attempt_versions: dict[str, int] = {}
+
+    def activity(self, lanlan: str) -> tuple[int, bool, float]:
+        """A fallback must not compete with a normal or pending send."""
+        with self._inflight_lock:
+            return (
+                self._attempt_versions.get(lanlan, 0),
+                lanlan in self._inflight,
+                self._last_sent.get(lanlan, 0.0),
+            )
 
     def _log(self, message: str, *, exc: bool = False) -> None:
         if self._logger is None:
@@ -223,6 +235,9 @@ class Sender:
         force: bool = False,
         text: str = "",
         host_reply: dict[str, Any] | None = None,
+        expected_activity: int | None = None,
+        submission_guard: Callable[[], bool] | None = None,
+        submission_lock: Any = None,
     ) -> SendResult:
         """投递一张表情包并记账。source 为 tool / agent / panel，不面向用户。
 
@@ -247,6 +262,10 @@ class Sender:
                 return SendResult.failure("send_stopped", sticker_id=sticker.id)
             if lanlan in self._inflight:
                 return SendResult.failure(ERR_COOLDOWN, sticker_id=sticker.id)
+            if expected_activity is not None and expected_activity != self._attempt_versions.get(lanlan, 0):
+                return SendResult.failure("reply_attachment_superseded", sticker_id=sticker.id)
+            if source != "eager":
+                self._attempt_versions[lanlan] = self._attempt_versions.get(lanlan, 0) + 1
             self._inflight.add(lanlan)
             reservation = object()
             self._inflight_owners[lanlan] = reservation
@@ -257,6 +276,8 @@ class Sender:
                 sticker, lanlan=lanlan, settings=settings, source=source, now=moment,
                 force=force, text=text, epoch=epoch,
                 host_reply=host_reply,
+                submission_guard=submission_guard,
+                submission_lock=submission_lock,
             )
             handed_off = result.queued
             return result
@@ -280,6 +301,8 @@ class Sender:
         text: str,
         epoch: int,
         host_reply: dict[str, Any] | None,
+        submission_guard: Callable[[], bool] | None = None,
+        submission_lock: Any = None,
     ) -> SendResult:
         moment = now
         started = time.monotonic()
@@ -294,7 +317,7 @@ class Sender:
         # Both model paths share the rhythm gates; panel sends keep their existing behavior.
         # （冷却仍生效——那是防刷屏，不是表达问题）。先查重（确定性）再掷骰，
         # 不让重复图白耗一次判定。
-        if source in {"tool", "agent"} and not force:
+        if source in {"tool", "agent", "eager"} and not force:
             if sticker.id in self.recent_sent_ids(lanlan, settings):
                 return SendResult.failure(ERR_RECENT_REPEAT, sticker_id=sticker.id)
             if not self.probability_allow(lanlan, settings, now=moment):
@@ -388,11 +411,13 @@ class Sender:
             )
             result.text_submitted = text_submitted
             return result
-        with self._inflight_lock:
+        with (submission_lock if submission_lock is not None else nullcontext()), self._inflight_lock:
             if self._closed:
                 return SendResult.failure("send_stopped", sticker_id=sticker.id)
             if epoch != self._epoch:
                 return SendResult.failure(ERR_NOT_ENABLED, sticker_id=sticker.id)
+            if submission_guard is not None and not submission_guard():
+                return SendResult.failure("reply_attachment_superseded", sticker_id=sticker.id)
             if ticket is not None:
                 with self._library.locked():
                     current, code = self._current_for_submission(sticker.id, source=source)
@@ -414,11 +439,13 @@ class Sender:
             return self._submit(
                 sticker, parts, lanlan=lanlan, settings=settings,
                 source=source, moment=moment, text_len=len(text),
+                submission_guard=submission_guard,
             )
 
     def _submit(
         self, sticker: Sticker, parts: list[dict[str, Any]], *, lanlan: str,
         settings: StickerManagerSettings, source: str, moment: float, text_len: int,
+        submission_guard: Callable[[], bool] | None = None,
     ) -> SendResult:
         # Uploads yield control. Recheck current state and submit under the same
         # lock as management writes so an intervening disable/delete cannot leak.
@@ -426,6 +453,8 @@ class Sender:
             current, code = self._current_for_submission(sticker.id, source=source)
             if current is None or code:
                 return SendResult.failure(code or ERR_MISSING_FILE, sticker_id=sticker.id)
+            if submission_guard is not None and not submission_guard():
+                return SendResult.failure("reply_attachment_superseded", sticker_id=sticker.id)
             return self._submit_checked(
                 current, parts, lanlan=lanlan, settings=settings,
                 source=source, moment=moment, text_len=text_len,
@@ -440,7 +469,7 @@ class Sender:
             return None, ERR_MISSING_FILE
         if current.disabled:
             return None, "sticker_disabled"
-        if source in {"tool", "agent"} and self._library.zone_of_sticker(current) != self._library.active_zone():
+        if source in {"tool", "agent", "eager"} and self._library.zone_of_sticker(current) != self._library.active_zone():
             return None, "sticker_zone_changed"
         return current, ""
 
@@ -450,7 +479,7 @@ class Sender:
     ) -> SendResult:
         # Tool results already describe the selection. Reading our own image
         # again would make the next text-chat turn switch to a vision model.
-        ai_behavior = "blind" if source == "tool" else "read"
+        ai_behavior = "blind" if source in {"tool", "eager"} else "read"
         text_submitted = False
         for part in parts:
             partial = " text_submitted=True" if text_submitted else ""
@@ -501,7 +530,7 @@ class Sender:
         )
         self._log(
             f"sticker sent: id={sticker.id} source={source} "
-            f"ai_behavior={'blind' if source == 'tool' else 'read'}"
+            f"ai_behavior={'blind' if source in {'tool', 'eager'} else 'read'}"
             + (f" text_len={text_len}" if text_len else "")
         )
 

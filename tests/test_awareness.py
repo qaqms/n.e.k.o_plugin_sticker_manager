@@ -80,12 +80,12 @@ class TestCoreSelection:
         assert "sticker_send" in text and "逐图说明" in text
         assert "[a]" not in text and "猫猫挥手" not in text and "大哭" not in text  # 无逐图行
         assert "最近常用" not in text and "你的套图" not in text  # 无目录块
-        assert len(text) < 300, f"注入正文涨回目录复读机了：{len(text)} 字"
+        assert len(text) < 310, f"注入正文涨回目录复读机了：{len(text)} 字"
 
     def test_text_still_carries_the_tier_guidance(self):
         # Reminder retains willingness; actual refusal responses own retry rules.
         text = build_awareness_text([_st("a", desc="笑", use=1)])
-        assert "安慰对方" in text and "宁缺毋滥" in text
+        assert "分清安慰与自述" in text and "自然档：轻松聊天默认配一张贴切图" in text
         assert "最近不重复" not in text and "别重试" not in text
 
     def test_event_pointer_leads_with_the_landing_line(self):

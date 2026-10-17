@@ -451,11 +451,25 @@ def resolve_send_target(
     return None, search_intent_candidates(stickers, query)[: max(1, limit)]
 
 
-def search_intent_candidates(stickers: list[Sticker], query: str) -> list[Sticker]:
+def search_intent_candidates(
+    stickers: list[Sticker], query: str, *, diagnostics: dict[str, int] | None = None,
+) -> list[Sticker]:
     """聊天召回：动作和阶段筛选，宽泛情绪不补入未提及的情节；不解析完整回复。"""
     term = (query or "").strip().casefold()[:300]
+    stats = {key: 0 for key in (
+        "pool", "disabled", "terms", "literal_only", "actions", "stages",
+        "action_filtered", "stage_filtered", "receipt_filtered",
+        "no_word_match", "scene_filtered", "matched",
+    )}
+    stats["pool"] = len(stickers)
+    stats["query_chars"] = len(query or "")
+    stats["query_clipped"] = int(len((query or "").strip()) > 300)
     if not term:
-        return search_stickers(stickers, "")
+        result = search_stickers(stickers, "")
+        stats.update(disabled=sum(s.disabled for s in stickers), matched=len(result))
+        if diagnostics is not None:
+            diagnostics.update(stats)
+        return result
     terms = _query_terms(term)
     actions = [request for word in terms if (request := _requested_action(word)) is not None]
     stages = {stage for word in terms if (stage := _requested_stage(word))}
@@ -464,14 +478,20 @@ def search_intent_candidates(stickers: list[Sticker], query: str) -> list[Sticke
     if awaiting_receipt or awaiting_visit:
         stages = {1}
     variants = [_intent_variants(word) for word in terms]
+    stats.update(
+        terms=len(terms), literal_only=sum(len(words) == 1 for words in variants),
+        actions=len(actions), stages=len(stages),
+    )
     scored = []
     for sticker in stickers:
         if sticker.disabled:
+            stats["disabled"] += 1
             continue
         fields = [_positive_usage_text(value) for value in (sticker.desc, sticker.caption, *sticker.tags)]
         # Explicit IDs remain exact lookups. Broad mood words cannot admit a different action.
         exact_id = sticker.id.casefold() in terms
         if actions and not exact_id and not any(_matches_action(fields, *request) for request in actions):
+            stats["action_filtered"] += 1
             continue
         image_stages = {
             index for index, words in enumerate(_INTENT_STAGES, start=1)
@@ -484,11 +504,13 @@ def search_intent_candidates(stickers: list[Sticker], query: str) -> list[Sticke
             if stages and image_stages and (
                 stages.isdisjoint(image_stages) or (stages == {1} and 3 in image_stages)
             ):
+                stats["stage_filtered"] += 1
                 continue
             # Holding a gift is ambiguous for giving, but cannot depict waiting to receive it.
             if awaiting_receipt and any(
                 _contains_completed_intent(value, word) for value in fields for word in _HELD_GIFT_WORDS
             ):
+                stats["receipt_filtered"] += 1
                 continue
         scores = [_candidate_term_score(sticker, fields, words) for words in variants]
         score = sum(scores)
@@ -500,13 +522,20 @@ def search_intent_candidates(stickers: list[Sticker], query: str) -> list[Sticke
             )
             # Return fewer candidates instead of filling broad mood results with unrelated plots.
             if extra_scene and not actions:
+                stats["scene_filtered"] += 1
                 continue
             pending_fit = exact_id or ((awaiting_receipt or awaiting_visit) and 1 in image_stages)
             scored.append((extra_scene, pending_fit, sum(value > 0 for value in scores), score, sticker))
+        else:
+            stats["no_word_match"] += 1
     scored.sort(key=lambda item: (
         item[0], not item[1], -item[2], -item[3], -item[4].use_count, -item[4].last_used_at,
     ))
-    return [sticker for _, _, _, _, sticker in scored]
+    result = [sticker for _, _, _, _, sticker in scored]
+    stats["matched"] = len(result)
+    if diagnostics is not None:
+        diagnostics.update(stats)
+    return result
 
 
 @dataclass(frozen=True)
@@ -592,6 +621,15 @@ _MOOD_WORDS = sorted(
 )
 _MOOD_WORD_PATTERN = "|".join(re.escape(word) for word in _MOOD_WORDS)
 _COMPACT_MOODS = re.compile(f"(?:{_MOOD_WORD_PATTERN}){{2,}}")
+_COMPACT_ACTION_WORDS = sorted(
+    set(_MOOD_WORDS) | {
+        word for action in _INTENT_ACTIONS
+        for word in (*action.aliases, *action.receiving, *action.giving)
+    },
+    key=lambda word: (-len(word), word),
+)
+_COMPACT_ACTION_PATTERN = "|".join(re.escape(word) for word in _COMPACT_ACTION_WORDS)
+_COMPACT_ACTIONS = re.compile(f"(?:{_COMPACT_ACTION_PATTERN}){{2,}}")
 _RECEIPT_PENDING_WORDS = (
     "等待收到", "等待收到礼物", "等着收到", "等收到", "等待收礼", "等着收礼", "等收礼", "期待收礼", "期待收到",
     "期待收到礼物", "等待礼物", "等礼物", "还没收到", "尚未收到", "等待投喂", "等投喂", "等待送达",
@@ -667,6 +705,12 @@ def _query_terms(term: str) -> list[str]:
         word = _intent_word(raw)
         if _COMPACT_MOODS.fullmatch(word):
             words.extend(match.group() for match in re.finditer(_MOOD_WORD_PATTERN, word))
+        # Pending-event compounds must keep their stage and recipient meaning.
+        elif (
+            not any(pending in word for pending in (*_RECEIPT_PENDING_WORDS, *_VISIT_PENDING_WORDS))
+            and _COMPACT_ACTIONS.fullmatch(word)
+        ):
+            words.extend(match.group() for match in re.finditer(_COMPACT_ACTION_PATTERN, word))
         else:
             words.append(raw)
     return list(dict.fromkeys(words))[:8]

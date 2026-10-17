@@ -41,6 +41,7 @@ probability = 1.0
 probability_reuse_sec = 60.0
 # 配表情积极度：reserved（矜持）/ natural（自然，默认）/ eager（爱发）。
 # 只管她有多想配图（存在感注入里的许可强度），不动冷却、去重与概率闸。
+# 矜持保留 0.9.8 基线，自然承接 0.9.10 实测策略，爱发偏向多数轻松回复配图。
 eagerness = "natural"
 
 [sticker_manager.storage]
@@ -58,7 +59,7 @@ usage_history_keep = 200
 enabled = true
 # every_user_message=每轮都注 | interval_n=攒够 N 条用户轮注一次。
 inject_mode = "interval_n"
-# interval_n 档下每 N 条用户轮注一次。0 = 跟随「配表情积极度」档位（矜持 12 / 自然 6 / 爱发 3）；
+# interval_n 档下每 N 条用户轮注一次。0 = 跟随档位（矜持 3 / 自然 1 / 爱发 1）；
 # 写正数就是您自己定死的节奏，档位不再插手。
 inject_interval_n = 0
 # 相邻两次提醒的最小间隔（秒，0..60），面板可调；0 关闭时间限制，轮数门槛仍生效。

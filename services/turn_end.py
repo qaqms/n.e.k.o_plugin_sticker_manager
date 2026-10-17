@@ -71,6 +71,7 @@ class EndTicket:
     end_count: int = 0
     superseded: bool = False
     caught_up: bool = True
+    session_changed: bool = False
 
 
 class TurnEndLogs:
@@ -156,6 +157,13 @@ class TurnEndLogs:
             if ticket.skip_line:
                 ticket.skip_line = False
                 continue
+            if (
+                b"Voice lifecycle received action=start_session" in line
+                or b"Voice lifecycle received action=end_session" in line
+                or b"session end " in line
+                or b"current_catgirl" in line
+            ):
+                ticket.session_changed = True
             match = _END_LINE.match(line)
             if match and match.group(1) == ticket.character:
                 ticket.end_count += 1

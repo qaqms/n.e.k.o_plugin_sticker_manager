@@ -3,10 +3,10 @@
 
 钉五件事：
 1. **档位驱动三根"让她想起来"的面**：注入意愿段 + 工具描述的触发判据/许可句 + 点名节奏
-   （矜持 12 / 自然 6 / 爱发 3 轮，配置写正数覆盖）；
+   （矜持 3 / 自然 1 / 爱发 1 轮，配置写正数覆盖）；
 2. **发送层的四把尺一口都不吃档位**（陷阱 26）：冷却 / 最近不重复 / 概率 / 复用窗口
    在三档下解析结果必须相同——这条是"档位不是万能旋钮"的反向门；
-3. **默认档 = 老行为**：natural 的意愿段与 v0.13.0 那句一字不差；
+3. **默认档 = 实测基线**：natural 承接 0.9.10 eager；
 4. **读入收敛**：不在册/非字符串/缺键一律回 natural，配置写错不该让她的行为变野；
 5. **入口与面板**：`set_eagerness` 写对配置路径、拒非法值、盘写不进去如实报错；
    dashboard 露当前档，且节奏读数给的是**生效值**不是哨兵 0。
@@ -81,12 +81,11 @@ class TestInjectionText:
                 assert banned not in text, f"{tier} 提醒预先告知拒绝规则"
             assert "sticker_send" in text
 
-    def test_natural_keeps_the_old_sentence_verbatim(self):
-        # 默认档不许偷偷改老行为——这句是 v0.13.0 起她就看到的措辞。
-        assert "宁缺毋滥" in _text("natural") and "多数时候纯文字就够了" not in _text("natural")
-        assert "多数时候纯文字就够了" in _text("reserved")
-        assert "有贴切候选就优先配一张" in _text("eager")
-        assert "不等要图" in _text("eager")
+    def test_natural_uses_the_0910_baseline_and_eager_can_evolve(self):
+        assert "自然档：轻松聊天默认配一张贴切图" in _text("natural")
+        assert "矜持档" in _text("reserved") and "多数时候纯文字就够了" not in _text("reserved")
+        assert "爱发档：轻松聊天默认配一张贴切图" in _text("eager")
+        assert "不等强烈情绪或要图" in _text("eager")
 
     def test_unlisted_tier_degrades_to_natural(self):
         assert _text("wild") == _text("natural")
@@ -143,10 +142,10 @@ class TestTierDrivesThreeSurfaces:
         assert "sticker_list" in text and "sticker_send" in text and "text" in text
         assert "sticker_send(sticker_id=候选ID)" in text
         assert "text 留空即可" in text
-        assert "正常文字回复照常说" in text and "图片独立发送" in text
+        assert "先在正常回复通道说完正文" in text and "图片独立发送" in text
         assert "没有合适的就纯文字" in text
         assert "一起发出去" not in text
-        assert len(text) < 300, f"注入正文又长回目录复读机了：{len(text)} 字"
+        assert len(text) < 340, f"注入正文又长回目录复读机了：{len(text)} 字"
 
     def test_success_result_tells_her_what_next(self, tmp_path, run_async):
         plugin, _host = _settings(tmp_path, send={"eagerness": "eager"})
@@ -189,24 +188,24 @@ class TestTierDoesNotTouchSendGates:
 
 class TestTierDrivenCadence:
     def test_each_tier_has_its_own_cadence(self):
-        assert effective_inject_interval_n("reserved", 0) == 12
-        assert effective_inject_interval_n("natural", 0) == 6
-        assert effective_inject_interval_n("eager", 0) == 3
+        assert effective_inject_interval_n("reserved", 0) == 3
+        assert effective_inject_interval_n("natural", 0) == 1
+        assert effective_inject_interval_n("eager", 0) == 1
         # 不在册的档位退到 natural 的节奏，不炸也不当 0 用。
-        assert effective_inject_interval_n("wild", 0) == 6
+        assert effective_inject_interval_n("wild", 0) == 1
 
     def test_written_number_beats_the_tier(self):
         assert effective_inject_interval_n("eager", 20) == 20
         assert effective_inject_interval_n("reserved", 1) == 1
         # 负数不是"倒着数"，按"没写"处理（配置读入本来就会夹到 0，这里防的是旁路）。
-        assert effective_inject_interval_n("eager", -3) == 3
+        assert effective_inject_interval_n("eager", -3) == 1
 
     def test_awareness_uses_the_tier_of_the_running_settings(self, tmp_path):
         plugin, host = _settings(tmp_path, send={"eagerness": "eager"})
-        assert Awareness.interval_n(plugin._settings) == 3
+        assert Awareness.interval_n(plugin._settings) == 1
         host.config.data["sticker_manager"]["send"]["eagerness"] = "reserved"
         plugin._settings = StickerManagerSettings.from_config(host.config.data)
-        assert Awareness.interval_n(plugin._settings) == 12
+        assert Awareness.interval_n(plugin._settings) == 3
         # 主人定死一个数以后，档位再怎么切都不该影响节奏。
         host.config.data["sticker_manager"]["awareness"] = {"inject_interval_n": 7}
         plugin._settings = StickerManagerSettings.from_config(host.config.data)
@@ -216,5 +215,5 @@ class TestTierDrivenCadence:
         # 面板回 0 会让人以为"每 0 轮一次"——那是拿哨兵值当读数，仪器说谎的一种。
         plugin, _host = _settings(tmp_path, send={"eagerness": "eager"})
         state = run_async(plugin.dashboard_context())
-        assert state["awareness"]["inject_interval_n"] == 3
+        assert state["awareness"]["inject_interval_n"] == 1
         assert AwarenessSettings().inject_interval_n == 0  # 配置面默认仍是"跟随"

@@ -33,7 +33,78 @@
   visual harness uses the real host renderer with bundled sample images and
   in-memory actions; it never connects to installed-plugin APIs or live data.
 
+## Current Eager Guidance (2026-10-17)
+
+- Release 0.9.5 (tested as 0.9.14+test.20261017) adds an eager-only post-reply selection attempt after two unillustrated
+  completed replies, using the optional host-managed `eager_attachment` model
+  usage. Existing natural/reserved guidance remains frozen. Selection is separate
+  from conversational continuation, submits only a blind image and honors sender
+  gates. Normal/pending sends, new input, session changes, config invalidation,
+  expired replies and catalog changes prevent stale/duplicate attachment.
+  Model binding is explicit; missing support does not disable ordinary tools.
+  See `docs/eager-two-turn-implementation-20261017.md` for limits and validation.
+
+- Natural remapping (0.9.11 test): `natural` now preserves the delivered
+  0.9.10 eager strategy, including both full tool descriptions, reminder text,
+  one-turn cadence and everyday shortcut profile, replacing only the tier name.
+  The local 14:10:40-14:16:08 session had 23 complete replies, five direct-ID
+  sends, five confirmed images, no lookup and no refusal. This observed sample
+  is not a frequency quota. Reserved remains frozen at 0.9.8.
+- Earlier 0.9.11 eager tuning preferred fitting images on most casual replies; an image on the
+  previous turn does not by itself exclude a new fitting expression. Repeated
+  standing matching instructions are reduced, while full image captions,
+  recipient/action/stage checks, speech-first ordering and silent completion
+  receipts remain. No send gate or host transport changes. See
+  `docs/natural-baseline-20261017.md`.
+
+- Previous eager tuning (0.9.10 test): fitting images were the default preference for
+  casual chat, including everyday questions. Eager's reminder cadence is one
+  observed turn, still subject to the existing floor, polling and explicit
+  overrides. Its shortcut profile prioritizes everyday moods within the same
+  12-row/2,000-character budget; this is now natural's frozen shortcut behavior.
+  A short reply-form example adapts the reference's optional teaching
+  examples to the existing ID tool flow. There is no output-marker parser or
+  additional LLM call. See `docs/eager-tuning-20261017.md`.
+- Baseline remapping (0.9.9 test): `reserved` preserves the 0.9.8 eager
+  willingness, checkpoint, trigger criteria, tool note and three-turn reminder
+  cadence, changing only the tier name in model-facing text. Eager's later
+  changes must not alter reserved or the new natural baseline.
+  `tests/fixtures/eager_098_baseline.json` records the original strategy so
+  future eager changes cannot silently change reserved. See
+  `docs/reserved-baseline-20261017.md`.
+- Reserved preserves the old soft reference frequency; eager now prioritizes
+  fitting stickers throughout casual chat without fixed counting or a send quota.
+  Text-only requests and missing suitable candidates take precedence.
+- Both `sticker_list` and `sticker_send` descriptions follow the selected tier;
+  reminder guidance uses the same eager preference. Lookup registration retains
+  schema, role, timeout and supported original-reply context. Failed updates
+  restore previous metadata and leave the refresh pending for retry.
+- Normal speech precedes selection; receipts end silently when speech is
+  complete. No automatic random attachment or extra dialogue push is added.
+  Send gates and reminder timing do not change. See
+  `docs/eager-frequency-review-20261017.md` for local evidence and limitations.
+
 ## Current Media And Update Contract (v0.20.18)
+
+Selection update (0.9.8 test, 2026-10-17): standing instructions are compact;
+worked matching examples stay on candidate receipts. Eager no longer recommends
+a lookup before an already-described ID. Shared quick candidates exclude the
+latest N distinct successful images across roles using the existing usage ledger
+and recent-dedup setting. This is a global presentation preference only: per-role
+lookup and send checks are unchanged, and stale IDs still get revalidated.
+There is no new model call, automatic substitution, dialogue push or host edit.
+See `docs/selection-cost-review-20261017.md` for the 0.9.7 live observations.
+
+Selection update (0.9.7 test, 2026-10-17): the send tool may carry up to 12
+fully described candidates from the active pool within 2,000 characters.
+The model may read these and send an explicit ID in one call; prior lookup is
+optional. No image is selected or sent automatically. Descriptions are not
+truncated, candidates without per-image annotation are excluded, and all
+availability/recent-use/send gates remain enforced at send time. Representatives
+favor less recent use and refresh through the existing library-save dirty flag.
+Scope/recall diagnostics contain counts, never query text. Known compact
+action/mood queries can be split; pending-event phrases, unknown text and
+negation retain their conservative behavior. See `docs/quick-selection-20261017.md`.
 
 Selection update (0.9.2, 2026-10-15): the reply model reads per-image captions and
 tags, then sends an explicit image ID. Groups only narrow browsing. Selector-only
@@ -395,8 +466,9 @@ owner-edit protection. See `docs/intent-selection.md` for details and limits.
     （把 `probability` 调成 0.1 并不会让她更不想发，只会让她发了又被拒、然后按文案告诫"别重试"）。
     原注入文案里的**节奏段**在 v0.20.11 退场：先说“换一张就好”又说“别换一张接着试”
     互相冲突，且没有失败时不该反复预告拒绝。拒绝后的重试指引由 `_SEND_HINTS` 统一提供，
-    不按档改写。默认档 `natural` 的意愿段与 v0.13.0 一字不差，
-    由 `test_eagerness.py` 钉住：**加档位不许顺带改老玩家看到的默认行为**。
+    不按档改写。0.9.11 按用户要求将 `natural` 映射为 0.9.10 的实测策略，
+    `tests/fixtures/eager_0910_baseline.json` 从已交付包生成，完整工具面与候选由
+    `test_natural_baseline.py` 钉住；后续优化爱发不许静默改自然和矜持。
     另记一条调研事实（决定这轮为什么只能这么做）：宿主今天没有"她刚回复完"的插件可见时刻
     （`turn.py:1449` 只发 WS 帧，`lifecycle_bus` 无 main→plugin 通道，`@message` 无派发点，
     `@hook` 系是 `NotImplementedError`），所以"按概率自动附带"没有确定挂点——
@@ -412,7 +484,7 @@ owner-edit protection. See `docs/intent-selection.md` for details and limits.
     （主人原话"每次都是我提醒她才知道调用"，见陷阱 33）。档位现在统一驱动三根
     "让她想起来"的面：① 工具描述里的**触发判据** `TRIGGER_CRITERIA[tier]`（什么时候该想到它）；
     ② 注入正文里的**点名句** `injection_pointer(tier)`（现在就能调，填 group；text 只作额外配文）；
-    ③ 点名节奏 `INJECT_INTERVAL_BY_TIER`（矜持 12 / 自然 6 / 爱发 3 轮）——配置
+    ③ 点名节奏 `INJECT_INTERVAL_BY_TIER`（现为矜持 3 / 自然 1 / 爱发 1 轮）——配置
     `inject_interval_n = 0` 表示跟随档位，**写正数就是主人自己定死**（"能自定义"的落点）。
     边界一字未松：**发送层四把尺一格都不许被档位带动**
     （`TestTierDoesNotTouchSendGates` 是三档解析的对拍反向门）。

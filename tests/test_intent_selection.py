@@ -17,7 +17,7 @@ from sticker_manager.core.catalog import (
 )
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings
 from sticker_manager.core.eagerness import INTERNAL_SELECTION_NOTE
-from sticker_manager.core.tool_surface import build_send_tool_description
+from sticker_manager.core.tool_surface import STANDING_MATCH_RULE, build_send_tool_description
 from sticker_manager.services.bundled_pack import open_pack
 from sticker_manager.services.library import Library
 
@@ -450,9 +450,10 @@ def test_empty_results_use_private_continuation_instead_of_failure_narration(
     _add(plugin, "one")
     out = run_async(getattr(plugin, tool_name)(**selector))
     assert not out.get("candidate_ids") and not out.get("sent")
-    assert "直接续接当前聊天" in out["note"]
+    assert "若已说完就结束" in out["note"]
+    assert "仅续接未说完的话" in out["note"]
     assert "本结果仅供内部判断" in out["note"]
-    assert "不把检索状态写成动作" in out["hint"]
+    assert "选图不进正文或括号动作" in out["hint"]
     assert "空候选或未发送也不解释原因" in out["hint"]
     assert "没有合适图片" not in out["note"] and "没找到" not in out["note"]
     assert not host.push.calls and not plugin._library.read_usage()
@@ -481,10 +482,13 @@ def test_agent_candidates_and_both_registered_tools_keep_selection_private(tmp_p
     for tool in (plugin.tool_sticker_list, plugin.tool_sticker_send):
         metadata = next(record["kwargs"] for record in tool.__neko_stub_meta__ if "parameters" in record["kwargs"])
         assert INTERNAL_SELECTION_NOTE in metadata["description"]
-        assert SELECTION_MATCH_RULE in metadata["description"]
+        assert "逐图说明" in metadata["description"]
+        if tool == plugin.tool_sticker_send:
+            assert STANDING_MATCH_RULE in metadata["description"]
     for tier in ("reserved", "natural", "eager"):
         surface = build_send_tool_description(plugin._send_tool_catalog(), tier)
-        assert INTERNAL_SELECTION_NOTE in surface and SELECTION_MATCH_RULE in surface
+        assert INTERNAL_SELECTION_NOTE in surface
+        assert STANDING_MATCH_RULE in surface
 
 
 def test_reviewed_builtin_labels_match_shipped_pack_and_keep_role_distinctions():

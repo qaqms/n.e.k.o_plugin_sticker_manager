@@ -127,6 +127,10 @@ window.previewLocale = function(locale) {
   __NEKO_PAYLOAD.i18n.locale = locale;
   draw();
 };
+window.previewAttachment = function(status) {
+  surface.state.eager_attachment = {status, attempts:3, sent:1};
+  draw();
+};
 draw();
 </script></body></html>`;
 fs.mkdirSync(output, { recursive: true });
@@ -198,6 +202,13 @@ async function main() {
       await page.getByRole("tab", { name: "爱发", exact: true }).click();
       assert.equal(await page.evaluate(() => window.previewCalls.filter(call =>
         call.action === "set_eagerness" && call.args.eagerness === "eager").length), 1);
+      await page.evaluate(() => window.previewAttachment("model_unbound"));
+      await page.getByText("请在插件模型配置中为“爱发补图选图”绑定文字模型。", { exact: true }).waitFor();
+      await layout(page);
+      await page.screenshot({ path: path.join(output, `${name}-eager-unbound.png`), fullPage: true });
+      await page.evaluate(() => window.previewAttachment("selecting"));
+      await page.getByText("正在为本轮回复选图…", { exact: true }).waitFor();
+      await layout(page);
       await page.locator('input[type="number"]').fill("0");
       await page.getByRole("button", { name: "保存发送冷却", exact: true }).click();
       await page.getByText("关闭发送冷却", { exact: true }).waitFor();

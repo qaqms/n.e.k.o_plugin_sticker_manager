@@ -225,7 +225,7 @@ def register_plugin_package() -> types.ModuleType:
 
 
 def pytest_collect_directory(path: Any, parent: Any) -> Any:
-    from _pytest.nodes import Dir
+    from _pytest.main import Dir
 
     return Dir.from_parent(parent, path=path)
 

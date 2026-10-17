@@ -29,6 +29,7 @@ export function AwarenessCard(props: {
   const state = surface.state || {};
   const awareness = state.awareness || {};
   const runState = state.run || {};
+  const attachmentStatus = String(state.eager_attachment?.status || "idle");
   const configuredInterval = awareness.min_interval_sec ?? 60;
   const [intervalDraft, setIntervalDraft] = useState(configuredInterval);
   const configuredCooldown = state.config?.cooldown_sec ?? 20;
@@ -158,6 +159,13 @@ export function AwarenessCard(props: {
         {t("panel.run.title", { defaultValue: "本次运行（重启插件归零）" })}
       </h2>
       {readouts(runItems)}
+      {state.eagerness === "eager" ? (
+        <Text>
+          {t("panel.attachment.counts", { defaultValue: "补图选图 {attempts} 次 · 已提交 {sent} 张" })
+            .replace("{attempts}", String(state.eager_attachment?.attempts || 0))
+            .replace("{sent}", String(state.eager_attachment?.sent || 0))}
+        </Text>
+      ) : null}
       {runState.last_call ? (
         <Text>
           {t("panel.run.last", { defaultValue: "最近一次" }) + "：" + runState.last_call +
@@ -199,6 +207,17 @@ export function AwarenessCard(props: {
                 run("set_eagerness", { eagerness: String(next || "natural") });
               }}
             />
+            {state.eagerness === "eager" && attachmentStatus === "model_unbound" ? (
+              <Alert tone="info" message={t("panel.attachment.unbound", {
+                defaultValue: "请在插件模型配置中为“爱发补图选图”绑定文字模型。",
+              })} />
+            ) : state.eagerness === "eager" && attachmentStatus === "model_unavailable" ? (
+              <Alert tone="info" message={t("panel.attachment.unavailable", {
+                defaultValue: "补图选图模型暂不可用，请检查模型绑定与连接。",
+              })} />
+            ) : state.eagerness === "eager" && attachmentStatus === "selecting" ? (
+              <Text>{t("panel.attachment.selecting", { defaultValue: "正在为本轮回复选图…" })}</Text>
+            ) : null}
           </section>
           <section className="sticker-setting">
             <div className="sticker-setting-control">

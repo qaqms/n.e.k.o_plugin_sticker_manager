@@ -96,7 +96,7 @@ class SendSettings:
     probability_reuse_sec: float = 60.0
     # 配表情积极度（v0.14.0）：只管**她想不想发**（存在感注入里的许可强度），
     # 与 probability（她决定发了之后放不放行）、cooldown（节奏）、去重是四把独立的尺——
-    # 别拿档位去动闸门，也别拿闸门当档位用。默认 natural = 老行为一字不变。
+    # 别拿档位去动闸门。natural 承接 0.9.10 的实测策略，reserved 保留 0.9.8。
     eagerness: str = EAGERNESS_DEFAULT
 
 
@@ -126,8 +126,8 @@ class AwarenessSettings:
     # 轮次节奏档：every_user_message（每轮都注）| interval_n（攒够 N 轮注一次）。
     inject_mode: str = INJECT_MODE_DEFAULT
     # interval_n 档下每 N 条用户轮注一次。<1 按 1 收（等价于每轮）。
-    # v0.19.0 起 **0 = 跟随「配表情积极度」档位**（默认）：矜持 12 / 自然 6 / 爱发 3 轮
-    # （尺在 `core/eagerness.effective_inject_interval_n`，同门实机在跑的就是 3）。
+    # 0 = 跟随档位：矜持固定 0.9.8 基线为 3 轮，自然 / 爱发均为 1 轮。
+    # 尺在 `core/eagerness.effective_inject_interval_n`；这不是发图间隔。
     # 主人要自己定死就写个具体数字——这一键的存在就是"能自定义"那半句话的落点。
     inject_interval_n: int = 0
     # 相邻两次注入的最小间隔（秒，0..60）：0 关闭时间限制，轮数门槛仍生效。

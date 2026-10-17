@@ -1,5 +1,133 @@
 # Changelog
 
+## 0.9.5
+
+- 按维护者指定的正式版本号，汇总下方 `0.9.5+test.20261017` 至 `0.9.14+test.20261017` 的测试改动；历史测试版本与实测记录保留原编号。
+- 发送工具预先展示完整说明的快捷候选，贴切时直接选 ID，减少查图往返；补充空候选原因与同轮回复指纹诊断，不记录聊天原文。
+- 固定矜持与自然的实测策略基线；爱发保留自然的完整指引，并在连续两轮未配图后通过显式绑定的文字模型独立选图。
+- 补图只提交图片，不续写猫娘正文；保留发送限制，并在新输入、会话、配置或图库变化时取消过期工作。
+- 绑定后的实测窗口有 19 轮完整回复、5 次发图提交，其中 4 次来自独立补图。选图结果校验失败仍为已知限制，先前重复回复根因尚未确认。
+
+## 0.9.14+test.20261017
+
+- 爱发档保留自然档完整提示策略，并在连续两轮未配图后，对最新完整回复独立执行选图判断。通过宿主模型网关使用可选的 `eager_attachment` 文字模型绑定，不复制宿主凭据或自动换用其他模型。
+- 补图只提交图片、使用 blind 通道，不续写或重发猫娘正文。已有工具发送或待发图时跳过；新输入、会话变化、切档、关闭插件、过期回复及图库变化会取消或拒绝提交。
+- 只接受候选中的完整 ID；保留发送冷却、概率与最近去重，遵守纯文字要求和严肃任务，不为满足轮次随意选图。增加补图诊断及模型未绑定/不可用提示。
+- 自然与矜持的完整提示基线保持不变。10 月 17 日绑定后的实测窗口有 19 轮完整回复、5 次发图提交，其中 4 次来自独立补图；仍有选图结果校验失败，尚不保证每两轮必发，也不代表先前重复回复根因已修复。
+
+## 0.9.13+test.20261017
+
+- 爱发档恢复自然档的完整策略，包括默认配图偏好、触发判据、快捷候选说明、日常问答示例、匹配规则与查图说明，只增加“上一轮发过，本轮有贴切的新图仍优先配一张”的偏好。
+- 自然档和矜持档的完整基线保持不变；候选生成、提醒节奏、发送限制、正文顺序与工具回执不变，保留重复回复诊断。
+- 基线回归验证爱发档除新增一句和档位名外与自然档一致，并覆盖自然→爱发→自然切换。此版需实机观察发图频率，不代表重复回复根因已修复。
+
+## 0.9.12+test.20261017
+
+- 增加工具进入/返回的回复标识指纹与配文长度日志，用于区分同轮重复调用和工具后续答；不记录宿主 capability token 或聊天原文。
+- 增加独立、需显式接入的本地 HTTP 观察器与离线报告工具，用原始模型输出的指纹核对工具前后重说和历史丢失；不改写请求或回复内容，不自动更改宿主配置。
+- 保留三档行为、原回复和发图流程。此版为诊断版，尚未声称修复重复对话；详见 `docs/reply-repetition-20261017.md`。
+
+## 0.9.11+test.20261017
+
+- Preserve the delivered 0.9.10 eager behavior as natural: both full tool
+  descriptions, reminder wording, one-turn cadence, and everyday shortcuts.
+  Generate an independent baseline fixture from the verified 0.9.10 package.
+  Reserved remains at its 0.9.8 baseline; saved tier settings are not changed.
+- Eager now prefers a fitting image on most casual replies. A previous
+  illustrated turn is not itself a reason to skip a new fitting expression.
+  Reduce repeated standing matching instructions without truncating captions
+  or weakening recipient, action, stage and tone checks.
+- Adapt the reference project's optional recent-dialogue quantity guidance and
+  teaching examples to the existing direct-ID flow. No extra LLM call, random
+  attachment, output-marker parser, ordinary-text push or host code edit.
+- Keep speech-first order, silent receipts and all sender gates. The local
+  0.9.10 sample was five confirmed images in 23 complete replies; this does not
+  establish the live frequency of the new eager strategy.
+
+## 0.9.10+test.20261017
+
+- Make eager default to a fitting image during casual chat, including everyday
+  questions, without waiting for strong emotion or a user image request. Keep
+  text-only requests, unsuitable candidates and serious tasks as text-only exits.
+- Change eager's tier-following reminder interval from three turns to one.
+  Keep explicit overrides, minimum reminder interval, polling and send gates.
+- Within the same 12-row/2,000-character shortcut budget, give eager broader
+  everyday coverage and preserve matcher relevance among equally used images.
+  Browse drowsiness as `犯困` rather than the ambiguous single character `困`.
+  Reserved and natural keep their existing shortcut profile.
+- Add an eager-only short reply-form example inspired by the local reference
+  plugin's optional teaching examples. Keep explicit-ID selection, normal speech
+  first, private receipts, host transport and the frozen reserved baseline.
+
+## 0.9.9+test.20261017
+
+- Preserve the 0.9.8 eager strategy as the new reserved baseline: reminder
+  willingness, both tool descriptions, trigger criteria and three-turn reminder
+  cadence. Change the model-visible tier name to reserved. A frozen 0.9.8
+  fixture protects this baseline from later eager tuning.
+- Natural and eager retain their existing strategies pending further tuning;
+  this release does not claim a new ordering of their actual frequencies.
+  Saved tier selection and explicit reminder overrides are preserved.
+- Keep send gates, shortcut rotation, image transport and speech nonrepetition
+  unchanged. The 29-reply/two-image sample is a reference, not a fixed schedule.
+- Update settings help and examples to describe the transitional tier mapping.
+
+## 0.9.8+test.20261017
+
+- Remove repeated lookup-first guidance from eager tool descriptions. Prefer a
+  fitting preloaded ID; browse only when more choices are needed. Keep speech
+  first, single-image preference and private nonrepetition receipts.
+- Shorten standing instructions and keep detailed matching examples on lookup
+  results. Preserve full per-image captions/tags and all matcher/send checks.
+- Rotate shared shortcuts past the latest N distinct successful images across
+  roles, following the recent-dedup setting. Failed attempts do not occupy slots.
+  Per-role lookup and send gates remain unchanged; old IDs still get rechecked.
+- The 0.9.7 live window from 11:58:54 to 12:05:02 had 25 user/complete events,
+  two direct-ID attempts, one recent-repeat refusal and one confirmed image.
+  There were no lookup calls or empty candidate results in this window.
+
+## 0.9.7+test.20261017
+
+- Preload up to 12 fully described, distinct candidates from the active
+  collection into the send tool, within a 2,000-character candidate budget.
+  A fitting candidate can be sent by explicit ID without a preceding lookup.
+  Keep lookup for other choices, normal speech first and default captions empty.
+- Prefer less recently used representatives and rebuild through the existing
+  library-change refresh. Disabled and unannotated images are excluded.
+  Send-time availability, per-role recent filtering and all send gates still
+  apply; this shortlist is not a contextual selection or an automatic sender.
+- Recognize compact combinations of known positive actions and moods, such as
+  `求摸摸舒服`, while retaining pending-event phrases, unknown text and negation.
+  Preserve action, recipient, stage and unrequested-scene filters.
+- Log candidate pool, token counts and rejection counts, including recent-use
+  exclusion and unavailable group scope. Queries and dialogue are not logged.
+  The previous ten-character live miss cannot be reconstructed from old logs.
+
+## 0.9.6+test.20261017
+
+- Give the eager tier a soft reference frequency of one image per two or three
+  complete casual replies, prioritizing lookup after several replies without an
+  image. Respect text-only requests, matching and the single-image preference.
+  Inspired by the reference AstrBot plugin's optional frequency guidance.
+- Apply tier guidance to candidate lookup as well as sending and reminders.
+  Switching tiers refreshes both tools on current and legacy SDKs; failed lookup
+  updates restore the previous description and reply context for a later retry.
+- Retain speech-first ordering, conditional nonrepetition receipts and all send
+  gates. This changes model guidance, not guaranteed image frequency. See
+  `docs/eager-frequency-review-20261017.md` for the local log findings.
+
+## 0.9.5+test.20261017
+
+- Put normal speech before optional sticker lookup in every tier, the lookup
+  tool description and reminder cues. Remove the instruction to select before
+  speaking; preserve explicit candidate-ID selection and image-only replies.
+- Tell the model to finish silently when the reply is already complete on all
+  receipts, including empty candidates, refusals and duplicate registrations.
+  Keep normal speech on the host channel and default sticker captions empty.
+- Preserve host reply-tail delivery, blind images, accounting and send gates.
+  This is a plugin guidance fix, not a host speech filter or a guarantee that
+  every model will emit pre-tool text or avoid repeating itself.
+
 ## 0.9.4
 
 - Release only the host-capability image transport changes. Preserve the 0.9.3

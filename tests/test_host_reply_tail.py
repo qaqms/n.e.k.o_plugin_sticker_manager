@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, build_plugin
@@ -611,3 +612,33 @@ def test_uncertain_tool_receipt_does_not_claim_confirmed_registration(tmp_path, 
     assert "暂未确认" in result["note"] and "如宿主接受" in result["note"]
     assert "已登记" not in result["note"]
     assert not plugin._library.read_usage() and not host.push.calls
+
+
+@pytest.mark.parametrize("status", ["registered", "uncertain", "submitted"])
+def test_finished_speech_is_not_reissued_by_tool_or_receipt(tmp_path, run_async, status):
+    plugin, host, client, sticker = setup(tmp_path, cooldown_sec=0)
+    client.receipt = {"accepted": status != "uncertain", "status": status}
+    client.status = AsyncMock(side_effect=AssertionError("tool must not wait for reply completion"))
+    result = run_async(plugin.tool_sticker_send(
+        sticker_id=sticker.id, _ctx={"host_reply": CONTEXT},
+    ))
+    assert result["ok"]
+    assert "若已说完就结束" in result["note"]
+    assert "不复述原话" in result["note"]
+    assert "正文只说一次" in result["hint"]
+    assert len(client.calls) == 1 and client.calls[0][0] == "register"
+    assert all(part["type"] == "image" for part in client.calls[0][3])
+    client.status.assert_not_awaited()
+    assert not host.push.calls
+
+
+def test_duplicate_tail_receipt_finishes_speech_without_another_caption(tmp_path, run_async):
+    plugin, host, client, sticker = setup(tmp_path, cooldown_sec=0)
+    client.receipt = {"accepted": True, "status": "submitted", "duplicate": True}
+    result = run_async(plugin.tool_sticker_send(
+        sticker_id=sticker.id, _ctx={"host_reply": CONTEXT},
+    ))
+    assert result["ok"] and result["sent"] == ""
+    assert "不必再次发送" in result["note"] and "若已说完就结束" in result["note"]
+    assert "不复述原话" in result["note"]
+    assert not host.push.calls and not plugin._library.read_usage()

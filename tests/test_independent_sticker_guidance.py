@@ -11,6 +11,8 @@ from conftest import PNG_BYTES, FakeHostContext, build_plugin
 from sticker_manager.core.catalog import SEND_TEXT_MAX_CHARS
 from sticker_manager.core.configuration import EAGERNESS_LEVELS, StickerManagerSettings
 from sticker_manager.core.eagerness import (
+    EAGER_EXTRA_NOTE,
+    REPLY_FIRST_NOTE,
     TOOL_NOTE,
     WILL,
     effective_inject_interval_n,
@@ -20,17 +22,19 @@ from sticker_manager.core.eagerness import (
 from sticker_manager.core.tool_surface import build_send_tool_description
 from sticker_manager.services.sender import SendResult
 
+from .test_natural_baseline import _baseline, _natural
+
 _GROUP = "smile"
 _INDEPENDENT_GUIDANCE = (
     "正常文字回复照常说，text 留空即可，图片独立发送"
 )
 _TIER_NOTES = {
-    "reserved": " 矜持档：只在非常贴切时配一张，多数回复纯文字就很好。",
-    "natural": " 贴切就配一张，不贴切就别硬找。",
-    "eager": (
-        " 爱发档：有贴切图片的轻松互动优先配一张，不用等主人开口，文字说清也别省掉；"
+    "reserved": (
+        " 矜持档：有贴切图片的轻松互动优先配一张，不用等主人开口，文字说清也别省掉；"
         "按回复意图读候选再选 ID，无贴切图片、信息问答或正经办事纯文字，单回复最多一张。"
     ),
+    "natural": _natural(_baseline()["tool_note"]),
+    "eager": _baseline()["tool_note"],
 }
 
 def _metadata(handler, schema_key):
@@ -154,24 +158,26 @@ def test_dynamic_registration_keeps_real_schema_and_positive_group_only_guidance
     assert "配文不要在正文重复" in description
     assert _GROUP in description and description.endswith(_TIER_NOTES[tier])
     if tier == "eager":
-        assert description.startswith("每轮开口前先做这个判断：按自己要表达的态度找候选图。")
-        assert "有贴切图片就优先查候选配一张" in description
+        assert description.startswith(REPLY_FIRST_NOTE)
+        assert "直接选 ID 配图" in description
         assert "不用等用户点名要图，也别因文字已经说清楚就省掉" in description
+        assert EAGER_EXTRA_NOTE in description
         assert "分清安慰对方和说自己" in description
-        assert "无贴切图片、信息问答或正经办事就纯文字，单回复最多一张" in description
+        assert "用户要求纯文字、无贴切图片或严肃任务就纯文字，单回复最多一张" in description
 
 
 @pytest.mark.parametrize("tier", EAGERNESS_LEVELS)
 def test_injection_pointer_teaches_candidate_then_id_and_independent_image(tier):
     pointer = injection_pointer(tier)
-    assert _INDEPENDENT_GUIDANCE in pointer
+    assert pointer.startswith(REPLY_FIRST_NOTE)
+    assert "图片独立发送" in pointer
     assert "sticker_list" in pointer and "sticker_send(sticker_id=候选ID)" in pointer
     assert "text 留空即可" in pointer
     assert "没有合适的就纯文字" in pointer
 
 
 @pytest.mark.parametrize("tier,interval", [
-    ("reserved", 12), ("natural", 6), ("eager", 3),
+    ("reserved", 3), ("natural", 1), ("eager", 1),
 ])
 def test_clarification_does_not_change_tier_permissions_cadence_or_send_gates(tier, interval):
     assert TOOL_NOTE[tier] == _TIER_NOTES[tier]
