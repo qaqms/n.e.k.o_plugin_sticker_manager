@@ -43,6 +43,8 @@ probability_reuse_sec = 60.0
 # 只管她有多想配图（存在感注入里的许可强度），不动冷却、去重与概率闸。
 # 矜持保留 0.9.8 基线，自然承接 0.9.10 实测策略，爱发偏向多数轻松回复配图。
 eagerness = "natural"
+# 爱发档独立补图的连续未配图轮数（0..10）；0 每轮帮选，默认 1 轮。
+eager_attachment_turns = 1
 
 [sticker_manager.storage]
 # 给模型看的目录最多列几条（按最近使用排序）。

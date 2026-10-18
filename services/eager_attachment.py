@@ -189,6 +189,7 @@ class EagerAttachment:
                 if not self._bootstrapped:
                     self._bootstrapped = True
                     return self._note("ready")
+                threshold = max(1, self._plugin._settings.send.eager_attachment_turns)
                 for role in self._gaps:
                     _, _, sent_at = self._plugin._sender.activity(role)
                     if sent_at > self._delivered.get(role, 0):
@@ -206,7 +207,7 @@ class EagerAttachment:
                     if sent_at >= user.started_at:
                         self._gaps[turn.role] = 0
                     else:
-                        self._gaps[turn.role] = min(2, self._gaps.get(turn.role, 0) + 1)
+                        self._gaps[turn.role] = min(threshold, self._gaps.get(turn.role, 0) + 1)
                 if replies:
                     self._pending_turn = max(replies, key=lambda item: item.finished_at)
                 turn = self._pending_turn
@@ -216,7 +217,7 @@ class EagerAttachment:
                 self._pending_turn = None
                 return self._note("expired", turn)
             user = self._user_before(turn, turns)
-            if user is None or self._gaps.get(turn.role, 0) < 2:
+            if user is None or self._gaps.get(turn.role, 0) < threshold:
                 self._pending_turn = None
                 return self._note("waiting", turn)
             if time.monotonic() < self._retry_at:

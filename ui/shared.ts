@@ -117,6 +117,7 @@ export type State = {
   awareness?: AwarenessState;
   config?: {
     cooldown_sec?: number;
+    eager_attachment_turns?: number;
     inline_max_bytes?: number;
     catalog_limit_for_model?: number;
     recent_dedup_count?: number;

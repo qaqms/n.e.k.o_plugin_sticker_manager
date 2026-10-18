@@ -48,7 +48,7 @@ print(json.dumps({"images": images, "state": {
               {"id": "z2", "name": "我的收藏", "total": 0}],
     "stickers": rows, "groups": groups,
     "counts": {"total": len(rows), "enabled": len(rows), "groups": len(groups), "sent_total": 12},
-    "config": {"cooldown_sec": 20},
+    "config": {"cooldown_sec": 20, "eager_attachment_turns": 1},
     "awareness": {"status": "waiting", "target": "YUI", "min_interval_sec": 60,
                   "inject_interval_n": 6, "turns_since": 2, "driver": "bus"},
     "run": {"turns": 29, "tool_calls": 8, "sent": 7, "refused": 0, "surface_categories": 3}
@@ -111,11 +111,13 @@ const surface = {
       if (action === "preview") return {result:{mime:"image/png",
         chunk_base64:fixture.images[args.id],done:true,next_offset:0}};
       if (action === "set_send_cooldown") surface.state.config.cooldown_sec = args.cooldown_sec;
+      if (action === "set_eager_attachment_turns") surface.state.config.eager_attachment_turns = args.turns;
       if (action === "set_reminder_interval") surface.state.awareness.min_interval_sec = args.min_interval_sec;
       if (action === "set_eagerness") surface.state.eagerness = args.eagerness;
       if (action === "switch") surface.state.enabled = args.enabled;
       if (action === "update") Object.assign(surface.state.stickers.find(row => row.id === args.id), args);
-      return {result: action === "set_send_cooldown" ? {cooldown_sec:args.cooldown_sec} : {}};
+      return {result: action === "set_send_cooldown" ? {cooldown_sec:args.cooldown_sec}
+        : action === "set_eager_attachment_turns" ? {turns:args.turns} : {}};
     },
     async refresh() { draw(); }
   }
@@ -202,6 +204,20 @@ async function main() {
       await page.getByRole("tab", { name: "爱发", exact: true }).click();
       assert.equal(await page.evaluate(() => window.previewCalls.filter(call =>
         call.action === "set_eagerness" && call.args.eagerness === "eager").length), 1);
+      const selectionSlider = page.locator('input[type="range"][max="10"]');
+      await selectionSlider.fill("0");
+      await page.getByText("每轮帮选", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "保存补图轮数", exact: true }).click();
+      await page.getByText("补图轮数已保存", { exact: true }).waitFor();
+      assert.equal(await page.evaluate(() => window.previewCalls.filter(call =>
+        call.action === "set_eager_attachment_turns" && call.args.turns === 0).length), 1);
+      await layout(page);
+      await page.screenshot({ path: path.join(output, `${name}-eager-every-reply.png`), fullPage: true });
+      await selectionSlider.fill("10");
+      await page.getByText("连续 10 轮未配图后帮选", { exact: true }).waitFor();
+      await page.getByRole("button", { name: "保存补图轮数", exact: true }).click();
+      await layout(page);
+      await page.screenshot({ path: path.join(output, `${name}-eager-ten-replies.png`), fullPage: true });
       await page.evaluate(() => window.previewAttachment("model_unbound"));
       await page.getByText("请在插件模型配置中为“爱发补图选图”绑定文字模型。", { exact: true }).waitFor();
       await layout(page);

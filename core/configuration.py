@@ -98,6 +98,8 @@ class SendSettings:
     # 与 probability（她决定发了之后放不放行）、cooldown（节奏）、去重是四把独立的尺——
     # 别拿档位去动闸门。natural 承接 0.9.10 的实测策略，reserved 保留 0.9.8。
     eagerness: str = EAGERNESS_DEFAULT
+    # Eager-only selection after 0..10 unillustrated replies; 0 selects each reply.
+    eager_attachment_turns: int = 1
 
 
 @dataclass(frozen=True)
@@ -224,6 +226,11 @@ class StickerManagerSettings:
                 ),
                 eagerness=_as_choice(
                     send_raw.get("eagerness"), EAGERNESS_LEVELS, send_default.eagerness
+                ),
+                eager_attachment_turns=_clamp_int(
+                    _as_int(send_raw.get("eager_attachment_turns"), send_default.eager_attachment_turns),
+                    0,
+                    10,
                 ),
             ),
             storage=StorageSettings(

@@ -17,14 +17,17 @@ from sticker_manager.services import eager_attachment
 from sticker_manager.services.turn_end import TurnEndLogs
 
 
-def _setup(tmp_path, monkeypatch, tier="eager", image=PNG_BYTES):
+def _setup(tmp_path, monkeypatch, tier="eager", image=PNG_BYTES, turns=1):
     clock = [1000.0]
     monkeypatch.setattr(eager_attachment.time, "time", lambda: clock[0])
     monkeypatch.setattr(eager_attachment, "CHECK_INTERVAL_SEC", 0.001)
     host = FakeHostContext(
         data_root=tmp_path, bus=FakeBus(),
         config=FakeConfig({"sticker_manager": {
-            "enabled": True, "send": {"eagerness": tier, "cooldown_sec": 0, "recent_dedup_count": 0},
+            "enabled": True, "send": {
+                "eagerness": tier, "cooldown_sec": 0, "recent_dedup_count": 0,
+                "eager_attachment_turns": turns,
+            },
         }}),
     )
     plugin, host = build_plugin(host)
@@ -88,23 +91,71 @@ def _append(logfile, message):
         stream.write(f"2026-10-17 15:00:01 - N.E.K.O.Main.main_logic.core - INFO - {message}\n")
 
 
-def test_two_rounds_select_once_and_push_only_image(tmp_path, monkeypatch, run_async):
-    plugin, host, _, clock, requests, _ = _setup(tmp_path, monkeypatch)
+@pytest.mark.parametrize("turns", [0, 1])
+def test_each_unillustrated_reply_selects_once_and_pushes_only_image(tmp_path, monkeypatch, run_async, turns):
+    plugin, host, _, clock, requests, _ = _setup(tmp_path, monkeypatch, turns=turns)
 
     async def scenario():
         assert (await plugin.on_eager_attachment()).value["status"] == "ready"
         for n in range(1, 5):
             _reply(host, clock, n)
             result = (await plugin.on_eager_attachment()).value
-            assert result["status"] == ("submitted" if n % 2 == 0 else "waiting")
+            assert result["status"] == "submitted"
             await plugin.on_eager_attachment()
-        assert len(requests) == len(host.push.calls) == 2
-        assert plugin._runstats.sent == 2
+            assert len(requests) == len(host.push.calls) == n
+            assert plugin._eager_attachment.snapshot()["reply_gap"] == 0
+        assert plugin._runstats.sent == 4
         assert plugin._runstats.tool_calls == 0
         assert all(call["visibility"] == ["chat"] and call["ai_behavior"] == "blind" for call in host.push.calls)
         assert all([part["type"] for part in call["parts"]] == ["image"] for call in host.push.calls)
         assert all(row["source"] == "eager" and row["text_len"] == 0 for row in plugin._library.read_usage())
         assert all(request["model"] == "eager_attachment" and not request.get("tools") for request in requests)
+
+    run_async(scenario())
+
+
+@pytest.mark.parametrize("turns", range(2, 11))
+def test_configured_gap_waits_then_resets_after_submission(tmp_path, monkeypatch, run_async, turns):
+    plugin, host, _, clock, requests, _ = _setup(tmp_path, monkeypatch, turns=turns)
+
+    async def scenario():
+        await plugin.on_eager_attachment()
+        for n in range(1, turns * 2 + 1):
+            _reply(host, clock, n)
+            result = (await plugin.on_eager_attachment()).value
+            assert result["status"] == ("submitted" if n % turns == 0 else "waiting")
+            await plugin.on_eager_attachment()
+            assert len(requests) == len(host.push.calls) == n // turns
+            assert plugin._eager_attachment.snapshot()["reply_gap"] == n % turns
+
+    run_async(scenario())
+
+
+@pytest.mark.parametrize("turns", [0, 1, 2, 10])
+def test_no_match_retries_only_for_next_reply_without_waiting_another_full_gap(
+    tmp_path, monkeypatch, run_async, turns,
+):
+    plugin, host, sticker, clock, _, _ = _setup(tmp_path, monkeypatch, turns=turns)
+    calls = []
+
+    async def select(payload):
+        calls.append(payload["reply"])
+        return _response(decision="skip", reason="no_match") if len(calls) == 1 else _response(sticker.id)
+
+    monkeypatch.setattr(plugin._eager_attachment, "_model_select", select)
+
+    async def scenario():
+        await plugin.on_eager_attachment()
+        for n in range(1, max(1, turns) + 1):
+            _reply(host, clock, n, text=f"reply {n}")
+            result = await plugin.on_eager_attachment()
+        assert result.value["status"] == "no_match"
+        await plugin.on_eager_attachment()
+        assert len(calls) == 1 and not host.push.calls
+        _reply(host, clock, 20, text="latest reply")
+        assert (await plugin.on_eager_attachment()).value["status"] == "submitted"
+        assert calls[-1] == "latest reply" and len(calls) == 2
+        assert len(host.push.calls) == 1
 
     run_async(scenario())
 
@@ -126,18 +177,18 @@ def test_bootstrap_does_not_send_for_retained_history(tmp_path, monkeypatch, run
     assert run_async(plugin.on_eager_attachment()).value["status"] == "ready"
     assert not requests and not host.push.calls
     _reply(host, clock, 7)
-    assert run_async(plugin.on_eager_attachment()).value["status"] == "waiting"
+    assert run_async(plugin.on_eager_attachment()).value["status"] == "submitted"
+    assert len(requests) == len(host.push.calls) == 1
 
 
 @pytest.mark.parametrize("pending", [False, True])
-def test_normal_tool_delivery_or_pending_send_prevents_fallback(tmp_path, monkeypatch, run_async, pending):
-    plugin, host, sticker, clock, requests, _ = _setup(tmp_path, monkeypatch)
+@pytest.mark.parametrize("turns", [0, 1])
+def test_normal_tool_delivery_or_pending_send_prevents_fallback(tmp_path, monkeypatch, run_async, pending, turns):
+    plugin, host, sticker, clock, requests, _ = _setup(tmp_path, monkeypatch, turns=turns)
 
     async def scenario():
         await plugin.on_eager_attachment()
         _reply(host, clock, 1)
-        await plugin.on_eager_attachment()
-        _reply(host, clock, 2)
         if pending:
             plugin._sender._inflight.add("YUI")
         else:
@@ -148,7 +199,7 @@ def test_normal_tool_delivery_or_pending_send_prevents_fallback(tmp_path, monkey
         await plugin.on_eager_attachment()
         assert not requests
         if pending:
-            assert plugin._eager_attachment.snapshot()["reply_gap"] == 2
+            assert plugin._eager_attachment.snapshot()["reply_gap"] == 1
         else:
             assert plugin._eager_attachment.snapshot()["reply_gap"] == 0
 
@@ -170,18 +221,17 @@ def test_skip_invalid_and_truncated_results_never_send(tmp_path, monkeypatch, ru
 
     async def scenario():
         await plugin.on_eager_attachment()
-        for n in (1, 2):
-            _reply(host, clock, n)
-            result = await plugin.on_eager_attachment()
+        _reply(host, clock, 1)
+        result = await plugin.on_eager_attachment()
         assert result.value["status"] == (kind if kind in {"text_only", "serious_task", "no_match"} else "invalid_result")
         assert not host.push.calls
-        assert plugin._eager_attachment.snapshot()["reply_gap"] == (0 if kind in {"text_only", "serious_task"} else 2)
+        assert plugin._eager_attachment.snapshot()["reply_gap"] == (0 if kind in {"text_only", "serious_task"} else 1)
 
     run_async(scenario())
 
 
 @pytest.mark.parametrize("mutation", [
-    "new_input", "session_end", "tier", "disable", "zone", "shutdown", "tool", "caption", "deleted",
+    "new_input", "session_end", "tier", "disable", "turns", "zone", "shutdown", "tool", "caption", "deleted",
 ])
 def test_inflight_selection_is_cancelled_or_discarded(tmp_path, monkeypatch, run_async, mutation):
     plugin, host, sticker, clock, _, logfile = _setup(tmp_path, monkeypatch)
@@ -197,8 +247,6 @@ def test_inflight_selection_is_cancelled_or_discarded(tmp_path, monkeypatch, run
     async def scenario():
         await plugin.on_eager_attachment()
         _reply(host, clock, 1)
-        await plugin.on_eager_attachment()
-        _reply(host, clock, 2)
         polling = asyncio.create_task(plugin.on_eager_attachment())
         await entered.wait()
         if mutation == "new_input":
@@ -207,9 +255,11 @@ def test_inflight_selection_is_cancelled_or_discarded(tmp_path, monkeypatch, run
             })
         elif mutation == "session_end":
             _append(logfile, "Voice lifecycle received action=end_session")
-        elif mutation in {"tier", "disable"}:
+        elif mutation in {"tier", "disable", "turns"}:
             if mutation == "tier":
                 host.config.data["sticker_manager"]["send"]["eagerness"] = "natural"
+            elif mutation == "turns":
+                assert (await plugin.set_eager_attachment_turns_entry(turns=10)).is_ok()
             else:
                 host.config.data["sticker_manager"]["enabled"] = False
             await plugin.on_config_change()
@@ -249,9 +299,8 @@ def test_input_during_image_upload_is_checked_at_submission(tmp_path, monkeypatc
 
     async def scenario():
         await plugin.on_eager_attachment()
-        for n in (1, 2):
-            _reply(host, clock, n)
-            result = await plugin.on_eager_attachment()
+        _reply(host, clock, 1)
+        result = await plugin.on_eager_attachment()
         assert result.value["status"] == "reply_attachment_superseded"
         assert not host.push.calls and plugin._runstats.sent == 0
 
@@ -297,9 +346,8 @@ def test_timeout_releases_request_and_poll_lock(tmp_path, monkeypatch, run_async
 
     async def scenario():
         await plugin.on_eager_attachment()
-        for n in (1, 2):
-            _reply(host, clock, n)
-            result = await plugin.on_eager_attachment()
+        _reply(host, clock, 1)
+        result = await plugin.on_eager_attachment()
         assert result.value["status"] == "model_timeout" and cancelled == [True]
         assert not plugin._eager_attachment._poll_lock.locked()
         assert not host.push.calls
@@ -359,13 +407,12 @@ def test_fallback_respects_existing_gates_without_resetting_gap(tmp_path, monkey
 
     async def scenario():
         await plugin.on_eager_attachment()
-        for n in (1, 2):
-            _reply(host, clock, n)
-            result = await plugin.on_eager_attachment()
+        _reply(host, clock, 1)
+        result = await plugin.on_eager_attachment()
         assert result.value["status"] == {
             "probability": "probability_declined", "recent": "empty_candidates", "cooldown": "send_cooldown",
         }[gate]
-        assert plugin._eager_attachment.snapshot()["reply_gap"] == 2
+        assert plugin._eager_attachment.snapshot()["reply_gap"] == 1
         assert not host.push.calls
 
     run_async(scenario())
@@ -387,8 +434,6 @@ def test_new_input_cancels_hung_model_without_waiting_for_model_result(tmp_path,
     async def scenario():
         await plugin.on_eager_attachment()
         _reply(host, clock, 1)
-        await plugin.on_eager_attachment()
-        _reply(host, clock, 2)
         polling = asyncio.create_task(plugin.on_eager_attachment())
         await entered.wait()
         host.bus.memory.records.append({
@@ -412,7 +457,7 @@ def test_raw_host_metadata_and_sdk_conversation_records(tmp_path, monkeypatch, r
                     if key in row:
                         row["metadata"][key] = row.pop(key)
             await plugin.on_eager_attachment()
-        assert len(requests) == len(host.push.calls) == 1
+        assert len(requests) == len(host.push.calls) == 2
 
     run_async(scenario())
 
@@ -421,15 +466,15 @@ def test_session_restart_rebaselines_retained_history(tmp_path, monkeypatch, run
     plugin, host, _, clock, requests, logfile = _setup(tmp_path, monkeypatch)
 
     async def scenario():
-        await plugin.on_eager_attachment()
         _reply(host, clock, 1)
-        await plugin.on_eager_attachment()
+        assert (await plugin.on_eager_attachment()).value["status"] == "ready"
         _append(logfile, "Voice lifecycle received action=start_session")
         _reply(host, clock, 2)
         assert (await plugin.on_eager_attachment()).value["status"] == "ready"
         assert not requests
         _reply(host, clock, 3)
-        assert (await plugin.on_eager_attachment()).value["status"] == "waiting"
+        assert (await plugin.on_eager_attachment()).value["status"] == "submitted"
+        assert len(requests) == len(host.push.calls) == 1
 
     run_async(scenario())
 

@@ -26,7 +26,7 @@ supported = ">=0.1.0,<0.3.0"
 
 [plugin.models.eager_attachment]
 label = "爱发补图选图"
-description = "爱发档连续两轮未配图时，为已完成回复独立选图。仅返回图片 ID 或跳过；需绑定文字模型，增加模型调用，不续写对话。"
+description = "爱发档按面板设定的未配图轮数独立选图，0 表示每轮帮选。仅返回图片 ID 或跳过；需绑定文字模型，增加模型调用，不续写对话。"
 required = false
 capabilities = ["text"]
 
@@ -93,6 +93,8 @@ probability_reuse_sec = 60.0
 # recent_dedup_count 是"最近不重复"、probability 是她决定发了之后的放行闸。
 # natural 承接 0.9.10 实测策略；reserved 固定 0.9.8，eager 继续加强配图意愿。
 eagerness = "natural"
+# 爱发档独立补图的连续未配图轮数（0..10）；0 每轮帮选，默认 1 轮。
+eager_attachment_turns = 1
 
 [sticker_manager.storage]
 # 给模型看的目录最多列几条（按最近使用排序）。

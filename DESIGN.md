@@ -33,16 +33,20 @@
   visual harness uses the real host renderer with bundled sample images and
   in-memory actions; it never connects to installed-plugin APIs or live data.
 
-## Current Eager Guidance (2026-10-17)
+## Current Eager Guidance (2026-10-18)
 
-- Release 0.9.5 (tested as 0.9.14+test.20261017) adds an eager-only post-reply selection attempt after two unillustrated
+- The October 18 adjustment exposes the eager-only post-reply selection threshold
+  as `send.eager_attachment_turns`, an integer panel slider from 0 to 10, default 1.
+  Zero selects each completed reply; positive values wait for that many unillustrated
   completed replies, using the optional host-managed `eager_attachment` model
   usage. Existing natural/reserved guidance remains frozen. Selection is separate
   from conversational continuation, submits only a blind image and honors sender
   gates. Normal/pending sends, new input, session changes, config invalidation,
   expired replies and catalog changes prevent stale/duplicate attachment.
   Model binding is explicit; missing support does not disable ordinary tools.
-  See `docs/eager-two-turn-implementation-20261017.md` for limits and validation.
+  Saving invalidates old work and persists through the existing configuration API.
+  See `docs/eager-two-turn-implementation-20261017.md` for limits, validation
+  and the dated threshold adjustment.
 
 - Natural remapping (0.9.11 test): `natural` now preserves the delivered
   0.9.10 eager strategy, including both full tool descriptions, reminder text,

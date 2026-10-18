@@ -403,5 +403,12 @@
   "panel.settings.advanced": "高级设置",
   "panel.settings.diagnostics": "运行诊断",
   "panel.category.actions": "更多",
-  "panel.batch.empty_tags": "请先填写有效标签。"
+  "panel.batch.empty_tags": "请先填写有效标签。",
+  "actions.set_eager_attachment_turns.label": "保存补图轮数",
+  "entries.set_eager_attachment_turns.name": "设置补图触发轮数",
+  "entries.set_eager_attachment_turns.description": "爱发档连续多少轮完整回复未配图后独立选图，整数 0 到 10；0 每轮帮选",
+  "fields.eager_attachment_turns": "补图触发轮数",
+  "panel.attachment.turns.saved": "补图轮数已保存",
+  "panel.attachment.turns.every": "每轮帮选",
+  "panel.attachment.turns.gap": "连续 {turns} 轮未配图后帮选"
 }

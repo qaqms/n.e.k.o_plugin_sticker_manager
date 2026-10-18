@@ -1683,6 +1683,46 @@ class StickerManagerPlugin(NekoPluginBase):
         return Ok({"note": "send_cooldown_set", "cooldown_sec": self._settings.send.cooldown_sec})
 
     @ui.action(
+        id="set_eager_attachment_turns",
+        label=tr("actions.set_eager_attachment_turns.label", default="保存补图轮数"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="set_eager_attachment_turns",
+        metadata={"agent_auto": False},
+        name=tr("entries.set_eager_attachment_turns.name", default="设置补图触发轮数"),
+        description=tr(
+            "entries.set_eager_attachment_turns.description",
+            default="爱发档连续多少轮完整回复未配图后独立选图，整数 0 到 10；0 每轮帮选",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "turns": {
+                    "type": "integer", "minimum": 0, "maximum": 10,
+                    "description": tr("fields.eager_attachment_turns", default="补图触发轮数"),
+                },
+            },
+            "required": ["turns"],
+        },
+        llm_result_fields=["note", "turns"],
+    )
+    async def set_eager_attachment_turns_entry(self, turns: int = 1, **_):
+        if isinstance(turns, bool) or not isinstance(turns, int) or not 0 <= turns <= 10:
+            return Err(SdkError("invalid_value"))
+        try:
+            await self.config.set("sticker_manager.send.eager_attachment_turns", turns)
+        except Exception:
+            self.logger.warning("failed to persist [sticker_manager.send].eager_attachment_turns", exc_info=True)
+            return Err(SdkError("config_unavailable"))
+        await self._reload_settings()
+        if self._settings.send.eager_attachment_turns != turns:
+            self.logger.warning("eager attachment turns saved but effective value differs from requested value")
+            return Err(SdkError("config_unavailable"))
+        return Ok({"note": "eager_attachment_turns_set", "turns": self._settings.send.eager_attachment_turns})
+
+    @ui.action(
         id="set_reminder_interval",
         label=tr("actions.set_reminder_interval.label", default="Save reminder interval"),
         tone="default",
@@ -2054,6 +2094,7 @@ class StickerManagerPlugin(NekoPluginBase):
             "eager_attachment": self._eager_attachment.snapshot(),
             "config": {
                 "cooldown_sec": settings.send.cooldown_sec,
+                "eager_attachment_turns": settings.send.eager_attachment_turns,
                 "inline_max_bytes": settings.send.inline_max_bytes,
                 "catalog_limit_for_model": settings.storage.catalog_limit_for_model,
                 "recent_dedup_count": settings.send.recent_dedup_count,

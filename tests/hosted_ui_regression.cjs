@@ -875,6 +875,67 @@ test("failed cooldown save keeps the draft and current setting and allows retry"
   assert.equal(button(node, "保存发送冷却").props.disabled, false);
 });
 
+test("eager selection slider saves zero once, locks controls and follows external updates", async () => {
+  const calls = [];
+  let finish;
+  const props = surface((action, args) => {
+    calls.push({ action, args: { ...args } });
+    return new Promise((resolve) => { finish = resolve; });
+  });
+  props.state.eagerness = "eager";
+  props.state.config = { eager_attachment_turns: 2 };
+  const env = environment();
+  const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
+  const runner = env.runner(() => AwarenessCard({ surface: props, mode: "settings" }));
+  const slider = (node) => walk(node, (item) => item.type.name === "Slider" && item.props.max === 10)[0];
+  let node = runner.render();
+  assert.equal(slider(node).props.value, 2);
+  assert.equal(slider(node).props.min, 0);
+  assert.equal(slider(node).props.step, 1);
+  assert.equal(button(node, "保存补图轮数").props.disabled, true);
+  slider(node).props.onChange(0);
+  node = runner.render();
+  assert.match(text(node), /每轮帮选/);
+  const save = button(node, "保存补图轮数");
+  save.props.onClick();
+  save.props.onClick();
+  node = runner.render();
+  assert.deepEqual(calls, [{ action: "set_eager_attachment_turns", args: { turns: 0 } }]);
+  assert.equal(slider(node).props.disabled, true);
+  props.state.config.eager_attachment_turns = 0;
+  finish({ result: { turns: 0 } });
+  await settle();
+  node = runner.render();
+  assert.equal(button(node, "保存补图轮数").props.disabled, true);
+  assert.equal(walk(node, (item) => item.type.name === "Alert")[0].props.message, "补图轮数已保存");
+  props.state.config.eager_attachment_turns = 10;
+  node = runner.render();
+  assert.equal(slider(node).props.value, 10);
+  assert.match(text(node), /连续 10 轮未配图后帮选/);
+  props.state.eagerness = "natural";
+  assert.equal(slider(runner.render()), undefined);
+  props.state.eagerness = "reserved";
+  assert.equal(slider(runner.render()), undefined);
+});
+
+test("failed eager selection save keeps the draft and allows retry", async () => {
+  const props = surface(async () => { throw new Error("config_unavailable"); });
+  props.state.eagerness = "eager";
+  const env = environment();
+  const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
+  const runner = env.runner(() => AwarenessCard({ surface: props, mode: "settings" }));
+  let node = runner.render();
+  const slider = (tree) => walk(tree, (item) => item.type.name === "Slider" && item.props.max === 10)[0];
+  assert.equal(slider(node).props.value, 1);
+  slider(node).props.onChange(10);
+  button(runner.render(), "保存补图轮数").props.onClick();
+  await settle();
+  node = runner.render();
+  assert.equal(slider(node).props.value, 10);
+  assert.equal(button(node, "保存补图轮数").props.disabled, false);
+  assert.equal(walk(node, (item) => item.type.name === "Alert")[0].props.tone, "danger");
+});
+
 test("advanced reminder and diagnostics stay collapsed without hiding ordinary send controls", () => {
   const env = environment();
   const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;

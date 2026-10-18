@@ -32,6 +32,8 @@ export function AwarenessCard(props: {
   const attachmentStatus = String(state.eager_attachment?.status || "idle");
   const configuredInterval = awareness.min_interval_sec ?? 60;
   const [intervalDraft, setIntervalDraft] = useState(configuredInterval);
+  const configuredAttachmentTurns = state.config?.eager_attachment_turns ?? 1;
+  const [attachmentTurnsDraft, setAttachmentTurnsDraft] = useState(configuredAttachmentTurns);
   const configuredCooldown = state.config?.cooldown_sec ?? 20;
   const [cooldownDraft, setCooldownDraft] = useState(String(configuredCooldown));
   const cooldownValue = Number(cooldownDraft);
@@ -48,6 +50,9 @@ export function AwarenessCard(props: {
   useEffect(() => {
     setCooldownDraft(String(configuredCooldown));
   }, [configuredCooldown]);
+  useEffect(() => {
+    setAttachmentTurnsDraft(configuredAttachmentTurns);
+  }, [configuredAttachmentTurns]);
 
   const run = async (action: string, args: Record<string, unknown>) => {
     if (busyRef.current || props.disabled) return;
@@ -64,6 +69,9 @@ export function AwarenessCard(props: {
       } else if (action === "set_send_cooldown") {
         if (result?.cooldown_sec !== undefined) setCooldownDraft(String(result.cooldown_sec));
         setNote(t("panel.send.cooldown.saved", { defaultValue: "发送冷却已保存" }));
+      } else if (action === "set_eager_attachment_turns") {
+        if (result?.turns !== undefined) setAttachmentTurnsDraft(result.turns);
+        setNote(t("panel.attachment.turns.saved", { defaultValue: "补图轮数已保存" }));
       } else if (action === "awareness_now" && result) {
         const status = String(result.status || "");
         setNote(t(`panel.awareness.status.${status}`, { defaultValue: status }));
@@ -219,6 +227,43 @@ export function AwarenessCard(props: {
               <Text>{t("panel.attachment.selecting", { defaultValue: "正在为本轮回复选图…" })}</Text>
             ) : null}
           </section>
+          {state.eagerness === "eager" ? (
+            <section className="sticker-setting">
+              <Field label={t("fields.eager_attachment_turns", { defaultValue: "补图触发轮数" })}>
+                <Stack gap={8}>
+                  <Slider
+                    value={attachmentTurnsDraft}
+                    min={0}
+                    max={10}
+                    step={1}
+                    showValue
+                    disabled={disabled}
+                    onChange={setAttachmentTurnsDraft}
+                  />
+                  <Inline gap={12} wrap>
+                    <Text>
+                      {attachmentTurnsDraft === 0
+                        ? t("panel.attachment.turns.every", { defaultValue: "每轮帮选" })
+                        : t("panel.attachment.turns.gap", {
+                          defaultValue: "连续 {turns} 轮未配图后帮选",
+                        }).replace("{turns}", String(attachmentTurnsDraft))}
+                    </Text>
+                    <Button
+                      tone="default"
+                      disabled={disabled || attachmentTurnsDraft === configuredAttachmentTurns}
+                      onClick={() => {
+                        run("set_eager_attachment_turns", { turns: attachmentTurnsDraft });
+                      }}
+                    >
+                      {pending === "set_eager_attachment_turns"
+                        ? t("panel.awareness.interval.saving", { defaultValue: "保存中" })
+                        : t("actions.set_eager_attachment_turns.label", { defaultValue: "保存补图轮数" })}
+                    </Button>
+                  </Inline>
+                </Stack>
+              </Field>
+            </section>
+          ) : null}
           <section className="sticker-setting">
             <div className="sticker-setting-control">
               <Field

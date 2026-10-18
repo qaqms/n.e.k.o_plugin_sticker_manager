@@ -4,6 +4,23 @@ The maintainer selected `0.9.5` as the release version for the implementation
 tested as `0.9.14+test.20261017`. Historical test observations below retain
 the version installed at the time.
 
+On October 18, 2026, the maintainer made the selection threshold configurable
+from 0 to 10 with a default of 1. Zero means selection on every completed reply,
+not disabling selection. The current behavior below reflects
+that adjustment; October 17 validation and live observations remain historical.
+
+The setting is saved from the eager panel slider through the existing host
+configuration API. Changes cancel old selection work and rebaseline retained
+history. Since a completed unillustrated reply already counts as one, values
+0 and 1 have the same selection cadence under the existing-send guards.
+
+October 18 validation: 162 focused Python regressions and 31 hosted UI
+regressions passed, including every supported threshold, persistence, zero
+selection, duplicate polls, no-match retry and cancellation on parameter edits.
+Actual host-renderer browser checks passed at desktop, mobile, 320-pixel and
+dark viewports; zero and ten were saved through the panel. SDK and Hosted TSX
+checks passed. No real model calls or live dialogue acceptance were performed.
+
 ## Behavior
 
 Natural and reserved retain their full delivered guidance. Eager retains the
@@ -11,7 +28,9 @@ Natural and reserved retain their full delivered guidance. Eager retains the
 
 Only eager schedules additional selection. A one-second timer observes the
 public conversation bus, counts normal completed replies without a submitted
-image, and starts a single separate selection after a gap of two. Further
+image, and starts a single separate selection after the configured gap
+(`send.eager_attachment_turns`, default 1). Zero evaluates every completed reply;
+existing submitted or pending images still prevent duplicate attachment. Further
 unillustrated replies can trigger another attempt until a submission resets
 the gap. Ineligible text-only/serious-task decisions reset the gap without
 sending. The counter initially counts normal replies; eligibility is evaluated
@@ -80,7 +99,7 @@ attempt/submission counts.
 Pure-text constraints and suitability are model decisions based on supplied
 context. The plugin cannot guarantee semantic classification, infer omitted
 standing instructions, or produce suitable images from an unsuitable library.
-This is a two-reply selection threshold, not an unconditional image quota.
+This is a configurable reply selection threshold, not an unconditional image quota.
 Live same-model acceptance remains required. The earlier dialogue-duplication
 root cause remains open; this path avoids initiating tool continuation but
 does not claim to repair existing host continuation behavior.
