@@ -35,6 +35,14 @@ def model_error_status(exc: BaseException) -> str:
     code = error.get("code") if isinstance(error, dict) else ""
     return _MODEL_ERROR_STATUS.get(code if isinstance(code, str) else "", "model_unavailable")
 
+
+def request_rejected(exc: BaseException) -> bool:
+    """Whether the provider (or gateway) refused the request shape itself."""
+    body = getattr(exc, "body", None)
+    error = body.get("error", body) if isinstance(body, dict) else {}
+    code = error.get("code") if isinstance(error, dict) else ""
+    return code in {"upstream_request_rejected", "invalid_request", "unsupported_parameter"}
+
 SELECTION_PROMPT = (
     "你只为已经说完的回复选择一张表情包，不代写、续写或复述对话，不扮演角色，不调用工具。"
     "爱发档：轻松聊天有贴切图就选一张，日常问答、喜好和近况也算聊天，不必等强烈情绪。"

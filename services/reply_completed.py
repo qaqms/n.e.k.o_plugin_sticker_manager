@@ -17,6 +17,7 @@ from ..core.attachment_selection import (
     REPLY_SELECTION_PROMPT,
     model_error_status,
     parse_reply_selection,
+    request_rejected,
     selection_candidates,
     selection_payload,
 )
@@ -42,6 +43,11 @@ _TEXT_ONLY = (
 # prompt only judges fit, as in the reference meme manager's selector mode.
 _SELECTION_GUIDANCE = "本轮需要判断是否配图：有贴切的图就选一张；候选都不贴切、会歪曲原意时跳过。"
 _RNG = random.SystemRandom()
+# Start the answer for the model. Reasoning models such as the host's free
+# familiar model otherwise think for hundreds of tokens (often past the host's
+# 15 s callback limit); continuing from this prefix they answer in ~2 tokens.
+# Providers that ignore the prefix still answer with the whole JSON object.
+ANSWER_PREFIX = '{"choice":'
 
 
 class ReplyCompletedAttachment:
@@ -67,6 +73,9 @@ class ReplyCompletedAttachment:
         self._transient_failures = 0
         self._retry_at = 0.0
         self._probe_passed = False
+        # Cleared for this process when the bound provider rejects a request
+        # that ends with the assistant answer prefix.
+        self._prefill = True
 
     @property
     def managed(self):
@@ -115,16 +124,30 @@ class ReplyCompletedAttachment:
         try:
             async with asyncio.timeout(SELECTION_TIMEOUT):
                 client = await self.plugin.ctx.models.get_client()
-                response = await client.chat.completions.create(
-                    model=MODEL_USAGE, stream=False, max_tokens=SELECTION_MAX_TOKENS,
-                    messages=[
-                        {"role": "system", "content": prompt},
-                        {"role": "user", "content": payload},
-                    ],
-                )
+                messages = [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": payload},
+                ]
+                prefilled = self._prefill
+                try:
+                    response = await client.chat.completions.create(
+                        model=MODEL_USAGE, stream=False, max_tokens=SELECTION_MAX_TOKENS,
+                        messages=[*messages, {"role": "assistant", "content": ANSWER_PREFIX}] if prefilled else messages,
+                    )
+                except Exception as exc:
+                    if not (prefilled and request_rejected(exc)):
+                        raise
+                    # The provider refuses a trailing assistant message; ask
+                    # plainly from now on (slower on reasoning models).
+                    self._prefill = prefilled = False
+                    self.last_model_result["prefill"] = "rejected"
+                    response = await client.chat.completions.create(
+                        model=MODEL_USAGE, stream=False, max_tokens=SELECTION_MAX_TOKENS, messages=messages,
+                    )
             choices = getattr(response, "choices", None)
             choice = choices[0] if choices else None
             content = getattr(getattr(choice, "message", None), "content", None)
+            self.last_model_result.setdefault("prefill", "used" if prefilled else "off")
             finish = getattr(choice, "finish_reason", None)
             usage = getattr(response, "usage", None)
             details = getattr(usage, "completion_tokens_details", None)
@@ -140,6 +163,7 @@ class ReplyCompletedAttachment:
                 "output_format": (
                     "json" if isinstance(content, str) and content.lstrip().startswith("{")
                     else "fenced_json" if isinstance(content, str) and content.lstrip().startswith("```")
+                    else "continuation" if prefilled and isinstance(content, str) and content.strip()
                     else "other"
                 ),
             })
@@ -147,6 +171,9 @@ class ReplyCompletedAttachment:
                 return "", "model_truncated"
             if finish != "stop":
                 return "", "invalid_result"
+            if prefilled and isinstance(content, str) and not content.lstrip().startswith(("{", "```")):
+                # The model continued our prefix; parse the whole object.
+                content = ANSWER_PREFIX + content
             return parse_reply_selection(content, rows)
         finally:
             self.last_model_result["duration_ms"] = round((time.monotonic() - started) * 1000)
@@ -362,9 +389,10 @@ class ReplyCompletedAttachment:
             return result
         finally:
             self.plugin.logger.info(
-                "sticker reply selection: status={} duration_ms={} finish_reason={} output_chars={}",
+                "sticker reply selection: status={} duration_ms={} finish_reason={} output_chars={} prefill={}",
                 self.status, self.last_model_result.get("duration_ms", 0),
                 self.last_model_result.get("finish_reason", ""), self.last_model_result.get("output_chars", 0),
+                self.last_model_result.get("prefill", ""),
             )
             with self._lock:
                 self._tasks.pop(role, None)

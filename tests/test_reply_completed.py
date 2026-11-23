@@ -127,7 +127,7 @@ def test_selection_deduplicates_category_explanations_without_losing_image_annot
     async def scenario():
         await plugin._reply_completed._select("reply", [{"role": "user_message", "text": "text only"}],
                                              rows, plugin._settings)
-        content = model.await_args.kwargs["messages"][-1]["content"]
+        content = model.await_args.kwargs["messages"][1]["content"]
         data = json.loads(content)
         assert content.count("shared category") == 1
         assert data["groups"] == {"happy": "shared category"}
@@ -616,5 +616,89 @@ def test_zero_probability_never_selects(tmp_path, monkeypatch, run_async):
         await plugin._reply_completed.maintain()
         assert (await completed(plugin))["status"] == "probability_skip"
         model.assert_not_awaited()
+
+    run_async(scenario())
+
+
+class _Rejected(Exception):
+    def __init__(self, code):
+        super().__init__("rejected")
+        self.body = {"error": {"code": code}}
+
+
+def test_selection_prefills_answer_and_parses_continuation(tmp_path, monkeypatch, run_async):
+    plugin, _, client, model, _ = setup(tmp_path, monkeypatch)
+    # Reasoning models continue the prefix with only the rest of the object.
+    model.return_value.choices[0].message.content = "1}"
+
+    async def scenario():
+        await plugin._reply_completed.maintain()
+        assert (await completed(plugin))["status"] == "registered"
+        messages = model.await_args.kwargs["messages"]
+        assert [m["role"] for m in messages] == ["system", "user", "assistant"]
+        assert messages[-1]["content"] == reply_completed.ANSWER_PREFIX
+        assert plugin._reply_completed.snapshot()["model_result"]["prefill"] == "used"
+        assert len(client.calls) == 1
+
+    run_async(scenario())
+
+
+@pytest.mark.parametrize("content", ['{"choice":1}', '```json\n{"choice":1}\n```'])
+def test_prefill_ignored_by_provider_still_parses_full_answer(tmp_path, monkeypatch, run_async, content):
+    plugin, _, client, model, _ = setup(tmp_path, monkeypatch)
+    model.return_value.choices[0].message.content = content
+
+    async def scenario():
+        await plugin._reply_completed.maintain()
+        status = (await completed(plugin))["status"]
+        assert status == ("registered" if content.startswith("{") else "invalid_result")
+
+    run_async(scenario())
+
+
+def test_prefill_continuation_keywords(tmp_path, monkeypatch, run_async):
+    plugin, _, client, model, _ = setup(tmp_path, monkeypatch)
+    model.return_value.choices[0].message.content = '"no_match"}'
+
+    async def scenario():
+        await plugin._reply_completed.maintain()
+        assert (await completed(plugin))["status"] == "no_match"
+        assert not client.calls
+
+    run_async(scenario())
+
+
+def test_rejected_prefill_retries_plainly_and_stays_off(tmp_path, monkeypatch, run_async):
+    plugin, _, client, model, _ = setup(tmp_path, monkeypatch)
+    answer = model.return_value
+    answer.choices[0].message.content = '{"choice":1}'
+    model.side_effect = [_Rejected("upstream_request_rejected"), answer, answer]
+
+    async def scenario():
+        await plugin._reply_completed.maintain()
+        assert (await completed(plugin))["status"] == "registered"
+        assert model.await_count == 2
+        assert model.await_args_list[0].kwargs["messages"][-1]["role"] == "assistant"
+        assert model.await_args_list[1].kwargs["messages"][-1]["role"] == "user"
+        assert plugin._reply_completed.snapshot()["model_result"]["prefill"] == "rejected"
+        assert plugin._reply_completed._transient_failures == 0
+        client.state = {"accepted": True, "status": "submitted"}
+        await plugin.on_sticker_tail()
+        assert (await completed(plugin, number=2))["status"] == "registered"
+        assert model.await_count == 3
+        assert model.await_args.kwargs["messages"][-1]["role"] == "user"
+        assert plugin._reply_completed.snapshot()["model_result"]["prefill"] == "off"
+
+    run_async(scenario())
+
+
+def test_persistent_errors_do_not_disable_prefill(tmp_path, monkeypatch, run_async):
+    plugin, _, client, model, _ = setup(tmp_path, monkeypatch)
+    model.side_effect = _Rejected("agent_quota_exceeded")
+
+    async def scenario():
+        await plugin._reply_completed.maintain()
+        assert (await completed(plugin))["status"] == "model_quota_exceeded"
+        assert model.await_count == 1 and plugin._reply_completed._prefill is True
 
     run_async(scenario())
