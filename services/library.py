@@ -1475,8 +1475,8 @@ class Library:
         return self._root / UPLOADS_DIRNAME
 
     @_serialized
-    def upload_start(self, filename: Any, size: Any = None) -> tuple[str, str]:
-        """开一个上传会话：只认 .zip 结尾（图走 add 通道，不重复造第二条入库路）。
+    def upload_start(self, filename: Any, size: Any = None, *, kind: str = "zip") -> tuple[str, str]:
+        """开 ZIP 或大图分块上传会话；图片收尾仍走 add 的校验与查重。
 
         回 (session_id, 错误码)；错误码为空串 = 成功。可选的 size 只用来
         提前拒绝“一眼就知道装不下”的包（真正的总量上限在每块 append 时把关）。
@@ -1486,9 +1486,14 @@ class Library:
         # （面板传来的就该是裸文件名），收到带路径的名宁可拒也不静默改写：诚实 > 宽容。
         if not isinstance(filename, str) or "/" in filename or "\\" in filename:
             return "", "upload_not_zip"
-        if not name or not name.lower().endswith(".zip"):
+        if not isinstance(kind, str) or kind not in {"zip", "image"}:
+            return "", "invalid_image"
+        if not name or (kind == "zip" and not name.lower().endswith(".zip")):
             return "", "upload_not_zip"
-        if isinstance(size, int) and not isinstance(size, bool) and size > UPLOAD_MAX_TOTAL_BYTES:
+        if kind == "image" and Path(name).suffix.lower() not in {".png", ".jpg", ".jpeg", ".gif", ".webp"}:
+            return "", "invalid_image"
+        maximum = MAX_STICKER_BYTES if kind == "image" else UPLOAD_MAX_TOTAL_BYTES
+        if isinstance(size, int) and not isinstance(size, bool) and size > maximum:
             return "", "upload_too_large"
         self._gc_uploads()
         sid = new_sticker_id(set(self._uploads))
@@ -1499,7 +1504,9 @@ class Library:
         except Exception:
             self._log("upload staging open failed")
             return "", "upload_write_failed"
-        self._uploads[sid] = {"h": handle, "path": path, "seq": 0, "size": 0, "name": name, "at": time.time()}
+        self._uploads[sid] = {
+            "h": handle, "path": path, "seq": 0, "size": 0, "name": name, "kind": kind, "at": time.time(),
+        }
         return sid, ""
 
     @_serialized
@@ -1515,7 +1522,8 @@ class Library:
         if seq != session["seq"]:
             self._drop_upload(sid)
             return "upload_seq_gap"
-        if len(data) > UPLOAD_CHUNK_BYTES or session["size"] + len(data) > UPLOAD_MAX_TOTAL_BYTES:
+        maximum = MAX_STICKER_BYTES if session.get("kind") == "image" else UPLOAD_MAX_TOTAL_BYTES
+        if len(data) > UPLOAD_CHUNK_BYTES or session["size"] + len(data) > maximum:
             self._drop_upload(sid)
             return "upload_too_large"
         try:
@@ -1532,7 +1540,7 @@ class Library:
     @_serialized
     def upload_finish(
         self, sid: str, *, tags: list[str] | None = None, group: str = "", zone: str = ""
-    ) -> tuple[dict[str, int], str]:
+    ) -> tuple[dict[str, Any], str]:
         """收尾：关流→同一把尺 import_pack→删暂存体。
 
         与 inbox “成功即删/失败留原地重试”不同：直传会话没有“原地”——面板会话
@@ -1549,6 +1557,23 @@ class Library:
         if session["size"] == 0:
             self._drop_upload_file(session["path"])
             return {}, "upload_empty"
+        if session.get("kind") == "image":
+            try:
+                sticker, error = self.add(
+                    data=session["path"].read_bytes(), desc="", tags=list(tags or []), group=group, zone=zone,
+                )
+                return {
+                    "imported": int(sticker is not None),
+                    "duplicates": int(error == ERR_DUPLICATE),
+                    "rejected": int(bool(error) and error != ERR_DUPLICATE),
+                    "failed": 0,
+                    "id": sticker.id if sticker else "",
+                    "code": error,
+                }, ""
+            except OSError:
+                return {}, ERR_IO
+            finally:
+                self._drop_upload_file(session["path"])
         summary = self.import_pack(session["path"], tags=tags, group=group, zone=zone)
         self._drop_upload_file(session["path"])
         return summary, ""

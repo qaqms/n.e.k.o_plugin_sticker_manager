@@ -27,6 +27,13 @@ function cacheKey(kind: string, id: string): string {
   return `${kind}:${id}`;
 }
 
+export function primeStickerPreview(id: string, dataUrl: string) {
+  // Small imported images are already in memory; avoid fetching them again.
+  if (!id || !dataUrl.startsWith("data:image/") || dataUrl.length > 384 * 1024) return;
+  previewCache[cacheKey("thumb", id)] = dataUrl;
+  previewCache[cacheKey("full", id)] = dataUrl;
+}
+
 const PREVIEW_CONCURRENCY = 2;
 let previewActive = 0;
 const previewWaiters: Array<() => Promise<void>> = [];

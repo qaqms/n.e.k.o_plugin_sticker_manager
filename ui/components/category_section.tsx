@@ -1,6 +1,7 @@
 // Category actions remain in normal flow; no clipped popover or overlay.
 import { Button, Field, Inline, Input, Stack, Text } from "@neko/plugin-ui";
 import { StickerTile } from "./sticker_tile";
+import { useFileDrop } from "../file_drop";
 import type { Section, Surface } from "../shared";
 
 export function CategorySection(props: {
@@ -15,6 +16,7 @@ export function CategorySection(props: {
   onToggleSelect: (id: string) => void;
   onOpen: (id: string) => void;
   onCollect: () => void;
+  onDropFiles?: (files: any[]) => void;
   onSelectAll: () => void;
   onToggleDescEditing: () => void;
   setDescDraft: (next: string) => void;
@@ -24,8 +26,9 @@ export function CategorySection(props: {
 }) {
   const t = props.surface.t;
   const section = props.section;
+  const drop = useFileDrop((files) => props.onDropFiles?.(files), !!props.disabled || props.collectBusy);
   return (
-    <section className="sticker-category">
+    <section className={`sticker-category${drop.dragging ? " is-file-dragging" : ""}`} {...drop.handlers}>
       <div className="sticker-category-header">
         <h2 className="sticker-category-name">
           {section.name}

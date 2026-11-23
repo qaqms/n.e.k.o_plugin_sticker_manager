@@ -94,6 +94,14 @@ export type RunState = {
 export type State = {
   enabled?: boolean;
   eager_attachment?: { status?: string; attempts?: number; sent?: number; reply_gap?: number };
+  reply_completed?: {
+    mode?: string; status?: string; received?: number; attempts?: number; registered?: number; sent?: number;
+    model_result?: {
+      candidate_count?: number; duration_ms?: number; finish_reason?: string;
+      output_chars?: number; completion_tokens?: number | null;
+      max_tokens?: number; reasoning_tokens?: number | null; has_reasoning?: boolean;
+    };
+  };
   // v0.14.0：配表情积极度当前档（面板 Select 的回填源）。
   eagerness?: string;
   lanlan?: string;
@@ -118,6 +126,7 @@ export type State = {
   config?: {
     cooldown_sec?: number;
     eager_attachment_turns?: number;
+    every_reply?: boolean;
     inline_max_bytes?: number;
     catalog_limit_for_model?: number;
     recent_dedup_count?: number;
@@ -149,11 +158,12 @@ export function parseBatchTags(value: unknown): string[] {
   ).slice(0, 12);
 }
 
-// 后端 Err 抛出的 message 里抓稳定 ASCII 码（^[a-z][a-z0-9_]*$，DESIGN.md 错误码契约）；
-// 抓不到就原样直出（宿主/网络错误的原文比编一个码诚实）。
+// Only a complete error code or a final colon-delimited code is translatable.
+// Ordinary host messages must remain readable instead of becoming "action".
 export function extractCode(raw: string): string {
-  const m = raw.match(/[a-z][a-z0-9_]*/);
-  return m ? m[0] : raw;
+  const message = raw.trim();
+  const match = message.match(/(?:^|:\s*)([a-z][a-z0-9]*(?:_[a-z0-9]+)+)$/);
+  return match ? match[1] : message;
 }
 
 export function readAsDataUrl(file: any): Promise<string> {
@@ -186,8 +196,16 @@ export async function callAction(
   args: Record<string, unknown>,
   options?: { timeoutMs?: number },
 ): Promise<any> {
-  const envelope = await surface.api.call(actionId, args, options);
-  return envelope ? envelope.result : null;
+  try {
+    const envelope = await surface.api.call(actionId, args, options);
+    return envelope ? envelope.result : null;
+  } catch (error) {
+    const code = error && typeof error === "object" ? (error as any).code : null;
+    if (typeof code === "string" && /^PLUGIN_[A-Z0-9_]+$/.test(code)) {
+      throw new Error(code.toLowerCase());
+    }
+    throw error;
+  }
 }
 
 // 轮 I：逐图归类只能从已有分类里挑（要新名字请先「新建分类」）。

@@ -8,6 +8,7 @@ import {
   SegmentedControl,
   Slider,
   Stack,
+  Switch,
   Text,
   useEffect,
   useRef,
@@ -15,6 +16,12 @@ import {
 } from "@neko/plugin-ui";
 import { callAction, extractCode } from "../shared";
 import type { Surface } from "../shared";
+
+// Model gateway failures the user can act on (see core/attachment_selection.py).
+const MODEL_FAILURES = [
+  "model_unbound", "model_unavailable", "host_model_unconfigured", "host_model_unsupported",
+  "model_quota_exceeded", "model_defaults_incompatible",
+];
 
 export function AwarenessCard(props: {
   surface: Surface;
@@ -30,6 +37,12 @@ export function AwarenessCard(props: {
   const awareness = state.awareness || {};
   const runState = state.run || {};
   const attachmentStatus = String(state.eager_attachment?.status || "idle");
+  const replyMode = String(state.reply_completed?.mode || "legacy");
+  const hookManaged = replyMode === "pending" || replyMode === "hook";
+  // Hook-capable host, but the selection model keeps failing: chat tools send.
+  const hookFallback = replyMode === "fallback";
+  const fallbackReason = String(state.reply_completed?.fallback_reason || "");
+  const usesSelector = hookManaged || state.eagerness === "eager";
   const configuredInterval = awareness.min_interval_sec ?? 60;
   const [intervalDraft, setIntervalDraft] = useState(configuredInterval);
   const configuredAttachmentTurns = state.config?.eager_attachment_turns ?? 1;
@@ -75,6 +88,12 @@ export function AwarenessCard(props: {
       } else if (action === "awareness_now" && result) {
         const status = String(result.status || "");
         setNote(t(`panel.awareness.status.${status}`, { defaultValue: status }));
+      } else if (action === "test_selection" && result) {
+        const status = String(result.status || "");
+        setNote(t(`panel.selection.status.${status}`, { defaultValue: status }));
+        setFailed([...MODEL_FAILURES, "model_timeout", "model_truncated", "invalid_result"].includes(status));
+      } else if (action === "set_every_reply") {
+        setNote(t("panel.every_reply.saved", { defaultValue: "配图频率已保存" }));
       }
       try {
         await surface.api.refresh();
@@ -157,6 +176,20 @@ export function AwarenessCard(props: {
     </dl>
   );
 
+  const testSelection = (
+    <Button disabled={disabled} onClick={() => { run("test_selection", {}); }}>
+      {t("actions.test_selection.label", { defaultValue: "测试选图" })}
+    </Button>
+  );
+  const fallbackNotice = (
+    <Alert tone="warning" message={[
+      t("panel.attachment.fallback", {
+        defaultValue: "选图模型暂不可用，已改由聊天模型通过工具发图；每 10 分钟自动重试，修好后点“测试选图”可立即恢复。",
+      }),
+      fallbackReason ? t(`panel.selection.status.${fallbackReason}`, { defaultValue: fallbackReason }) : "",
+    ].filter(Boolean).join(" ")} />
+  );
+
   const diagnostics = (
     <div className="sticker-diagnostics">
       <h2 className="sticker-section-title">
@@ -167,20 +200,23 @@ export function AwarenessCard(props: {
         {t("panel.run.title", { defaultValue: "本次运行（重启插件归零）" })}
       </h2>
       {readouts(runItems)}
-      {state.eagerness === "eager" ? (
-        <Text>
+      {usesSelector ? (
+        <><Text>
           {t("panel.attachment.counts", { defaultValue: "补图选图 {attempts} 次 · 已提交 {sent} 张" })
             .replace("{attempts}", String(state.eager_attachment?.attempts || 0))
             .replace("{sent}", String(state.eager_attachment?.sent || 0))}
         </Text>
+        <Text>{t(`panel.selection.status.${attachmentStatus}`, { defaultValue: attachmentStatus })}</Text>
+        {hookManaged ? testSelection : null}</>
       ) : null}
+      {hookFallback ? <>{fallbackNotice}{testSelection}</> : null}
       {runState.last_call ? (
         <Text>
           {t("panel.run.last", { defaultValue: "最近一次" }) + "：" + runState.last_call +
             (runState.last_reason ? " · " + runState.last_reason : "")}
         </Text>
       ) : null}
-      <h2 className="sticker-section-title">
+      {!hookManaged ? <><h2 className="sticker-section-title">
         {t("panel.awareness.title", { defaultValue: "配图提醒" })}
       </h2>
       {readouts(statusItems)}
@@ -190,7 +226,7 @@ export function AwarenessCard(props: {
             ? t("panel.awareness.checking", { defaultValue: "检查中…" })
             : t("panel.awareness.button", { defaultValue: "测试提醒" })}
         </Button>
-      </Inline>
+      </Inline></> : <Text>{t("panel.attachment.hook", { defaultValue: "回复后配图" })}</Text>}
     </div>
   );
 
@@ -204,7 +240,7 @@ export function AwarenessCard(props: {
               {t("panel.awareness.eagerness", { defaultValue: "配图积极度" })}
             </h2>
             <SegmentedControl
-              disabled={disabled}
+              disabled={disabled || !!state.config?.every_reply}
               value={String(state.eagerness || "natural")}
               options={[
                 { value: "reserved", label: t("panel.preference.reserved", { defaultValue: "矜持" }) },
@@ -215,19 +251,30 @@ export function AwarenessCard(props: {
                 run("set_eagerness", { eagerness: String(next || "natural") });
               }}
             />
-            {state.eagerness === "eager" && attachmentStatus === "model_unbound" ? (
+            {hookManaged ? <Switch
+              checked={!!state.config?.every_reply}
+              disabled={disabled}
+              label={t("actions.set_every_reply.label", { defaultValue: "每轮配图" })}
+              onChange={(next: boolean) => { run("set_every_reply", { enabled: next }); }}
+            /> : null}
+            {hookFallback ? fallbackNotice
+            : usesSelector && attachmentStatus === "model_unbound" ? (
               <Alert tone="info" message={t("panel.attachment.unbound", {
-                defaultValue: "请在插件模型配置中为“爱发补图选图”绑定文字模型。",
+                defaultValue: "“回复配图选图”没有可用的模型绑定。请在插件管理的模型配置中为它选择“使魔模型”槽位。",
               })} />
-            ) : state.eagerness === "eager" && attachmentStatus === "model_unavailable" ? (
+            ) : usesSelector && attachmentStatus === "model_unavailable" ? (
               <Alert tone="info" message={t("panel.attachment.unavailable", {
-                defaultValue: "补图选图模型暂不可用，请检查模型绑定与连接。",
+                defaultValue: "选图模型暂不可用，请检查网络与宿主模型连接。",
               })} />
-            ) : state.eagerness === "eager" && attachmentStatus === "selecting" ? (
+            ) : usesSelector && MODEL_FAILURES.includes(attachmentStatus) ? (
+              <Alert tone="info" message={t(`panel.selection.status.${attachmentStatus}`, { defaultValue: attachmentStatus })} />
+            ) : usesSelector && attachmentStatus === "selecting" ? (
               <Text>{t("panel.attachment.selecting", { defaultValue: "正在为本轮回复选图…" })}</Text>
+            ) : usesSelector && ["model_timeout", "model_truncated", "invalid_result"].includes(attachmentStatus) ? (
+              <Alert tone="warning" message={t(`panel.selection.status.${attachmentStatus}`, { defaultValue: attachmentStatus })} />
             ) : null}
           </section>
-          {state.eagerness === "eager" ? (
+          {state.eagerness === "eager" && !state.config?.every_reply ? (
             <section className="sticker-setting">
               <Field label={t("fields.eager_attachment_turns", { defaultValue: "补图触发轮数" })}>
                 <Stack gap={8}>
@@ -280,15 +327,15 @@ export function AwarenessCard(props: {
                   max={3600}
                   step={1}
                   invalid={!cooldownValid}
-                  disabled={disabled}
+                  disabled={disabled || !!state.config?.every_reply}
                   onChange={setCooldownDraft}
                 />
               </Field>
               <Button
                 tone="default"
-                disabled={disabled || !cooldownValid || cooldownValue === configuredCooldown}
+                disabled={disabled || !!state.config?.every_reply || !cooldownValid || cooldownValue === configuredCooldown}
                 onClick={() => {
-                  if (cooldownValid && cooldownValue !== configuredCooldown) {
+                  if (!state.config?.every_reply && cooldownValid && cooldownValue !== configuredCooldown) {
                     run("set_send_cooldown", { cooldown_sec: cooldownValue });
                   }
                 }}
@@ -306,7 +353,7 @@ export function AwarenessCard(props: {
                 }).replace("{seconds}", String(configuredCooldown))}
             </p>
           </section>
-          <details className="sticker-menu sticker-advanced">
+          {!hookManaged ? <details className="sticker-menu sticker-advanced">
             <summary>{t("panel.settings.advanced", { defaultValue: "高级设置" })}</summary>
             <div className="sticker-menu-body">
               <Field label={t("panel.awareness.min_interval_sec", { defaultValue: "提醒最小间隔（秒）" })}>
@@ -343,7 +390,7 @@ export function AwarenessCard(props: {
                 </Stack>
               </Field>
             </div>
-          </details>
+          </details> : null}
           <details className="sticker-menu sticker-advanced">
             <summary>{t("panel.settings.diagnostics", { defaultValue: "运行诊断" })}</summary>
             <div className="sticker-menu-body">{diagnostics}</div>

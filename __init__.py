@@ -88,6 +88,7 @@ from .core.tool_surface import build_list_tool_description
 from .services import Awareness, LanlanResolver, Library, RunStats, Sender, ToolWatch, gave_shape
 from .services.bundled_pack import pack_exists
 from .services.eager_attachment import EagerAttachment
+from .services.reply_completed import ReplyCompletedAttachment
 from .services.reply_diagnostics import reply_context_fields
 from .services.turn_end import TurnEndLogs, log_directories
 
@@ -98,6 +99,8 @@ _MAX_BASE64_CHARS = 12 * 1024 * 1024
 # 直传单块的 base64 尺寸上限：3 MiB 原始恰好多不出 4 MiB 字符；给 JSON 封套留余量，
 # 超过就是故意的帧溢出尝试，在解码前拦下（同预览方向的 4,784,128 字节尺）。
 _UPLOAD_B64_MAX_CHARS = 4 * 1024 * 1024
+_IMPORT_BATCH_MAX_FILES = 8
+_IMPORT_BATCH_MAX_CHARS = 3 * 1024 * 1024
 
 # sticker_send 的工具描述（v0.17.0 起是**常驻目录面**）：能力句 + 读表指引 + 激活区
 # 分类全表 + 档位许可句，拼装尺在 `core/tool_surface.py`。
@@ -198,6 +201,7 @@ class StickerManagerPlugin(NekoPluginBase):
         # 本次运行读数（v0.17.1 观测轮）：只记账不参与任何决策，进程重启归零。
         self._runstats = RunStats()
         self._eager_attachment = EagerAttachment(self)
+        self._reply_completed = ReplyCompletedAttachment(self)
         # 运行账本的日志面（v0.20.0）：上一次报出去的指纹 + 时刻。见 `_maybe_log_run_ledger`。
         self._ledger_fingerprint: tuple[Any, ...] = ()
         self._ledger_logged_at = 0.0
@@ -223,6 +227,7 @@ class StickerManagerPlugin(NekoPluginBase):
             self.logger.warning("sticker_manager official seed leaked", exc_info=True)
             seed_note = "leaked"
         # v0.17.0：她的分类目录 + 配图意愿都装进常驻面（工具描述），不再只活在一次性注入里。
+        await self._reply_completed.maintain()
         self._refresh_send_tool_surface()
         self.logger.info(
             "sticker_manager ready: enabled={} stickers={} io_ok={} official_seed={}",
@@ -248,6 +253,7 @@ class StickerManagerPlugin(NekoPluginBase):
 
     @lifecycle(id="shutdown")
     async def on_shutdown(self, **_):
+        await self._reply_completed.close()
         self._eager_attachment.invalidate(closing=True)
         self._note_deferred_outcomes(self._sender.cancel_pending(settings=self._settings, closing=True))
         self._note_deferred_outcomes(await self._sender.cancel_host_pending(settings=self._settings))
@@ -276,7 +282,15 @@ class StickerManagerPlugin(NekoPluginBase):
 
     @timer_interval(id="eager_attachment", seconds=1, name="sticker_manager eager attachment")
     async def on_eager_attachment(self, **_):
+        if self._reply_completed.managed:
+            return Ok({"status": "host_hook"})
         return Ok(await self._eager_attachment.poll())
+
+    @plugin_entry(id="after_reply", kind="hook", metadata={"agent_auto": False})
+    async def after_reply(self, text: str, user_text: str, has_attachments: bool, _ctx=None):
+        return Ok(await self._reply_completed.handle(
+            text, user_text, has_attachments, (_ctx or {}).get("host_reply"),
+        ))
 
     @timer_interval(id="sticker_tail", seconds=1, name="sticker_manager reply tail")
     async def on_sticker_tail(self, **_):
@@ -294,9 +308,12 @@ class StickerManagerPlugin(NekoPluginBase):
                 continue
             self._runstats.note_delivery(ok=result.ok, reason=result.code)
             result.delivery_recorded = True
+            if _source == "eager" and self._reply_completed.managed:
+                self._reply_completed.note_outcome(result)
 
     @timer_interval(id="watch", seconds=10, name="sticker_manager watch")
     async def on_watch(self, **_):
+        await self._reply_completed.maintain()
         # 独立巡检每 10s 一拍，提醒关闭时也能恢复重建后丢失的工具。
         # timer 每拍跑在新 event loop 且无 watchdog：异常必须自己兜住（陷阱 §3）。
         try:
@@ -326,7 +343,10 @@ class StickerManagerPlugin(NekoPluginBase):
         两件事各兜各的异常——蹭在一起就是一个坏了把另一个的表也标黄（陷阱 16 同族）。
         """
         try:
-            awareness = await self._awareness.maybe_run(settings=self._settings, now=time.time())
+            awareness = (
+                {"status": "host_hook"} if self._reply_completed.managed
+                else await self._awareness.maybe_run(settings=self._settings, now=time.time())
+            )
         except Exception:  # noqa: BLE001 - 注入坏掉不许带走 timer 线程
             self.logger.warning("sticker_manager awareness leaked", exc_info=True)
             awareness = {"status": "leaked"}
@@ -340,6 +360,18 @@ class StickerManagerPlugin(NekoPluginBase):
     # ------------------------------------------------------------------
     # 管理入口（面板 + 命令面板共用）
     # ------------------------------------------------------------------
+
+    @ui.action(
+        id="test_selection", label=tr("actions.test_selection.label", default="测试选图"),
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="test_selection", metadata={"agent_auto": False}, timeout=14,
+        name=tr("entries.test_selection.name", default="测试选图"),
+        description=tr("entries.test_selection.description", default="用固定测试文本验证已绑定的选图模型，不发送图片或聊天消息"),
+    )
+    async def test_selection_entry(self, **_):
+        return Ok(await self._reply_completed.test_selection())
 
     @ui.action(
         id="add",
@@ -428,7 +460,8 @@ class StickerManagerPlugin(NekoPluginBase):
             return Err(SdkError("image_undecodable"))
         if len(payload) > MAX_STICKER_BYTES:
             return Err(SdkError("image_too_large"))
-        sticker, error = self._library.add(
+        sticker, error = await asyncio.to_thread(
+            self._library.add,
             data=payload,
             desc=text_desc,
             tags=parse_tags_field(tags),
@@ -441,6 +474,45 @@ class StickerManagerPlugin(NekoPluginBase):
         if sticker is None:
             return Err(SdkError(error or "image_rejected"))
         return Ok({"note": "sticker_added", "id": sticker.id, "desc": sticker.desc})
+
+    @ui.action(
+        id="add_batch",
+        label=tr("actions.add_batch.label", default="Import images"),
+        tone="default",
+        refresh_context=False,
+    )
+    @plugin_entry(
+        id="add_batch",
+        metadata={"agent_auto": False},
+        name=tr("entries.add_batch.name", default="批量收藏图片"),
+        description=tr("entries.add_batch.description", default="面板分批收藏图片，逐张执行图片校验与查重并返回结果"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "images": {
+                    "type": "array", "minItems": 1, "maxItems": _IMPORT_BATCH_MAX_FILES,
+                    "items": {"type": "string"},
+                },
+                "group": {"type": "string"},
+                "zone": {"type": "string"},
+            },
+            "required": ["images"],
+            "additionalProperties": False,
+        },
+        timeout=60.0,
+    )
+    async def add_batch_entry(self, images: Any = None, group: str = "", zone: str = "", **_):
+        if (
+            not isinstance(images, list) or not 1 <= len(images) <= _IMPORT_BATCH_MAX_FILES
+            or any(not isinstance(image, str) for image in images)
+            or sum(len(image) for image in images) > _IMPORT_BATCH_MAX_CHARS
+        ):
+            return Err(SdkError("invalid_image_batch"))
+        results = []
+        for image in images:
+            result = await self.add_entry(data_base64=image, group=group, zone=zone)
+            results.append(result.value if result.is_ok() else {"code": str(result.error)})
+        return Ok({"results": results})
 
     @ui.action(
         id="update",
@@ -1245,6 +1317,15 @@ class StickerManagerPlugin(NekoPluginBase):
         描述没变就不折腾 IPC；重注册失败**先把原描述装回去**——宁可她读到旧目录，
         也不能因为重挂失败没了这个工具。
         """
+        if self._reply_completed.managed:
+            unregister = getattr(self, "unregister_llm_tool", None)
+            lister = getattr(self, "list_llm_tools", None)
+            if callable(unregister) and callable(lister):
+                for tool in lister():
+                    if tool.get("name") in {"sticker_list", "sticker_send"}:
+                        self._reply_completed.legacy_tools[tool["name"]] = dict(tool)
+                        unregister(tool["name"])
+            return True
         unregister = getattr(self, "unregister_llm_tool", None)
         register = getattr(self, "register_llm_tool", None)
         lister = getattr(self, "list_llm_tools", None)
@@ -1252,6 +1333,16 @@ class StickerManagerPlugin(NekoPluginBase):
             self.logger.info("sticker_send surface skipped: SDK 注册面不可用")
             return False
         try:
+            metas = {str(meta.get("name")): meta for meta in lister()}
+            for name, saved in self._reply_completed.legacy_tools.items():
+                if name not in metas:
+                    register(
+                        name=name, description=str(saved.get("description") or ""),
+                        parameters=saved.get("parameters"), role=saved.get("role"),
+                        handler=self.tool_sticker_send if name == "sticker_send" else self.tool_sticker_list,
+                        timeout=float(saved.get("timeout_seconds") or 20.0),
+                        **({"reply_tail": True} if "reply_tail" in inspect.signature(register).parameters else {}),
+                    )
             metas = {str(meta.get("name")): meta for meta in lister()}
         except Exception:  # noqa: BLE001 - 读不到自己的工具表就什么都不做
             self.logger.warning("sticker_send surface skipped: list_llm_tools 失败", exc_info=True)
@@ -1683,6 +1774,36 @@ class StickerManagerPlugin(NekoPluginBase):
         return Ok({"note": "send_cooldown_set", "cooldown_sec": self._settings.send.cooldown_sec})
 
     @ui.action(
+        id="set_every_reply",
+        label=tr("actions.set_every_reply.label", default="每轮配图"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="set_every_reply",
+        metadata={"agent_auto": False},
+        name=tr("entries.set_every_reply.name", default="设置每轮配图"),
+        description=tr("entries.set_every_reply.description", default="回复完成后每轮选择一张图片，保留纯文字要求和投递校验"),
+        input_schema={
+            "type": "object", "properties": {"enabled": {"type": "boolean"}},
+            "required": ["enabled"], "additionalProperties": False,
+        },
+    )
+    async def set_every_reply_entry(self, enabled: bool = False, **_):
+        if type(enabled) is not bool:
+            return Err(SdkError("invalid_value"))
+        if enabled and self._reply_completed.mode != "hook":
+            return Err(SdkError("reply_hook_required"))
+        try:
+            await self.config.set("sticker_manager.send.every_reply", enabled)
+        except Exception:
+            return Err(SdkError("config_unavailable"))
+        await self._reload_settings()
+        if self._settings.send.every_reply != enabled:
+            return Err(SdkError("config_unavailable"))
+        return Ok({"note": "every_reply_set", "enabled": self._settings.send.every_reply})
+
+    @ui.action(
         id="set_eager_attachment_turns",
         label=tr("actions.set_eager_attachment_turns.label", default="保存补图轮数"),
         tone="default",
@@ -1868,14 +1989,17 @@ class StickerManagerPlugin(NekoPluginBase):
                     "type": "integer",
                     "description": tr("fields.upload_size", default="总字节数（仅用于提前拒绝明显超限）"),
                 },
+                "kind": {"type": "string", "enum": ["zip", "image"]},
             },
             "required": ["name"],
         },
         llm_result_fields=["note", "session", "chunk_bytes"],
         timeout=30.0,
     )
-    async def import_upload_start_entry(self, name: str = "", size: Any = None, **_):
-        sid, error = self._library.upload_start(name, size=size)
+    async def import_upload_start_entry(self, name: str = "", size: Any = None, kind: str = "zip", **_):
+        if not isinstance(kind, str) or kind not in {"zip", "image"}:
+            return Err(SdkError("invalid_image"))
+        sid, error = self._library.upload_start(name, size=size, kind=kind)
         if error:
             return Err(SdkError(error))
         return Ok({"note": "upload_opened", "session": sid, "chunk_bytes": UPLOAD_CHUNK_BYTES})
@@ -1969,7 +2093,8 @@ class StickerManagerPlugin(NekoPluginBase):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
-        summary, error = self._library.upload_finish(
+        summary, error = await asyncio.to_thread(
+            self._library.upload_finish,
             session,
             tags=parse_tags_field(tags),
             group=normalize_group(group),
@@ -2025,6 +2150,8 @@ class StickerManagerPlugin(NekoPluginBase):
         timeout=15.0,
     )
     async def awareness_now_entry(self, **kwargs):
+        if self._reply_completed.managed:
+            return Ok({"note": "awareness", "status": "host_hook"})
         lanlan = await self._resolve_lanlan(kwargs)
         result = await self._awareness.inject_now(settings=self._settings, lanlan=lanlan, now=time.time())
         status = str(result.get("status", ""))
@@ -2091,10 +2218,15 @@ class StickerManagerPlugin(NekoPluginBase):
             # v0.17.1 观测轮：本次运行的四把读数（内存态，重启归零——面板必须标"本次运行"）。
             # 摆在这里是为了回答"到底断在哪一环"：话轮有多少 → 她调了几次 → 成了几次 → 拦了几次。
             "run": self._runstats.snapshot(turns=self._awareness.turns_seen),
-            "eager_attachment": self._eager_attachment.snapshot(),
+            "eager_attachment": (
+                self._reply_completed.snapshot() if self._reply_completed.managed
+                else self._eager_attachment.snapshot()
+            ),
+            "reply_completed": self._reply_completed.snapshot(),
             "config": {
                 "cooldown_sec": settings.send.cooldown_sec,
                 "eager_attachment_turns": settings.send.eager_attachment_turns,
+                "every_reply": settings.send.every_reply,
                 "inline_max_bytes": settings.send.inline_max_bytes,
                 "catalog_limit_for_model": settings.storage.catalog_limit_for_model,
                 "recent_dedup_count": settings.send.recent_dedup_count,
@@ -2318,6 +2450,8 @@ class StickerManagerPlugin(NekoPluginBase):
         _browse_all: bool = False,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        if self._reply_completed.managed and _source in {"tool", "agent"}:
+            return {"ok": False, "reason": "reply_hook_managed"}
         if not self._settings.enabled:
             return {"ok": False, "reason": "not_enabled"}
         lanlan = await self._resolve_lanlan(kwargs)
@@ -2493,6 +2627,7 @@ class StickerManagerPlugin(NekoPluginBase):
             self.logger.warning("config dump failed; keeping previous settings", exc_info=True)
             return self._settings
         with self._eager_attachment.control_lock:
+            self._reply_completed.invalidate()
             self._eager_attachment.invalidate()
             self._settings = StickerManagerSettings.from_config(config if isinstance(config, dict) else {})
         self.logger.info(

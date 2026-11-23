@@ -43,7 +43,12 @@
   from conversational continuation, submits only a blind image and honors sender
   gates. Normal/pending sends, new input, session changes, config invalidation,
   expired replies and catalog changes prevent stale/duplicate attachment.
-  Model binding is explicit; missing support does not disable ordinary tools.
+  Hosts with host-follow model slots auto-bind the usage to the familiar
+  model on install; missing support does not disable ordinary tools. In the
+  reply-hook path, persistent model failures (unbound, host model unconfigured
+  or unsupported, quota exhausted, or three consecutive gateway failures)
+  unsubscribe the hook before chat tools are restored, then the model is
+  re-probed every 10 minutes (`services/reply_completed.py`).
   Saving invalidates old work and persists through the existing configuration API.
   See `docs/eager-two-turn-implementation-20261017.md` for limits, validation
   and the dated threshold adjustment.

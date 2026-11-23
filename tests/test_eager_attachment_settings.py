@@ -78,3 +78,33 @@ def test_action_is_explicit_integer_setting_with_refresh(tmp_path, run_async):
     assert entry["input_schema"]["properties"]["turns"]["type"] == "integer"
     assert entry["input_schema"]["properties"]["turns"]["minimum"] == 0
     assert entry["input_schema"]["properties"]["turns"]["maximum"] == 10
+
+
+def test_every_reply_toggle_persists_without_overwriting_other_preferences(tmp_path, run_async):
+    plugin, host = _setup(tmp_path, run_async)
+    plugin._reply_completed.mode = "hook"
+    before = plugin._settings
+    assert run_async(plugin.set_every_reply_entry(enabled=True)).is_ok()
+    assert plugin._settings == replace(before, send=replace(before.send, every_reply=True))
+    assert run_async(plugin.dashboard_context())["config"]["every_reply"] is True
+    restored, _ = build_plugin(host)
+    assert run_async(restored._reload_settings()).send.every_reply is True
+    assert run_async(plugin.set_every_reply_entry(enabled=False)).is_ok()
+    assert plugin._settings == before
+
+
+@pytest.mark.parametrize("enabled", [None, 0, 1, "true", [], {}])
+def test_every_reply_rejects_nonboolean_values(tmp_path, run_async, enabled):
+    plugin, host = _setup(tmp_path, run_async)
+    assert not run_async(plugin.set_every_reply_entry(enabled=enabled)).is_ok()
+    assert not host.config.writes
+
+
+def test_every_reply_requires_hook_and_reports_persistence_failure(tmp_path, run_async):
+    plugin, host = _setup(tmp_path, run_async)
+    assert str(run_async(plugin.set_every_reply_entry(enabled=True)).error) == "reply_hook_required"
+    assert not host.config.writes
+    plugin._reply_completed.mode = "hook"
+    host.config.set_error = RuntimeError("unavailable")
+    assert str(run_async(plugin.set_every_reply_entry(enabled=True)).error) == "config_unavailable"
+    assert plugin._settings.send.every_reply is False

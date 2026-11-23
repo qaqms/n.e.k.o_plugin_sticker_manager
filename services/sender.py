@@ -112,6 +112,7 @@ class PendingHostSend:
     client: Any
     started: float
     text_len: int
+    source: str = "tool"
     duplicate: bool = False
     registering: bool = True
     uncertain: bool = False
@@ -247,7 +248,7 @@ class Sender:
         两条消息署名仍是插件，不冒充她自己的回复气泡。
         """
         moment = time.time() if now is None else now
-        if source == "tool" and host_reply is not None:
+        if source in {"tool", "eager"} and host_reply is not None:
             with self._inflight_lock:
                 previous = self._host_pending.get(lanlan)
                 reconcile = previous is not None and not previous.registering
@@ -334,7 +335,7 @@ class Sender:
             return SendResult.failure(ERR_BAD_IMAGE, sticker_id=sticker.id)
         _ext, mime = detected
         host_client = None
-        if source == "tool" and settings.send.host_reply_tail and host_reply is not None:
+        if source in {"tool", "eager"} and settings.send.host_reply_tail and host_reply is not None:
             try:
                 host_client = getattr(self._plugin.ctx, "reply_tail", None)
             except (AttributeError, RuntimeError):
@@ -343,6 +344,8 @@ class Sender:
                 host_client = None
             if host_client is not None and host_reply.get("role") != lanlan:
                 return SendResult.failure("reply_tail_target_mismatch", sticker_id=sticker.id)
+        if source == "eager" and host_reply is not None and host_client is None:
+            return SendResult.failure("reply_tail_unavailable", sticker_id=sticker.id)
 
         inline_budget = (
             _HOST_REPLY_TAIL_INLINE_MAX_BYTES if host_client is not None else settings.send.inline_max_bytes
@@ -408,6 +411,7 @@ class Sender:
             result = await self._submit_host(
                 sticker, part, lanlan=lanlan, settings=settings, client=host_client,
                 context=host_reply, text_len=len(text), epoch=epoch,
+                source=source, submission_guard=submission_guard, submission_lock=submission_lock,
             )
             result.text_submitted = text_submitted
             return result
@@ -538,16 +542,21 @@ class Sender:
         self, sticker: Sticker, part: dict[str, Any], *, lanlan: str,
         settings: StickerManagerSettings, client: Any, context: dict[str, Any],
         text_len: int, epoch: int,
+        source: str = "tool", submission_guard: Callable[[], bool] | None = None,
+        submission_lock: Any = None,
     ) -> SendResult:
         call_key = hashlib.sha256(str(context.get("token", "")).encode("utf-8")).hexdigest()[:16]
         pending = PendingHostSend(
             sticker, dict(context), f"sticker:{sticker.id}:{call_key}", client, time.monotonic(), text_len,
+            source=source,
         )
-        with self._inflight_lock:
+        with (submission_lock if submission_lock is not None else nullcontext()), self._inflight_lock:
             if self._closed or self._epoch != epoch:
                 return SendResult.failure("send_stopped", sticker_id=sticker.id)
+            if submission_guard is not None and not submission_guard():
+                return SendResult.failure("reply_attachment_superseded", sticker_id=sticker.id)
             with self._library.locked():
-                current, code = self._current_for_submission(sticker.id, source="tool")
+                current, code = self._current_for_submission(sticker.id, source=source)
                 if current is None or code:
                     return SendResult.failure(code or ERR_MISSING_FILE, sticker_id=sticker.id)
                 pending.sticker = current
@@ -670,7 +679,7 @@ class Sender:
             duplicate = pending.duplicate or identity in self._host_accounted
             if not duplicate:
                 self._record_submission(
-                    pending.sticker, lanlan=lanlan, settings=settings, source="tool",
+                    pending.sticker, lanlan=lanlan, settings=settings, source=pending.source,
                     moment=self._submission_time(receipt), text_len=pending.text_len,
                 )
             self._host_accounted[identity] = None
@@ -684,7 +693,7 @@ class Sender:
             code = str(reason or receipt.get("reason") or "reply_tail_rejected")
             self.note_attempt_failed(
                 lanlan=lanlan, sticker_id=pending.sticker.id, code=code,
-                settings=settings, now=time.time(), source="tool",
+                settings=settings, now=time.time(), source=pending.source,
                 text_submitted=pending.text_len > 0,
             )
             result = SendResult.failure(code, sticker_id=pending.sticker.id)
@@ -760,7 +769,7 @@ class Sender:
                     receipt=receipt if isinstance(receipt, dict) else {}, reason=code,
                 )
                 pending.terminal_deferred = True
-                outcomes.append(("tool", result))
+                outcomes.append((pending.source, result))
         return outcomes
 
     async def cancel_host_pending(self, *, settings: StickerManagerSettings) -> list[tuple[str, SendResult]]:

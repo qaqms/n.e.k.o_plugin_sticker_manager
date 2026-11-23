@@ -47,6 +47,7 @@ UI_ENTRIES = (
     "ui/shared.ts",
     "ui/preview.ts",
     "ui/library_model.ts",
+    "ui/file_drop.ts",
     "ui/components",
 )
 ROOT_FILES = (

@@ -104,6 +104,7 @@ function environment(options = {}) {
     children: children.flat(Infinity).filter((value) => value !== null && value !== false),
   });
   const preview = {
+    primeStickerPreview: () => {},
     useStickerPreview: () => ({
       preview: "data:image/png;base64,cHJldmlldw==",
       loading: false,
@@ -235,6 +236,24 @@ function surface(call = async () => ({ result: {} })) {
     ),
   };
 }
+
+test("action errors preserve host messages and translate complete error codes", async () => {
+  const env = environment();
+  const { extractCode, callAction } = env.load("ui/shared.ts");
+  assert.equal(extractCode("action: UI action 'set_eagerness' is not a plugin entry"),
+    "action: UI action 'set_eagerness' is not a plugin entry");
+  assert.equal(extractCode("config_unavailable"), "config_unavailable");
+  assert.equal(extractCode("action: config_unavailable"), "config_unavailable");
+  assert.equal(extractCode("Network request failed"), "Network request failed");
+  const denied = Object.assign(new Error("action: UI action was not found"), {
+    code: "PLUGIN_UI_ACTION_NOT_FOUND",
+  });
+  await assert.rejects(callAction(surface(async () => { throw denied; }), "preview", {}),
+    /plugin_ui_action_not_found/);
+  const original = new Error("action: Connection closed");
+  await assert.rejects(callAction(surface(async () => { throw original; }), "switch", {}),
+    (error) => error === original);
+});
 
 async function settle() {
   for (let step = 0; step < 20; step++) await Promise.resolve();
@@ -478,19 +497,114 @@ test("multi-image collection freezes the zone even if the browsing view changes"
   let runner;
   const props = surface(async (action, args) => {
     calls.push({ action, args });
-    if (action === "add" && calls.length === 1) {
+    if (action === "add_batch" && calls.length === 1) {
       runner.render().setViewZone("z2");
       runner.render();
     }
-    return { result: { note: "sticker_added" } };
+    return { result: { results: args.images.map((_image, index) => ({
+      note: "sticker_added", id: `new-${calls.length}-${index}`,
+    })) } };
   });
   const useModel = env.load("ui/library_model.ts").useLibraryModel;
   runner = env.runner(() => useModel(props));
   let model = runner.render();
   model.collectInto("g1");
   model = runner.render();
-  await model.chooseCollectedFiles([{ size: 1 }, { size: 1 }]);
+  await model.chooseCollectedFiles(Array.from({ length: 9 }, () => ({ size: 1 })));
   assert.deepEqual(calls.map((call) => call.args.zone), ["z1", "z1"]);
+});
+
+test("image collection uses bounded batches, accounts for duplicates, and refreshes once", async () => {
+  const calls = [];
+  let refreshes = 0;
+  const props = surface(async (action, args) => {
+    calls.push({ action, args });
+    return { result: { results: args.images.map((_image, index) =>
+      index === 0 ? { code: "duplicate_image" } : { note: "sticker_added", id: `new-${calls.length}-${index}` },
+    ) } };
+  });
+  props.api.refresh = async () => { refreshes++; };
+  const env = environment();
+  const useModel = env.load("ui/library_model.ts").useLibraryModel;
+  const runner = env.runner(() => useModel(props));
+  const importing = runner.render().importDroppedFiles(
+    Array.from({ length: 18 }, () => ({ name: "image.png", size: 1 })), "g1",
+  );
+  await runner.render().importDroppedFiles([{ name: "ignored.png", size: 1 }]);
+  await importing;
+  assert.deepEqual(calls.map((call) => call.args.images.length), [8, 8, 2]);
+  assert.ok(calls.every((call) => call.action === "add_batch" && call.args.group === "g1" && call.args.zone === "z1"));
+  assert.equal(refreshes, 1);
+  assert.match(runner.render().libraryNote, /已收 15 · 重复跳过 3/);
+});
+
+test("large images use the ordered chunk upload channel without oversized add requests", async () => {
+  const calls = [];
+  const props = surface(async (action, args) => {
+    calls.push({ action, args });
+    if (action === "import_upload_start") return { result: { session: "image", chunk_bytes: 1024 * 1024 } };
+    if (action === "import_upload_finish") return { result: { imported: 1 } };
+    return { result: {} };
+  });
+  const env = environment();
+  const useModel = env.load("ui/library_model.ts").useLibraryModel;
+  const runner = env.runner(() => useModel(props));
+  await runner.render().importDroppedFiles([{ name: "large.gif", size: 3 * 1024 * 1024, slice: () => ({}) }], "g1");
+  assert.equal(calls[0].args.kind, "image");
+  assert.deepEqual(calls.filter((call) => call.action === "import_upload_chunk").map((call) => call.args.seq), [0, 1, 2]);
+  assert.equal(calls.at(-1).args.group, "g1");
+  assert.equal(calls.at(-1).args.zone, "z1");
+  assert.match(runner.render().libraryNote, /已收 1/);
+});
+
+test("file drops consume browser navigation, respect busy state and route to the category", () => {
+  const env = environment();
+  const useFileDrop = env.load("ui/file_drop.ts").useFileDrop;
+  const received = [];
+  let disabled = false;
+  const runner = env.runner(() => useFileDrop((files) => received.push(files), disabled));
+  let prevented = 0;
+  let stopped = 0;
+  const files = [{ name: "one.png" }];
+  const event = {
+    dataTransfer: { types: ["Files"], files },
+    preventDefault: () => prevented++,
+    stopPropagation: () => stopped++,
+  };
+  runner.render().handlers.onDragEnter(event);
+  assert.equal(runner.render().dragging, true);
+  runner.render().handlers.onDragOver(event);
+  assert.equal(event.dataTransfer.dropEffect, "copy");
+  runner.render().handlers.onDrop(event);
+  assert.equal(runner.render().dragging, false);
+  assert.deepEqual(Array.from(received[0]), files);
+  disabled = true;
+  runner.render().handlers.onDragOver(event);
+  assert.equal(event.dataTransfer.dropEffect, "none");
+  runner.render().handlers.onDrop(event);
+  assert.equal(received.length, 1);
+  assert.equal(prevented, stopped);
+  const Panel = env.load("ui/panel.tsx").default;
+  const node = env.runner(() => Panel(surface())).render();
+  assert.equal(typeof walk(node, (item) => item.props.className?.startsWith("sticker-workspace"))[0].props.onDrop, "function");
+  assert.equal(typeof walk(node, (item) => item.type.name === "CategorySection")[0].props.onDropFiles, "function");
+});
+
+test("small imported previews are reused for tiles and full images", () => {
+  const env = environment({ realPreview: true });
+  const { primeStickerPreview, useStickerPreview } = env.load("ui/preview.ts");
+  const image = "data:image/png;base64,cHJldmlldw==";
+  primeStickerPreview("new", image);
+  let calls = 0;
+  const props = surface(async () => { calls++; return { result: {} }; });
+  for (const kind of ["thumb", "full"]) {
+    const runner = env.runner(() => useStickerPreview(props, "new", true, kind));
+    const state = runner.render();
+    assert.equal(state.preview, image);
+    assert.equal(state.loading, false);
+    runner.unmount();
+  }
+  assert.equal(calls, 0);
 });
 
 test("large batch updates and deletes send every ID in chunks of at most 200", async () => {
@@ -624,12 +738,12 @@ test("zone management and category descriptions expand without hiding the image 
   assert.equal(walk(zoneMenu, (item) => item.type.name === "Button")
     .some((item) => text(item).includes("让她改用这个区")), false);
   assert.ok(button(zoneNode, "让她改用这个区"));
-  const categoryNode = CategorySection({
+  const categoryNode = env.runner(() => CategorySection({
     surface: props,
     section: { name: "One", group: "g1", desc: "Long category description", editable: false,
       total: 1, rows: [props.state.stickers[0]] },
     selected: [], descEditing: "", collectBusy: false,
-  });
+  })).render();
   const categoryMenu = walk(categoryNode, (item) => item.type === "details")[0];
   assert.equal(categoryMenu.props.open, undefined);
   assert.match(text(categoryMenu), /Long category description/);
@@ -834,6 +948,34 @@ test("send cooldown saves numeric zero independently and blocks duplicate saves 
   assert.match(text(node), /关闭发送冷却/);
   assert.match(walk(node, (item) => item.type.name === "Alert")[0].props.message, /发送冷却已保存/);
   assert.equal(button(node, "保存发送冷却").props.disabled, true);
+});
+
+test("every-reply toggle calls its own action and disables conflicting rhythm controls", async () => {
+  const calls = [];
+  const props = surface(async (action, args) => {
+    calls.push({ action, args: { ...args } });
+    return { result: { enabled: args.enabled } };
+  });
+  props.state.reply_completed = { mode: "hook" };
+  props.state.eagerness = "eager";
+  props.state.config = { every_reply: false, cooldown_sec: 20 };
+  const env = environment();
+  const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
+  const runner = env.runner(() => AwarenessCard({ surface: props, mode: "settings" }));
+  let node = runner.render();
+  const toggle = walk(node, (item) => item.type.name === "Switch")[0];
+  assert.equal(toggle.props.label, "每轮配图");
+  toggle.props.onChange(true);
+  await settle();
+  assert.deepEqual(calls, [{ action: "set_every_reply", args: { enabled: true } }]);
+  props.state.config.every_reply = true;
+  node = runner.render();
+  assert.equal(walk(node, (item) => item.type.name === "Switch")[0].props.checked, true);
+  assert.equal(walk(node, (item) => item.type.name === "SegmentedControl")[0].props.disabled, true);
+  assert.equal(walk(node, (item) => item.type.name === "Slider" && item.props.max === 10).length, 0);
+  assert.equal(walk(node, (item) => item.type.name === "Input")[0].props.disabled, true);
+  button(node, "保存发送冷却").props.onClick();
+  assert.equal(calls.length, 1);
 });
 
 test("invalid cooldown drafts never invoke an action and an external update refreshes the input", () => {

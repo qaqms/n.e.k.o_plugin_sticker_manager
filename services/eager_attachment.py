@@ -17,6 +17,7 @@ from ..core.attachment_selection import (
     SELECTION_PROMPT,
     ConversationTurn,
     conversation_turn,
+    model_error_status,
     parse_selection,
     selection_candidates,
 )
@@ -281,10 +282,7 @@ class EagerAttachment:
         except TimeoutError:
             return self._note("model_timeout", turn)
         except Exception as exc:
-            body = getattr(exc, "body", None)
-            error = body.get("error", body) if isinstance(body, dict) else {}
-            code = error.get("code") if isinstance(error, dict) else ""
-            status = "model_unbound" if code == "model_usage_not_bound" else "model_unavailable"
+            status = model_error_status(exc)
             self._retry_at = time.monotonic() + 60
             return self._note(status, turn)
         finally:

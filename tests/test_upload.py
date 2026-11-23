@@ -19,8 +19,8 @@ import json
 import zipfile
 from pathlib import Path
 
-from conftest import PNG_BYTES, FakeConfig, FakeHostContext, build_plugin
-from sticker_manager.core.catalog import UPLOAD_CHUNK_BYTES, UPLOAD_MAX_TOTAL_BYTES
+from conftest import GIF_BYTES, PNG_BYTES, FakeConfig, FakeHostContext, build_plugin
+from sticker_manager.core.catalog import MAX_STICKER_BYTES, UPLOAD_CHUNK_BYTES, UPLOAD_MAX_TOTAL_BYTES
 from sticker_manager.services.library import Library
 
 
@@ -134,6 +134,58 @@ def _plugin(tmp_path):
 
 
 class TestUploadEntries:
+    def test_image_upload_preserves_animation_bytes_and_target_zone(self, tmp_path, run_async):
+        plugin = _plugin(tmp_path)
+        assert plugin._library.load().ok
+        zone, error = plugin._library.create_zone("Import target")
+        assert not error
+        start = run_async(plugin.import_upload_start_entry(name="animation.gif", size=len(GIF_BYTES), kind="image"))
+        assert start.is_ok()
+        sid = start.value["session"]
+        chunk = run_async(plugin.import_upload_chunk_entry(
+            session=sid, seq=0, data_base64=base64.b64encode(GIF_BYTES).decode("ascii"),
+        ))
+        assert chunk.is_ok()
+        result = run_async(plugin.import_upload_finish_entry(session=sid, zone=zone))
+        assert result.is_ok() and result.value["imported"] == 1
+        sticker = plugin._library.get(result.value["id"])
+        assert sticker.zone == zone
+        assert plugin._library.image_path(sticker).read_bytes() == GIF_BYTES
+        assert sid not in plugin._library._uploads
+        assert not list(plugin._library.uploads_dir.glob("*.part"))
+
+    def test_image_upload_size_and_kind_guards(self, tmp_path, run_async):
+        plugin = _plugin(tmp_path)
+        for kind in ([], None, "other"):
+            result = run_async(plugin.import_upload_start_entry(name="a.png", kind=kind))
+            assert not result.is_ok()
+        result = run_async(plugin.import_upload_start_entry(name="a.png", kind="image", size=MAX_STICKER_BYTES + 1))
+        assert not result.is_ok()
+        sid, error = plugin._library.upload_start("a.png", kind="image")
+        assert not error
+        plugin._library._uploads[sid]["size"] = MAX_STICKER_BYTES
+        assert plugin._library.upload_append(sid, 0, b"x") == "upload_too_large"
+        assert sid not in plugin._library._uploads
+
+    def test_batch_import_reports_individual_results_and_preserves_duplicate_rules(self, tmp_path, run_async):
+        plugin = _plugin(tmp_path)
+        b64 = base64.b64encode(PNG_BYTES).decode("ascii")
+        result = run_async(plugin.add_batch_entry(images=[b64, b64, "!!!"]))
+        assert result.is_ok()
+        rows = result.value["results"]
+        assert rows[0]["note"] == "sticker_added"
+        assert rows[1]["code"] == "duplicate_image"
+        assert rows[2]["code"] == "invalid_image"
+        assert plugin._library.count() == 1
+
+    def test_batch_rejects_oversized_or_malformed_requests_before_writing(self, tmp_path, run_async):
+        plugin = _plugin(tmp_path)
+        b64 = base64.b64encode(PNG_BYTES).decode("ascii")
+        for images in (None, [], [None], [b64] * 9, ["a" * (3 * 1024 * 1024 + 1)]):
+            result = run_async(plugin.add_batch_entry(images=images))
+            assert not result.is_ok() and str(result.error) == "invalid_image_batch"
+        assert plugin._library.count() == 0
+
     def test_entry_roundtrip(self, tmp_path, run_async):
         plugin = _plugin(tmp_path)
         blob = _make_pack({"a.png": PNG_BYTES})

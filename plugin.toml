@@ -13,7 +13,7 @@ keywords = [
     "meme",
     "gallery",
 ]
-version = "0.9.5"
+version = "0.9.6"
 type = "plugin"
 entry = "plugin.plugins.sticker_manager:StickerManagerPlugin"
 
@@ -25,8 +25,8 @@ recommended = ">=0.1.0,<0.2.0"
 supported = ">=0.1.0,<0.3.0"
 
 [plugin.models.eager_attachment]
-label = "爱发补图选图"
-description = "爱发档按面板设定的未配图轮数独立选图，0 表示每轮帮选。仅返回图片 ID 或跳过；需绑定文字模型，增加模型调用，不续写对话。"
+label = "回复配图选图"
+description = "支持回复完成钩子的宿主中，由插件在文字回复结束后按积极度独立选图。爱发档保留补图轮数设置。仅返回图片 ID 或跳过；新安装时宿主自动绑定到使魔模型，无需另配，也可改绑其它文字模型。每次选图增加一次模型调用，不续写对话。"
 required = false
 capabilities = ["text"]
 
@@ -95,6 +95,8 @@ probability_reuse_sec = 60.0
 eagerness = "natural"
 # 爱发档独立补图的连续未配图轮数（0..10）；0 每轮帮选，默认 1 轮。
 eager_attachment_turns = 1
+# 回复完成钩子每轮配图；开启时不受冷却/概率限制，无新图时允许复用。
+every_reply = false
 
 [sticker_manager.storage]
 # 给模型看的目录最多列几条（按最近使用排序）。

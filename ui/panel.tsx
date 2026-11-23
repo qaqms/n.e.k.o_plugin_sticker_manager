@@ -19,6 +19,7 @@ import { FocusCard } from "./components/focus_card";
 import { LibraryToolbar } from "./components/library_toolbar";
 import { ZoneBar } from "./components/zone_bar";
 import { useLibraryModel } from "./library_model";
+import { useFileDrop } from "./file_drop";
 import { buildSections, callAction, extractCode } from "./shared";
 import type { Surface } from "./shared";
 
@@ -41,6 +42,7 @@ const PANEL_STYLES = `
 .sticker-panel :is(button,summary,input,select):focus-visible { outline:2px solid var(--primary); outline-offset:3px; }
 .sticker-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
 .sticker-workspace { display:grid; gap:20px; min-width:0; }
+.sticker-workspace.is-file-dragging,.sticker-category.is-file-dragging { outline:2px dashed var(--primary); outline-offset:4px; background:var(--surface); }
 .sticker-section-title { margin:0; font-size:15px; line-height:1.5; }
 .sticker-sticky { position:sticky; top:0; z-index:2; display:grid; gap:8px; padding:8px 0; background:var(--bg); border-bottom:1px solid var(--border); min-width:0; }
 .sticker-feedback { display:flex; align-items:center; flex-wrap:wrap; gap:8px; font-size:13px; min-width:0; }
@@ -127,6 +129,10 @@ export default function Panel(props: Surface) {
   const switchBusyRef = useRef(false);
   const operationBusy = !!lib.pending || switchBusy || settingsBusy;
   const managementBusy = operationBusy || !!lib.refreshFailed;
+  const drop = useFileDrop(
+    (files) => { lib.importDroppedFiles(files, categoryFilter ? categoryFilter.slice(6) : ""); },
+    managementBusy,
+  );
   const stickers = state.stickers || [];
   const groups = state.groups || [];
   const zones = lib.zonesList;
@@ -266,7 +272,7 @@ export default function Panel(props: Surface) {
           </div>
         ) : null}
         {viewTab === "library" ? (
-          <div className="sticker-workspace">
+          <div className={`sticker-workspace${drop.dragging ? " is-file-dragging" : ""}`} {...drop.handlers}>
             <ZoneBar
               surface={props}
               zones={zones}
@@ -307,7 +313,7 @@ export default function Panel(props: Surface) {
               onCreate={lib.createCategory}
               onCancelCreate={lib.cancelCreate}
               onPickZip={() => lib.zipInputRef.current?.click()}
-              onZipChosen={(file) => { lib.importZip(file); }}
+              onImportFiles={(files) => { lib.importDroppedFiles(files, categoryFilter ? categoryFilter.slice(6) : ""); }}
               onImageFiles={(files) => { lib.chooseCollectedFiles(files); }}
               onExport={() => { lib.exportPack(); }}
               onRepair={() => { lib.repair(); }}
@@ -346,6 +352,7 @@ export default function Panel(props: Surface) {
                 onToggleSelect={lib.toggleSelected}
                 onOpen={lib.openFocus}
                 onCollect={() => lib.collectInto(section.group)}
+                onDropFiles={(files) => { lib.importDroppedFiles(files, section.group); }}
                 onSelectAll={() => lib.selectSection(section.rows)}
                 onToggleDescEditing={() => {
                   lib.setDescEditing(lib.descEditing === section.group ? "" : section.group);

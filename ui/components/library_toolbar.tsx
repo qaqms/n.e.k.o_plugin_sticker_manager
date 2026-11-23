@@ -29,7 +29,7 @@ export function LibraryToolbar(props: {
   onCreate: () => void;
   onCancelCreate: () => void;
   onPickZip: () => void;
-  onZipChosen: (file: any) => void;
+  onImportFiles: (files: any) => void;
   onImageFiles: (files: any) => void;
   onExport: () => void;
   onRepair: () => void;
@@ -90,15 +90,12 @@ export function LibraryToolbar(props: {
         <input
           ref={props.zipInputRef}
           type="file"
-          accept=".zip,application/zip"
+          accept=".zip,application/zip,image/png,image/jpeg,image/gif,image/webp"
+          multiple
           disabled={props.disabled}
           style={{ display: "none" }}
           onChange={(event: any) => {
-            const file =
-              event.target && event.target.files && event.target.files[0];
-            if (file) {
-              props.onZipChosen(file);
-            }
+            props.onImportFiles(event.target && event.target.files);
             event.target.value = "";
           }}
         />

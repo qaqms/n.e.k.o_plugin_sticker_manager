@@ -100,6 +100,8 @@ class SendSettings:
     eagerness: str = EAGERNESS_DEFAULT
     # Eager-only selection after 0..10 unillustrated replies; 0 selects each reply.
     eager_attachment_turns: int = 1
+    # Explicit post-reply mode; rhythm overrides apply only to this hook.
+    every_reply: bool = False
 
 
 @dataclass(frozen=True)
@@ -232,6 +234,7 @@ class StickerManagerSettings:
                     0,
                     10,
                 ),
+                every_reply=_as_bool(send_raw.get("every_reply"), send_default.every_reply),
             ),
             storage=StorageSettings(
                 catalog_limit_for_model=_clamp_int(

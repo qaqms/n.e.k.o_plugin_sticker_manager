@@ -59,6 +59,7 @@ def _dataclass_defaults() -> dict[str, object]:
         "sticker_manager.send.probability_reuse_sec": float(settings.send.probability_reuse_sec),
         "sticker_manager.send.eagerness": settings.send.eagerness,
         "sticker_manager.send.eager_attachment_turns": settings.send.eager_attachment_turns,
+        "sticker_manager.send.every_reply": settings.send.every_reply,
         "sticker_manager.storage.catalog_limit_for_model": settings.storage.catalog_limit_for_model,
         "sticker_manager.storage.usage_history_keep": settings.storage.usage_history_keep,
         "sticker_manager.awareness.enabled": settings.awareness.enabled,
@@ -96,6 +97,6 @@ def test_manifest_matches_dataclass_defaults():
 
 def test_dataclass_section_dataclasses_have_no_undeclared_extra():
     """dataclass 加了键但没进 _dataclass_defaults —— 用字段数钉住。"""
-    assert len(SendSettings.__dataclass_fields__) == 11
+    assert len(SendSettings.__dataclass_fields__) == 12
     assert len(StorageSettings.__dataclass_fields__) == 2
     assert len(AwarenessSettings.__dataclass_fields__) == 6

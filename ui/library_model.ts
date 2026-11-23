@@ -3,7 +3,7 @@
 //
 // 尺没动，成文的纪律原样继承：
 // - 长任务两把尺对齐（陷阱 19）：导入/导出/收尾走 LONG_CALL，分块是短任务维持默认；
-// - 收图走已测的 add 通道逐张收（魔数/查重/体积尺全复用），不再拿文件名当描述（轮 I）；
+// - 收图按体积限额分批，大图分块上传；服务端仍复用 add 的校验与查重；
 // - 全库共用**一个**隐藏图片输入框，目标分类走 ref 而不是 state（陷阱区轮 I 注释）；
 // - 删分类确认摊的是服务端张数 `section.total`（陷阱 22）。
 
@@ -19,8 +19,11 @@ import {
   MAX_STICKER_BYTES,
 } from "./shared";
 import type { Section, Surface, ZoneInfo } from "./shared";
+import { primeStickerPreview } from "./preview";
 
 const BATCH_ACTION_LIMIT = 200;
+const IMPORT_BATCH_FILES = 8;
+const IMPORT_BATCH_CHARS = 3 * 1024 * 1024;
 
 function readFileChunk(blob: any): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -313,7 +316,7 @@ export function useLibraryModel(surface: Surface) {
 
   // 套图包直传（v0.6.0）：选择 .zip → 分块上传 → 服务端同一把尺导入。
   // 分块大小由服务端 start 回包定（与预览共用同一条 ZMQ 帧尺），面板不硬编码。
-  const importZip = async (file: any) => {
+  const importZip = async (file: any, group = "") => {
     if (!beginTask("import_zip")) return;
     const targetZone = viewZoneRef.current;
     const targetName = zoneName(targetZone);
@@ -350,7 +353,7 @@ export function useLibraryModel(surface: Surface) {
       const fin = await callAction(
         surface,
         "import_upload_finish",
-        { session: sid, zone: targetZone },
+        { session: sid, zone: targetZone, group },
         LONG_CALL,
       );
       if (fin) {
@@ -487,7 +490,7 @@ export function useLibraryModel(surface: Surface) {
   };
 
   // 轮 I（2A）：收图分散到区块头。目标分类走 ref 传递（见 collectTargetRef 注释）；
-  // 逐张走已测的 add 通道（魔数/查重/体积尺全复用）。
+  // 批次保留同一个目标区和分类，服务端逐张复用 add 的校验与查重。
   const collectInto = (group: string) => {
     if (busyRef.current || refreshFailedRef.current) return;
     collectTargetRef.current = group;
@@ -507,48 +510,98 @@ export function useLibraryModel(surface: Surface) {
     let dup = 0;
     let big = 0;
     let fail = 0;
+    let completed = 0;
+    let batch: Array<{ base64: string; dataUrl: string }> = [];
+    let batchChars = 0;
+    const progress = () => setLibraryNote(
+      t("panel.collect.busy", {
+        done: completed, total: taken.length, defaultValue: "收藏中 {done}/{total}…",
+      }) + targetZoneNote(targetName),
+    );
+    const flush = async () => {
+      if (!batch.length) return;
+      const current = batch;
+      batch = [];
+      batchChars = 0;
+      try {
+        const result = await callAction(surface, "add_batch", {
+          images: current.map((image) => image.base64), group, zone: targetZone,
+        }, LONG_CALL);
+        if (!Array.isArray(result?.results) || result.results.length !== current.length) {
+          throw new Error("invalid_batch_result");
+        }
+        result.results.forEach((row: any, index: number) => {
+          if (row?.note === "sticker_added" && row.id) {
+            ok += 1;
+            primeStickerPreview(String(row.id), current[index].dataUrl);
+          } else if (row?.code === "duplicate_image") {
+            dup += 1;
+          } else {
+            fail += 1;
+          }
+        });
+      } catch {
+        // A failed response may have committed some files; never retry it automatically.
+        fail += current.length;
+      }
+      completed += current.length;
+      progress();
+    };
+    const uploadImage = async (file: any) => {
+      const start = await callAction(surface, "import_upload_start", {
+        name: file.name, size: file.size, kind: "image",
+      });
+      const sid = String(start?.session || "");
+      const chunkBytes = Number(start?.chunk_bytes);
+      if (!sid || !Number.isInteger(chunkBytes) || chunkBytes <= 0) throw new Error("upload_chunk_bad");
+      let seq = 0;
+      for (let offset = 0; offset < Number(file.size); offset += chunkBytes) {
+        const chunk = await readFileChunk(file.slice(offset, offset + chunkBytes));
+        await callAction(surface, "import_upload_chunk", { session: sid, seq, data_base64: chunk });
+        seq += 1;
+      }
+      const result = await callAction(surface, "import_upload_finish", {
+        session: sid, group, zone: targetZone,
+      }, LONG_CALL);
+      if (result?.imported === 1) ok += 1;
+      else if (result?.duplicates === 1) dup += 1;
+      else fail += 1;
+    };
+    progress();
     try {
       for (let i = 0; i < taken.length; i += 1) {
         const file = taken[i];
         if (Number(file.size) > MAX_STICKER_BYTES) {
           big += 1;
+          completed += 1;
+        } else if (Math.ceil(Number(file.size) / 3) * 4 > IMPORT_BATCH_CHARS) {
+          await flush();
+          try {
+            await uploadImage(file);
+          } catch {
+            fail += 1;
+          }
+          completed += 1;
         } else {
           try {
-            const b64 = dataUrlToBase64(await readAsDataUrl(file));
+            const dataUrl = await readAsDataUrl(file);
+            const b64 = dataUrlToBase64(dataUrl);
             if (!b64) {
               fail += 1;
+              completed += 1;
             } else {
-              // 收图不问逐图字段；分类说明承担未标注图片的目录正文。
-              const result = await callAction(surface, "add", {
-                data_base64: b64,
-                desc: "",
-                group,
-                zone: targetZone,
-              });
-              if (result && result.note === "sticker_added") {
-                ok += 1;
-              } else {
-                fail += 1;
-              }
+              if (batch.length >= IMPORT_BATCH_FILES || batchChars + b64.length > IMPORT_BATCH_CHARS) await flush();
+              batch.push({ base64: b64, dataUrl });
+              batchChars += b64.length;
             }
-          } catch (error) {
-            const raw =
-              error instanceof Error ? error.message : String(error ?? "");
-            if (extractCode(raw) === "duplicate_image") {
-              dup += 1;
-            } else {
-              fail += 1;
-            }
+          } catch {
+            fail += 1;
+            completed += 1;
           }
         }
-        setLibraryNote(
-          t("panel.collect.busy", {
-            done: i + 1,
-            total: taken.length,
-            defaultValue: "收藏中 {done}/{total}…",
-          }) + targetZoneNote(targetName),
-        );
+        progress();
       }
+      await flush();
       const extra = list.length - taken.length;
       setLibraryNote(
         t("panel.collect.done", {
@@ -582,6 +635,20 @@ export function useLibraryModel(surface: Surface) {
   // 隐藏输入框的落点：目标分类当场从 ref 取（轮 I 的 ref 纪律）。
   const chooseCollectedFiles = (files: any) => {
     return importFiles(files, collectTargetRef.current, collectZoneRef.current || viewZoneRef.current);
+  };
+
+  const importDroppedFiles = (files: any, group = "") => {
+    if (busyRef.current || refreshFailedRef.current) return;
+    const list: any[] = Array.from(files || []);
+    if (!list.length) return;
+    if (list.length === 1 && /\.zip$/i.test(String(list[0].name))) return importZip(list[0], group);
+    if (list.some((file) => !/\.(png|jpe?g|gif|webp)$/i.test(String(file.name)))) {
+      setLibraryNote(t("panel.import.unsupported", {
+        defaultValue: "文件类型不支持或混入了 ZIP；支持 PNG、JPG、GIF、WebP 图片，ZIP 须单独导入。",
+      }));
+      return;
+    }
+    return importFiles(list, group, viewZoneRef.current);
   };
 
   const toggleSelected = (id: string) => {
@@ -800,6 +867,7 @@ export function useLibraryModel(surface: Surface) {
     removeCategory,
     collectInto,
     chooseCollectedFiles,
+    importDroppedFiles,
     runBatch,
     batchDelete,
   };
