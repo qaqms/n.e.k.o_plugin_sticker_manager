@@ -96,6 +96,7 @@ export type State = {
   eager_attachment?: { status?: string; attempts?: number; sent?: number; reply_gap?: number };
   reply_completed?: {
     mode?: string; status?: string; received?: number; attempts?: number; registered?: number; sent?: number;
+    fallback_reason?: string;
     model_result?: {
       candidate_count?: number; duration_ms?: number; finish_reason?: string;
       output_chars?: number; completion_tokens?: number | null;
