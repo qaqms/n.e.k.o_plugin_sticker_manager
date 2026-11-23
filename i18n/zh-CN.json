@@ -443,5 +443,14 @@
   "fields.eager_attachment_turns": "补图触发轮数",
   "panel.attachment.turns.saved": "补图轮数已保存",
   "panel.attachment.turns.every": "每轮帮选",
-  "panel.attachment.turns.gap": "连续 {turns} 轮未配图后帮选"
+  "panel.attachment.turns.gap": "连续 {turns} 轮未配图后帮选",
+  "actions.set_send_probability.label": "保存配图概率",
+  "entries.set_send_probability.name": "设置配图概率",
+  "entries.set_send_probability.description": "每条回复按此概率决定是否选图，0 到 1；0.5 约为两轮一张，1 为每轮都选",
+  "fields.send_probability": "配图概率",
+  "panel.send.probability.off": "不自动配图",
+  "panel.send.probability.every": "每轮都选图",
+  "panel.send.probability.hint": "每条回复 {percent}% 概率选图，约每 {turns} 轮一张",
+  "panel.send.probability.saved": "配图概率已保存",
+  "panel.selection.status.probability_skip": "本轮未抽中配图概率，跳过选图。"
 }

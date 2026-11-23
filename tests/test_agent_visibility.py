@@ -18,10 +18,10 @@ def _entry_metadata():
 
 def test_all_management_entries_opt_out_of_automatic_agent_routing():
     entries = _entry_metadata()
-    assert len(entries) == 33
+    assert len(entries) == 34
     assert {
         "send", "list", "preview", "switch", "set_eagerness", "set_reminder_interval", "set_send_cooldown",
-        "set_eager_attachment_turns", "test_selection", "add_batch", "set_every_reply",
+        "set_eager_attachment_turns", "test_selection", "add_batch", "set_every_reply", "set_send_probability",
     } <= entries.keys()
     assert all(entry["metadata"]["agent_auto"] is False for entry in entries.values())
 

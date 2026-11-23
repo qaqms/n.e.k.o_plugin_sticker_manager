@@ -192,7 +192,7 @@ def test_clarification_does_not_change_tier_permissions_cadence_or_send_gates(ti
     assert (
         send.cooldown_sec, send.recent_dedup_count, send.probability,
         send.probability_reuse_sec, send.reply_tail_display_buffer_sec,
-    ) == (20.0, 5, 1.0, 60.0, 2.0)
+    ) == (0.0, 5, 0.5, 60.0, 2.0)
 
 
 @pytest.mark.parametrize("handler_name", ["tool_sticker_send", "send_entry"])

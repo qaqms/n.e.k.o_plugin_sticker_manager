@@ -443,5 +443,14 @@
   "fields.eager_attachment_turns": "Attachment selection turns",
   "panel.attachment.turns.saved": "Selection turns saved",
   "panel.attachment.turns.every": "Select every reply",
-  "panel.attachment.turns.gap": "Select after {turns} replies without an image"
+  "panel.attachment.turns.gap": "Select after {turns} replies without an image",
+  "actions.set_send_probability.label": "Save image probability",
+  "entries.set_send_probability.name": "Set image probability",
+  "entries.set_send_probability.description": "Chance that each reply gets an image selection, 0 to 1; 0.5 is about one image every two replies, 1 selects every reply",
+  "fields.send_probability": "Image probability",
+  "panel.send.probability.off": "No automatic images",
+  "panel.send.probability.every": "Select an image for every reply",
+  "panel.send.probability.hint": "{percent}% chance per reply, about one image every {turns} replies",
+  "panel.send.probability.saved": "Image probability saved",
+  "panel.selection.status.probability_skip": "This reply missed the image probability roll; selection skipped."
 }

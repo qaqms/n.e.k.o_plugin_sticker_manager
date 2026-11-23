@@ -5,10 +5,8 @@ import {
   Field,
   Inline,
   Input,
-  SegmentedControl,
   Slider,
   Stack,
-  Switch,
   Text,
   useEffect,
   useRef,
@@ -45,8 +43,8 @@ export function AwarenessCard(props: {
   const usesSelector = hookManaged || state.eagerness === "eager";
   const configuredInterval = awareness.min_interval_sec ?? 60;
   const [intervalDraft, setIntervalDraft] = useState(configuredInterval);
-  const configuredAttachmentTurns = state.config?.eager_attachment_turns ?? 1;
-  const [attachmentTurnsDraft, setAttachmentTurnsDraft] = useState(configuredAttachmentTurns);
+  const configuredProbability = Math.round((state.config?.probability ?? 0.5) * 100);
+  const [probabilityDraft, setProbabilityDraft] = useState(configuredProbability);
   const configuredCooldown = state.config?.cooldown_sec ?? 20;
   const [cooldownDraft, setCooldownDraft] = useState(String(configuredCooldown));
   const cooldownValue = Number(cooldownDraft);
@@ -64,8 +62,8 @@ export function AwarenessCard(props: {
     setCooldownDraft(String(configuredCooldown));
   }, [configuredCooldown]);
   useEffect(() => {
-    setAttachmentTurnsDraft(configuredAttachmentTurns);
-  }, [configuredAttachmentTurns]);
+    setProbabilityDraft(configuredProbability);
+  }, [configuredProbability]);
 
   const run = async (action: string, args: Record<string, unknown>) => {
     if (busyRef.current || props.disabled) return;
@@ -82,9 +80,9 @@ export function AwarenessCard(props: {
       } else if (action === "set_send_cooldown") {
         if (result?.cooldown_sec !== undefined) setCooldownDraft(String(result.cooldown_sec));
         setNote(t("panel.send.cooldown.saved", { defaultValue: "发送冷却已保存" }));
-      } else if (action === "set_eager_attachment_turns") {
-        if (result?.turns !== undefined) setAttachmentTurnsDraft(result.turns);
-        setNote(t("panel.attachment.turns.saved", { defaultValue: "补图轮数已保存" }));
+      } else if (action === "set_send_probability") {
+        if (result?.probability !== undefined) setProbabilityDraft(Math.round(result.probability * 100));
+        setNote(t("panel.send.probability.saved", { defaultValue: "配图概率已保存" }));
       } else if (action === "awareness_now" && result) {
         const status = String(result.status || "");
         setNote(t(`panel.awareness.status.${status}`, { defaultValue: status }));
@@ -236,27 +234,42 @@ export function AwarenessCard(props: {
       {props.mode === "settings" ? (
         <div className="sticker-preferences">
           <section className="sticker-setting">
-            <h2 className="sticker-section-title">
-              {t("panel.awareness.eagerness", { defaultValue: "配图积极度" })}
-            </h2>
-            <SegmentedControl
-              disabled={disabled || !!state.config?.every_reply}
-              value={String(state.eagerness || "natural")}
-              options={[
-                { value: "reserved", label: t("panel.preference.reserved", { defaultValue: "矜持" }) },
-                { value: "natural", label: t("panel.preference.natural", { defaultValue: "自然" }) },
-                { value: "eager", label: t("panel.preference.eager", { defaultValue: "爱发" }) },
-              ]}
-              onChange={(next: any) => {
-                run("set_eagerness", { eagerness: String(next || "natural") });
-              }}
-            />
-            {hookManaged ? <Switch
-              checked={!!state.config?.every_reply}
-              disabled={disabled}
-              label={t("actions.set_every_reply.label", { defaultValue: "每轮配图" })}
-              onChange={(next: boolean) => { run("set_every_reply", { enabled: next }); }}
-            /> : null}
+            <Field label={t("fields.send_probability", { defaultValue: "配图概率" })}>
+              <Stack gap={8}>
+                <Slider
+                  value={probabilityDraft}
+                  min={0}
+                  max={100}
+                  step={10}
+                  showValue
+                  disabled={disabled}
+                  onChange={setProbabilityDraft}
+                />
+                <Inline gap={12} wrap>
+                  <Text>
+                    {probabilityDraft === 0
+                      ? t("panel.send.probability.off", { defaultValue: "不自动配图" })
+                      : probabilityDraft === 100
+                        ? t("panel.send.probability.every", { defaultValue: "每轮都选图" })
+                        : t("panel.send.probability.hint", {
+                          defaultValue: "每条回复 {percent}% 概率选图，约每 {turns} 轮一张",
+                        }).replace("{percent}", String(probabilityDraft))
+                          .replace("{turns}", String(Math.round(100 / probabilityDraft * 10) / 10))}
+                  </Text>
+                  <Button
+                    tone="default"
+                    disabled={disabled || probabilityDraft === configuredProbability}
+                    onClick={() => {
+                      run("set_send_probability", { probability: probabilityDraft / 100 });
+                    }}
+                  >
+                    {pending === "set_send_probability"
+                      ? t("panel.awareness.interval.saving", { defaultValue: "保存中" })
+                      : t("actions.set_send_probability.label", { defaultValue: "保存配图概率" })}
+                  </Button>
+                </Inline>
+              </Stack>
+            </Field>
             {hookFallback ? fallbackNotice
             : usesSelector && attachmentStatus === "model_unbound" ? (
               <Alert tone="info" message={t("panel.attachment.unbound", {
@@ -274,43 +287,6 @@ export function AwarenessCard(props: {
               <Alert tone="warning" message={t(`panel.selection.status.${attachmentStatus}`, { defaultValue: attachmentStatus })} />
             ) : null}
           </section>
-          {state.eagerness === "eager" && !state.config?.every_reply ? (
-            <section className="sticker-setting">
-              <Field label={t("fields.eager_attachment_turns", { defaultValue: "补图触发轮数" })}>
-                <Stack gap={8}>
-                  <Slider
-                    value={attachmentTurnsDraft}
-                    min={0}
-                    max={10}
-                    step={1}
-                    showValue
-                    disabled={disabled}
-                    onChange={setAttachmentTurnsDraft}
-                  />
-                  <Inline gap={12} wrap>
-                    <Text>
-                      {attachmentTurnsDraft === 0
-                        ? t("panel.attachment.turns.every", { defaultValue: "每轮帮选" })
-                        : t("panel.attachment.turns.gap", {
-                          defaultValue: "连续 {turns} 轮未配图后帮选",
-                        }).replace("{turns}", String(attachmentTurnsDraft))}
-                    </Text>
-                    <Button
-                      tone="default"
-                      disabled={disabled || attachmentTurnsDraft === configuredAttachmentTurns}
-                      onClick={() => {
-                        run("set_eager_attachment_turns", { turns: attachmentTurnsDraft });
-                      }}
-                    >
-                      {pending === "set_eager_attachment_turns"
-                        ? t("panel.awareness.interval.saving", { defaultValue: "保存中" })
-                        : t("actions.set_eager_attachment_turns.label", { defaultValue: "保存补图轮数" })}
-                    </Button>
-                  </Inline>
-                </Stack>
-              </Field>
-            </section>
-          ) : null}
           <section className="sticker-setting">
             <div className="sticker-setting-control">
               <Field

@@ -33,6 +33,7 @@ import asyncio
 import base64
 import binascii
 import inspect
+import json
 import math
 import time
 from pathlib import Path
@@ -91,6 +92,17 @@ from .services.eager_attachment import EagerAttachment
 from .services.reply_completed import ReplyCompletedAttachment
 from .services.reply_diagnostics import reply_context_fields
 from .services.turn_end import TurnEndLogs, log_directories
+
+# Settings version 2 replaces eagerness tiers with a per-reply probability.
+_SETTINGS_MARKER = "settings_version.json"
+_SETTINGS_VERSION = 2
+_SETTINGS_V2 = {
+    "probability": 0.5,
+    "cooldown_sec": 0.0,
+    "every_reply": False,
+    "eagerness": "natural",
+    "eager_attachment_turns": 1,
+}
 
 __all__ = ["StickerManagerPlugin"]
 
@@ -212,6 +224,7 @@ class StickerManagerPlugin(NekoPluginBase):
 
     @lifecycle(id="startup")
     async def on_startup(self, **_):
+        await self._migrate_send_settings()
         await self._reload_settings()
         loaded = self._library.load(force=True)
         seed_note = "absent"
@@ -1774,6 +1787,50 @@ class StickerManagerPlugin(NekoPluginBase):
         return Ok({"note": "send_cooldown_set", "cooldown_sec": self._settings.send.cooldown_sec})
 
     @ui.action(
+        id="set_send_probability",
+        label=tr("actions.set_send_probability.label", default="保存配图概率"),
+        tone="default",
+        refresh_context=True,
+    )
+    @plugin_entry(
+        id="set_send_probability",
+        metadata={"agent_auto": False},
+        name=tr("entries.set_send_probability.name", default="设置配图概率"),
+        description=tr(
+            "entries.set_send_probability.description",
+            default="每条回复按此概率决定是否选图，0 到 1；0.5 约为两轮一张，1 为每轮都选",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "probability": {
+                    "type": "number", "minimum": 0, "maximum": 1,
+                    "description": tr("fields.send_probability", default="配图概率"),
+                },
+            },
+            "required": ["probability"],
+        },
+        llm_result_fields=["note", "probability"],
+    )
+    async def set_send_probability_entry(self, probability: float = 0.5, **_):
+        if (
+            isinstance(probability, bool)
+            or not isinstance(probability, (int, float))
+            or not math.isfinite(probability)
+            or not 0 <= probability <= 1
+        ):
+            return Err(SdkError("invalid_value"))
+        try:
+            await self.config.set("sticker_manager.send.probability", float(probability))
+        except Exception:
+            self.logger.warning("failed to persist [sticker_manager.send].probability", exc_info=True)
+            return Err(SdkError("config_unavailable"))
+        await self._reload_settings()
+        if self._settings.send.probability != float(probability):
+            return Err(SdkError("config_unavailable"))
+        return Ok({"note": "send_probability_set", "probability": self._settings.send.probability})
+
+    @ui.action(
         id="set_every_reply",
         label=tr("actions.set_every_reply.label", default="每轮配图"),
         tone="default",
@@ -2619,6 +2676,33 @@ class StickerManagerPlugin(NekoPluginBase):
     # ------------------------------------------------------------------
     # 内部
     # ------------------------------------------------------------------
+
+    async def _migrate_send_settings(self) -> None:
+        """One-time switch to probability-based sending (settings version 2).
+
+        Owners asked that existing installs adopt the new defaults outright: tiers
+        are retired, frequency is the per-reply probability and cooldown is off.
+        The marker lives in plugin data, never in the config defaults, so the
+        manifest default cannot mask an old override. A failed write retries on
+        the next start.
+        """
+        marker = Path(self.data_path(_SETTINGS_MARKER))
+        try:
+            if json.loads(marker.read_text(encoding="utf-8")).get("version", 0) >= _SETTINGS_VERSION:
+                return
+        except FileNotFoundError:
+            pass
+        except Exception:
+            self.logger.warning("settings migration marker unreadable; reapplying defaults")
+        try:
+            for key, value in _SETTINGS_V2.items():
+                await self.config.set(f"sticker_manager.send.{key}", value)
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            marker.write_text(json.dumps({"version": _SETTINGS_VERSION}), encoding="utf-8")
+        except Exception:
+            self.logger.warning("send settings migration failed; will retry next start", exc_info=True)
+            return
+        self.logger.info("sticker_manager send settings migrated to probability-based defaults")
 
     async def _reload_settings(self) -> StickerManagerSettings:
         try:

@@ -544,3 +544,77 @@ def test_next_reply_reconciles_previous_receipt_without_waiting_for_timer(tmp_pa
         assert len(plugin._library.read_usage()) == 2 and not host.push.calls
 
     run_async(scenario())
+
+
+class _Roll:
+    def __init__(self, value):
+        self.value = value
+        self.calls = 0
+
+    def random(self):
+        self.calls += 1
+        return self.value
+
+
+def test_probability_miss_skips_before_model_request(tmp_path, monkeypatch, run_async):
+    plugin, host, client, model, _ = setup(tmp_path, monkeypatch)
+    plugin._settings = replace(plugin._settings, send=replace(plugin._settings.send, probability=0.5))
+    roll = _Roll(0.9)
+    monkeypatch.setattr(reply_completed, "_RNG", roll)
+
+    async def scenario():
+        await plugin._reply_completed.maintain()
+        assert (await completed(plugin))["status"] == "probability_skip"
+        assert roll.calls == 1
+        model.assert_not_awaited()
+        assert not client.calls and not host.push.calls
+
+    run_async(scenario())
+
+
+def test_probability_hit_selects_and_sender_does_not_roll_again(tmp_path, monkeypatch, run_async):
+    from sticker_manager.services import sender as sender_module
+
+    plugin, host, client, model, _ = setup(tmp_path, monkeypatch)
+    plugin._settings = replace(plugin._settings, send=replace(plugin._settings.send, probability=0.5))
+    roll = _Roll(0.1)
+    sender_roll = _Roll(0.99)  # would decline if the sender rolled a second time
+    monkeypatch.setattr(reply_completed, "_RNG", roll)
+    monkeypatch.setattr(sender_module, "_RNG", sender_roll)
+
+    async def scenario():
+        await plugin._reply_completed.maintain()
+        assert (await completed(plugin))["status"] == "registered"
+        assert roll.calls == 1 and sender_roll.calls == 0
+        model.assert_awaited_once()
+
+    run_async(scenario())
+
+
+def test_every_reply_never_rolls(tmp_path, monkeypatch, run_async):
+    plugin, host, client, model, _ = setup(tmp_path, monkeypatch)
+    plugin._settings = replace(plugin._settings, send=replace(
+        plugin._settings.send, probability=0.0, every_reply=True,
+    ))
+    roll = _Roll(0.9)
+    monkeypatch.setattr(reply_completed, "_RNG", roll)
+
+    async def scenario():
+        await plugin._reply_completed.maintain()
+        assert (await completed(plugin))["status"] == "registered"
+        assert roll.calls == 0
+
+    run_async(scenario())
+
+
+def test_zero_probability_never_selects(tmp_path, monkeypatch, run_async):
+    plugin, host, client, model, _ = setup(tmp_path, monkeypatch)
+    plugin._settings = replace(plugin._settings, send=replace(plugin._settings.send, probability=0.0))
+    monkeypatch.setattr(reply_completed, "_RNG", _Roll(0.0))
+
+    async def scenario():
+        await plugin._reply_completed.maintain()
+        assert (await completed(plugin))["status"] == "probability_skip"
+        model.assert_not_awaited()
+
+    run_async(scenario())

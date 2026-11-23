@@ -68,8 +68,8 @@ def _as_bool(value: Any, default: bool) -> bool:
 class SendSettings:
     """发送链路的行为参数。"""
 
-    # 同一角色卡两次发送之间的最小间隔（秒）。防刷屏，也防模型连着甩图。
-    cooldown_sec: float = 20.0
+    # 同一角色卡两次发送之间的最小间隔（秒）。0 = 关闭；频率改由 probability 控制。
+    cooldown_sec: float = 0.0
     # Only a host-issued text-reply capability enables ordered tail delivery.
     host_reply_tail: bool = True
     # 默认即时投递工具选图；显式打开才沿用日志驱动的回复后排队。
@@ -87,10 +87,10 @@ class SendSettings:
     # （query 候选剔除 / 显式 id 拦下）。0 = 关闭。数据源是**持久台账**（usage.json），
     # 与冷却（内存表，重启清零）刻意不同："最近发过什么"是事实记忆，不是节奏状态。
     recent_dedup_count: int = 5
-    # 概率闸门（轮 D②）：她想发图时按此概率放行，未中则该轮回落纯文字（她可 force 绕行）。
-    # 1.0 = 关闭——默认关（与冷却不同，闸门会拒绝她已下的决定，属于行为干预，
-    # 主人显式打开才生效）。
-    probability: float = 1.0
+    # 配图概率：回复完成钩子路径每条回复在调用选图模型前掷一次，未中不调模型；
+    # 默认 0.5 ≈ 平均两轮一张（参考同类项目的按回复概率触发）。旧宿主工具路径
+    # 仍把它当放行闸门（她可 force 绕行）。1.0 = 每轮都选。
+    probability: float = 0.5
     # 同一角色卡一次掷骰的复用窗口（秒）：multi_candidates→拿 id 二次定夺是同一次
     # 意愿的延续，不许掷第二次骰（外部系统 p² 教训——判定环节只掷一次并缓存复用）。
     probability_reuse_sec: float = 60.0

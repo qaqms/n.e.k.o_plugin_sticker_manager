@@ -155,7 +155,7 @@ class TestCooldown:
         assert plugin._sender.cooldown_remaining("K", settings, now=1000.0) == 0.0
 
     def test_second_send_within_cooldown_blocked(self, tmp_path, run_async):
-        plugin, host, settings, lib = _setup(tmp_path)
+        plugin, host, settings, lib = _setup(tmp_path, send_overrides={"cooldown_sec": 20.0})
         sticker, _ = lib.add(data=PNG_BYTES, desc="笑", tags=[])
         first = run_async(plugin._sender.send(sticker, lanlan="K", settings=settings, source="tool", now=1000.0))
         assert first.ok
@@ -177,7 +177,7 @@ class TestCooldown:
 class TestConcurrentSend:
     @pytest.mark.parametrize("source,force", [("tool", False), ("tool", True), ("panel", False), ("agent", False)])
     def test_same_character_cannot_send_during_upload(self, tmp_path, run_async, source, force):
-        plugin, host, settings, lib = _setup(tmp_path)
+        plugin, host, settings, lib = _setup(tmp_path, send_overrides={"cooldown_sec": 20.0})
         sticker, _ = lib.add(data=PNG_BYTES + b"0" * (300 * 1024), desc="large", tags=[])
 
         async def scenario():
@@ -309,7 +309,7 @@ class TestConcurrentSend:
     def test_cooldown_starts_after_upload_finishes(self, tmp_path, run_async, monkeypatch):
         from sticker_manager.services import sender as sender_module
 
-        plugin, host, settings, lib = _setup(tmp_path)
+        plugin, host, settings, lib = _setup(tmp_path, send_overrides={"cooldown_sec": 20.0})
         sticker, _ = lib.add(data=PNG_BYTES + b"0" * (300 * 1024), desc="large", tags=[])
         clock = [10.0]
         monkeypatch.setattr(sender_module.time, "monotonic", lambda: clock[0])

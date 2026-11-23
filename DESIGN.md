@@ -27,7 +27,9 @@
   Selection, descriptions, editing and deletion expand in normal flow. Existing
   batch locks, hidden-selection counts, deletion confirmation, refresh recovery
   and detail scroll restoration remain in place.
-- Settings puts eagerness and send cooldown first. Reminder timing is collapsed
+- Settings puts the send probability and send cooldown first (0.9.6: the
+  eagerness tiers left the panel; the hook rolls the probability once per reply
+  before calling the selection model, and the sender does not roll again). Reminder timing is collapsed
   under Advanced settings; current values remain effective while collapsed.
 - Styling stays scoped to this plugin and uses host theme variables. The offline
   visual harness uses the real host renderer with bundled sample images and

@@ -350,7 +350,7 @@ def test_uncertain_cancellation_stays_pending_until_confirmed(tmp_path, run_asyn
 
 
 def test_cooldown_uses_actual_submission_not_polling_time(tmp_path, run_async, monkeypatch):
-    plugin, host, client, sticker = setup(tmp_path)
+    plugin, host, client, sticker = setup(tmp_path, cooldown_sec=20.0)
     monkeypatch.setattr("sticker_manager.services.sender.time.time", lambda: 1000)
     run_async(send(plugin, sticker))
     client.state = {"accepted": True, "status": "submitted", "submitted_at": 995.0}

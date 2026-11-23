@@ -120,6 +120,9 @@ class TestSendAndPreview:
 
     def test_send_respects_cooldown(self, tmp_path, run_async):
         plugin, _host = _make(tmp_path)
+        plugin._settings = StickerManagerSettings(
+            enabled=True, send=SendSettings(cooldown_sec=20.0), storage=StorageSettings(),
+        )
         sid = run_async(_add(plugin)).value["id"]
         assert run_async(plugin.send_entry(id=sid, **_ctx("K"))).is_ok()
         second = run_async(plugin.send_entry(id=sid, **_ctx("K")))

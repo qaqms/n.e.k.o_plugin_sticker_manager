@@ -543,6 +543,33 @@ def run_async() -> Any:
     return _run
 
 
+class _AlwaysHit:
+    """Deterministic RNG: every probability roll hits (random() == 0.0)."""
+
+    def random(self) -> float:
+        return 0.0
+
+
+@pytest.fixture(autouse=True)
+def probability_always_hits() -> Any:
+    """The shipped send probability is 0.5; unrelated tests must not be random.
+
+    Tests that exercise the probability gate replace `_RNG` themselves, which
+    overrides this default for their duration.
+    """
+    patched = []
+    for name in ("sticker_manager.services.sender", "sticker_manager.services.reply_completed"):
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "_RNG"):
+            patched.append((module, module._RNG))
+            module._RNG = _AlwaysHit()
+    try:
+        yield
+    finally:
+        for module, previous in patched:
+            module._RNG = previous
+
+
 @pytest.fixture(autouse=True)
 def no_host_http() -> Any:
     """全局关掉注入目标解析的宿主 HTTP 级（v0.15.0 实机踩的隔离坑）。

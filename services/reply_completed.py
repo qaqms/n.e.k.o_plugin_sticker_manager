@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import threading
 import time
 from collections import OrderedDict
@@ -37,11 +38,10 @@ _TEXT_ONLY = (
     "不要发图", "不要表情", "不发表情", "别发图", "不配图", "纯文字", "只用文字",
     "只回复文字", "no images", "text only", "no stickers", "text-only",
 )
-_TIER_GUIDANCE = {
-    "reserved": "矜持档：只在情绪表达明确且有高度贴切图片时选一张，普通问答优先纯文字。",
-    "natural": "自然档：聊天中有自然贴切的表情就选一张，不必每轮发，没有贴切图就跳过。",
-    "eager": "爱发档：轻松聊天有贴切图就选一张，日常问答、喜好和近况也算聊天，不必等强烈情绪。",
-}
+# How often to pick is decided before the model call (send.probability), so the
+# prompt only judges fit, as in the reference meme manager's selector mode.
+_SELECTION_GUIDANCE = "本轮需要判断是否配图：有贴切的图就选一张；候选都不贴切、会歪曲原意时跳过。"
+_RNG = random.SystemRandom()
 
 
 class ReplyCompletedAttachment:
@@ -103,7 +103,7 @@ class ReplyCompletedAttachment:
         if settings.send.every_reply:
             prompt += "每轮配图：普通聊天优先选一张最接近的简单表情；只有候选全都冲突时才 no_match。"
         else:
-            prompt += _TIER_GUIDANCE[settings.send.eagerness]
+            prompt += _SELECTION_GUIDANCE
         started = time.monotonic()
         payload = json.dumps(
             selection_payload(text, history, rows), ensure_ascii=False, separators=(",", ":"),
@@ -332,13 +332,7 @@ class ReplyCompletedAttachment:
             if any(word in user_text.casefold() for word in _TEXT_ONLY):
                 self._gaps[role] = 0
                 return self._note("text_only")
-            threshold = (
-                max(1, settings.send.eager_attachment_turns)
-                if settings.send.eagerness == "eager" and not settings.send.every_reply else 1
-            )
-            self._gaps[role] = min(threshold, self._gaps.get(role, 0) + 1)
-            if self._gaps[role] < threshold:
-                return self._note("waiting")
+            self._gaps[role] = self._gaps.get(role, 0) + 1
             if not settings.send.host_reply_tail:
                 return self._note("reply_tail_disabled")
             if any(len(row["text"]) > 2000 for row in history) or sum(len(row["text"]) for row in history) > 10000:
@@ -348,6 +342,10 @@ class ReplyCompletedAttachment:
             version, busy, _ = self.plugin._sender.activity(role)
             if busy:
                 return self._note("send_busy")
+            # One roll per reply, before the model call: a miss costs nothing.
+            probability = settings.send.probability
+            if not settings.send.every_reply and probability < 1.0 and _RNG.random() >= probability:
+                return self._note("probability_skip")
             epoch = self._epoch
             self._tasks[role] = (asyncio.get_running_loop(), asyncio.current_task())
         try:
@@ -407,9 +405,10 @@ class ReplyCompletedAttachment:
         with self._lock:
             if not valid():
                 return self._note("superseded")
+        # The probability was rolled before selecting; never roll it twice.
         send_settings = replace(settings, send=replace(
             settings.send, cooldown_sec=0.0, probability=1.0, recent_dedup_count=0,
-        )) if settings.send.every_reply else settings
+        )) if settings.send.every_reply else replace(settings, send=replace(settings.send, probability=1.0))
         submitting = time.monotonic()
         result = await sender.send(
             library.get(sid), lanlan=role, settings=send_settings, source="eager", host_reply=context,

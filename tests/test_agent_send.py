@@ -81,6 +81,7 @@ def test_agent_disabled_empty_and_all_recent_fail_without_sending(tmp_path, run_
 
 def test_agent_cooldown_with_other_available_images(tmp_path, run_async):
     plugin, host = _plugin(tmp_path)
+    plugin._settings = replace(plugin._settings, send=replace(plugin._settings.send, cooldown_sec=20.0))
     first = _add(plugin)
     second = _add(plugin, b"second")
     assert run_async(plugin.send_entry(id=first.id, query="happy", _ctx={"lanlan_name": "K"})).is_ok()

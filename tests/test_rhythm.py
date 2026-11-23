@@ -61,8 +61,9 @@ def _restore_rng():
 
 
 class TestProbabilityGate:
-    def test_off_by_default_never_rolls(self, tmp_path, run_async):
-        plugin, host, rng, _restore = _setup(tmp_path, _settings())
+    def test_default_is_half_and_full_probability_never_rolls(self, tmp_path, run_async):
+        assert SendSettings().probability == 0.5
+        plugin, host, rng, _restore = _setup(tmp_path, _settings(probability=1.0))
         sticker, _ = plugin._library.add(data=PNG_BYTES, desc="笑", tags=[])
         result = run_async(
             plugin._sender.send(sticker, lanlan="K", settings=plugin._settings, source="tool", now=1000.0)
@@ -113,7 +114,7 @@ class TestProbabilityGate:
         assert len(host.push.calls) == 1
 
     def test_force_bypasses_probability_but_not_cooldown(self, tmp_path, run_async):
-        plugin, host, rng, _ = _setup(tmp_path, _settings(probability=0.0), rng_values=())
+        plugin, host, rng, _ = _setup(tmp_path, _settings(probability=0.0, cooldown_sec=20.0), rng_values=())
         sticker, _ = plugin._library.add(data=PNG_BYTES, desc="笑", tags=[])
         forced = run_async(
             plugin._sender.send(sticker, lanlan="K", settings=plugin._settings, source="tool", now=1000.0, force=True)
