@@ -18,8 +18,7 @@ from sticker_manager.core.eagerness import (
     injection_guidance,
     tool_criteria,
 )
-
-from .test_reply_latency import _surface
+from test_reply_latency import _surface
 
 
 def _baseline():

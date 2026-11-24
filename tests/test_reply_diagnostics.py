@@ -11,8 +11,7 @@ from pathlib import Path
 import pytest
 from conftest import FakeHostContext, build_plugin
 from sticker_manager.services.reply_diagnostics import reply_context_fields
-
-from .test_host_reply_tail import CONTEXT
+from test_host_reply_tail import CONTEXT
 
 SPEC = importlib.util.spec_from_file_location(
     "trace_reply_http", Path(__file__).resolve().parents[1] / "tools/trace_reply_http.py",

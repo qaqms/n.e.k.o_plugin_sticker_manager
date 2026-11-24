@@ -21,6 +21,7 @@ import asyncio
 import importlib.util
 import logging
 import sys
+import time as _real_time
 import types
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -31,6 +32,13 @@ import pytest
 # importlib 模式下测试文件里的 `from conftest import ...` 需要这个名字可解析：
 # pytest 可能以唯一化模块名导入本文件，这里把常规名也注册上（幂等）。
 sys.modules.setdefault("conftest", sys.modules[__name__])
+
+# 测试之间共用的辅助函数用 `from test_xxx import ...` 引入（不用相对导入）：
+# 市场 CI 用宿主的 pytest.ini 跑测试，tests/ 不是包，相对导入会失败；那里 pytest 自己会把
+# tests/ 放进 sys.path。本仓的 importlib 模式不会，所以这里补上（幂等）。
+_TESTS_DIR = str(Path(__file__).resolve().parent)
+if _TESTS_DIR not in sys.path:
+    sys.path.insert(0, _TESTS_DIR)
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_NAME = "sticker_manager"
@@ -269,6 +277,44 @@ class FakeConfig:
             target[keys[-1]] = value
         else:
             self.data[section] = value
+
+
+class ScopedTime:
+    """只替插件某一个模块换掉 `time`：没覆盖的属性仍转给真 `time`。"""
+
+    def __init__(self, **overrides: Any) -> None:
+        self.overrides = overrides
+
+    def __getattr__(self, name: str) -> Any:
+        try:
+            return self.overrides[name]
+        except KeyError:
+            return getattr(_real_time, name)
+
+
+def patch_module_clock(monkeypatch: Any, module: Any, **overrides: Any) -> None:
+    """给 `module` 一个假时钟，不改全局 `time`。
+
+    直接 `monkeypatch.setattr(module.time, "monotonic", ...)` 改的是标准库 `time` 本身，
+    进程里所有线程都会读到假时钟；宿主 CI 的 clock_guard 会让这种测试失败。
+    同一模块多次调用时合并覆盖项。
+    """
+    current = getattr(module, "time")
+    base = current.overrides if isinstance(current, ScopedTime) else {}
+    monkeypatch.setattr(module, "time", ScopedTime(**{**base, **overrides}))
+
+
+def patch_plugin_clock(monkeypatch: Any, **overrides: Any) -> None:
+    """给本插件所有引用了 `time` 的模块同一个假时钟（宿主和其他线程仍用真时钟）。
+
+    发送冷却、台账时间戳、补图节拍分散在 sender / library / eager_attachment 等模块里，
+    只换其中一个会让它们彼此对不上。
+    """
+    for name, module in list(sys.modules.items()):
+        if (name == PACKAGE_NAME or name.startswith(PACKAGE_NAME + ".")) and module is not None:
+            current = getattr(module, "time", None)
+            if current is _real_time or isinstance(current, ScopedTime):
+                patch_module_clock(monkeypatch, module, **overrides)
 
 
 class TailClient:

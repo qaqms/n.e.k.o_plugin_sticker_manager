@@ -16,7 +16,8 @@
 | `020a7f6` | 概率发图替代档位；一次性迁移已有用户设置；面板改为概率滑块 |
 | `175262d` | 本交接文档初版 |
 | `b11e6d4` | 选图请求预填答案开头 `{"choice":`，免费推理模型提速 |
-| 本轮 | `[permissions]` 权限声明；修复市场 Verify 的 Ruff 导入排序；发行文档 |
+| `9ee0bf0` | `[permissions]` 权限声明；修复市场 Verify 的 Ruff 导入排序；发行文档 |
+| 本轮 | 修复市场 Verify 的测试运行：去掉测试间相对导入；假时钟只作用于插件模块 |
 
 正式安装包以 GitHub Release `v0.9.6` 的 `sticker_manager.neko-plugin` 为准；本地 `dist/` 下的包只供测试。发行流程与“不通知市场”的约定见 [updates-and-release.md](updates-and-release.md)，发行说明见 [releases/0.9.6.md](releases/0.9.6.md)。
 
@@ -107,6 +108,10 @@
 - 依赖旧默认冷却 20 秒的测试已改为显式设置 `cooldown_sec=20.0`。
 - 新增：`tests/test_send_probability.py`（迁移与入口）；`tests/test_reply_completed.py` 末尾的概率用例（未命中不调模型、命中后发送器不二次掷、every_reply 不掷、概率 0 永不选）。
 - 测试共用的 `ctx.reply_tail` 桩 `TailClient` 在 `tests/conftest.py`。**不要在测试里 `from tests.xxx import`**：市场 CI 在上一级目录运行 Ruff，`tests` 会被当作第三方包，导入分组与本地不同，Verify 会因 I001 失败（0.9.6 合并前的 6 次 Verify 均因此失败）。
+- 市场 CI 的 `check -r` 会在挂载到宿主 `plugin/plugins/sticker_manager` 的副本上，用**宿主的** `pytest.ini`、以宿主为 rootdir 跑本插件测试（带 pytest-randomly 固定种子与宿主的 clock_guard）。由此两条规矩：
+  - 测试之间共用辅助函数写 `from test_xxx import ...`，不要写相对导入 `from .test_xxx`（`tests/` 不是包）；`conftest.py` 会把 `tests/` 放进 `sys.path` 供本仓的 importlib 模式使用。
+  - 假时钟用 `conftest.patch_plugin_clock(monkeypatch, monotonic=..., time=...)`，不要 `monkeypatch.setattr(xxx.time, "monotonic", ...)`——后者替换的是全局 `time`，会被 clock_guard 判失败。
+- 本地复现市场 CI：把插件按 `git ls-files` 复制到一份宿主 `main` 的 `plugin/plugins/sticker_manager`，在宿主根目录执行 `PYTHONUTF8=1 python -m plugin.neko_plugin_cli.cli check -r sticker_manager`（Windows 不设 `PYTHONUTF8` 会因 GBK 解码失败）。本仓的 `tools/release_gate.py` 会跳过宿主侧测试，查不出这类问题。
 - 没有 `pytest-timeout`；若怀疑卡死，先确认没有残留的 pytest 进程（之前就是两份重复运行导致误判）。
 
 门禁（在插件目录执行；`ruff` 关卡与市场 CI 同参数，但目录布局不同，见上条）：

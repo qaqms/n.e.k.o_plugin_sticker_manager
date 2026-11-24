@@ -21,8 +21,7 @@ from sticker_manager.core.eagerness import (
 )
 from sticker_manager.core.tool_surface import build_send_tool_description
 from sticker_manager.services.sender import SendResult
-
-from .test_natural_baseline import _baseline, _natural
+from test_natural_baseline import _baseline, _natural
 
 _GROUP = "smile"
 _INDEPENDENT_GUIDANCE = (

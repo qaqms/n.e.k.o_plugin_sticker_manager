@@ -4,9 +4,8 @@
 from __future__ import annotations
 
 import pytest
-from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, build_plugin
+from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, build_plugin, patch_plugin_clock
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings
-from sticker_manager.services import sender as sender_module
 from sticker_manager.services.sender import SendResult
 from sticker_manager.services.turn_end import TurnEndLogs
 
@@ -31,8 +30,8 @@ def _setup(tmp_path, monkeypatch, *, deferred=False, data=PNG_BYTES):
     plugin._library.load(force=True)
     sticker, _ = plugin._library.add(data=data, desc="smile", tags=[])
     clock = [100.0]
-    monkeypatch.setattr(sender_module.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(sender_module.time, "time", lambda: 1000.0)
+    patch_plugin_clock(monkeypatch, monotonic=lambda: clock[0])
+    patch_plugin_clock(monkeypatch, time=lambda: 1000.0)
     log = tmp_path / "logs" / "N.E.K.O_Main_20261002.log"
     if deferred:
         log.parent.mkdir()

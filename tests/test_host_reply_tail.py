@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, TailClient, build_plugin
+from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, TailClient, build_plugin, patch_plugin_clock
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings
 
 CONTEXT = {
@@ -178,9 +178,9 @@ def test_duplicate_completed_registration_does_not_inflate_usage(tmp_path, run_a
 
 def test_timeout_and_shutdown_clear_local_state_without_replay(tmp_path, run_async, monkeypatch):
     plugin, host, client, sticker = setup(tmp_path)
-    monkeypatch.setattr("sticker_manager.services.sender.time.monotonic", lambda: 100)
+    patch_plugin_clock(monkeypatch, monotonic=lambda: 100)
     run_async(send(plugin, sticker))
-    monkeypatch.setattr("sticker_manager.services.sender.time.monotonic", lambda: 500)
+    patch_plugin_clock(monkeypatch, monotonic=lambda: 500)
     outcome = run_async(plugin._sender.drain(settings=plugin._settings))
     assert outcome[0][1].code == "reply_tail_timeout"
     assert client.calls[-1][0] == "cancel" and not plugin._sender._host_pending
@@ -331,7 +331,7 @@ def test_uncertain_cancellation_stays_pending_until_confirmed(tmp_path, run_asyn
 
 def test_cooldown_uses_actual_submission_not_polling_time(tmp_path, run_async, monkeypatch):
     plugin, host, client, sticker = setup(tmp_path, cooldown_sec=20.0)
-    monkeypatch.setattr("sticker_manager.services.sender.time.time", lambda: 1000)
+    patch_plugin_clock(monkeypatch, time=lambda: 1000)
     run_async(send(plugin, sticker))
     client.state = {"accepted": True, "status": "submitted", "submitted_at": 995.0}
     run_async(plugin._sender.drain(settings=plugin._settings))

@@ -7,7 +7,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
-from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, build_plugin
+from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, build_plugin, patch_plugin_clock
 from sticker_manager.core.configuration import (  # pyright: ignore[reportMissingImports] — 包名由 conftest 在测试时注册；独立仓静态面不可解析
     SendSettings,
     StickerManagerSettings,
@@ -307,12 +307,11 @@ class TestConcurrentSend:
         assert len(host.push.calls) == 1
 
     def test_cooldown_starts_after_upload_finishes(self, tmp_path, run_async, monkeypatch):
-        from sticker_manager.services import sender as sender_module
 
         plugin, host, settings, lib = _setup(tmp_path, send_overrides={"cooldown_sec": 20.0})
         sticker, _ = lib.add(data=PNG_BYTES + b"0" * (300 * 1024), desc="large", tags=[])
         clock = [10.0]
-        monkeypatch.setattr(sender_module.time, "monotonic", lambda: clock[0])
+        patch_plugin_clock(monkeypatch, monotonic=lambda: clock[0])
 
         async def upload(*args, **kwargs):
             clock[0] += 8.0

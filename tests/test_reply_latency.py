@@ -8,8 +8,7 @@ from conftest import PNG_BYTES, FakeHostContext, build_plugin
 from sticker_manager.core.configuration import StickerManagerSettings
 from sticker_manager.core.eagerness import REPLY_FIRST_NOTE, injection_pointer
 from sticker_manager.core.tool_surface import build_list_tool_description, build_send_tool_description
-
-from .test_host_reply_tail import CONTEXT
+from test_host_reply_tail import CONTEXT
 
 
 def _surface(plugin, *, modern=True, reject_context=False):

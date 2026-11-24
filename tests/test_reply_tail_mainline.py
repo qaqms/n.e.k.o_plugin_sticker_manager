@@ -8,10 +8,9 @@ import pytest
 from conftest import GIF_BYTES, PNG_BYTES
 from sticker_manager.core.catalog import content_sha256
 from sticker_manager.services.bundled_pack import open_pack
-
-from .test_host_reply_tail import CONTEXT, send, setup
-from .test_media import animated_webp
-from .test_official_delivery import make_pack
+from test_host_reply_tail import CONTEXT, send, setup
+from test_media import animated_webp
+from test_official_delivery import make_pack
 
 
 @pytest.mark.parametrize("selector", [{"group": "mixed"}, {"query": "开心"}])

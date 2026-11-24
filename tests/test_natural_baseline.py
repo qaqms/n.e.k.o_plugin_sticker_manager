@@ -24,8 +24,7 @@ from sticker_manager.core.eagerness import (
 )
 from sticker_manager.core.quick_candidates import quick_candidates_for_tool
 from sticker_manager.core.tool_surface import build_list_tool_description, build_send_tool_description
-
-from .test_reply_latency import _surface
+from test_reply_latency import _surface
 
 
 def _baseline():

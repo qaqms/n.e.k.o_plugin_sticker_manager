@@ -9,7 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 
 import pytest
-from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, build_plugin
+from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, build_plugin, patch_plugin_clock
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings
 from sticker_manager.services import sender as sender_module
 from sticker_manager.services.turn_end import TurnEndLogs, log_directories
@@ -109,7 +109,7 @@ def test_default_tool_submission_survives_new_input_and_tail_ticks(
 @pytest.fixture
 def monotonic_clock(monkeypatch):
     clock = [100.0]
-    monkeypatch.setattr(sender_module.time, "monotonic", lambda: clock[0])
+    patch_plugin_clock(monkeypatch, monotonic=lambda: clock[0])
     return clock
 
 
@@ -279,7 +279,7 @@ def test_multiple_ends_cancel_ambiguous_ticket(tmp_path, run_async):
 def test_timeout_drops_instead_of_sending_early(tmp_path, run_async, monkeypatch):
     plugin, host, sticker, _log, _signals = _setup(tmp_path)
     clock = [10.0]
-    monkeypatch.setattr(sender_module.time, "monotonic", lambda: clock[0])
+    patch_plugin_clock(monkeypatch, monotonic=lambda: clock[0])
     run_async(_send(plugin, sticker))
     clock[0] += 301
     result = run_async(_drain(plugin))[0][1]
@@ -513,7 +513,7 @@ def test_queue_and_release_do_not_roll_probability_twice(tmp_path, run_async, mo
 def test_cooldown_starts_at_delivery_not_queue_time(tmp_path, run_async, monkeypatch):
     plugin, _host, sticker, log, _signals = _setup(tmp_path)
     clock = [1000.0]
-    monkeypatch.setattr(sender_module.time, "time", lambda: clock[0])
+    patch_plugin_clock(monkeypatch, time=lambda: clock[0])
     assert run_async(_send(plugin, sticker)).queued
     clock[0] += 30.0
     _append(log, _end())

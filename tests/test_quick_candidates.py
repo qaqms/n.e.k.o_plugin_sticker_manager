@@ -19,8 +19,7 @@ from sticker_manager.core.quick_candidates import (
 )
 from sticker_manager.core.tool_surface import build_list_tool_description, build_send_tool_description, catalog_for_tool
 from sticker_manager.services.library import Library
-
-from .test_reply_latency import _surface
+from test_reply_latency import _surface
 
 
 def _ids(text):

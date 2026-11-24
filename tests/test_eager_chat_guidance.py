@@ -25,8 +25,7 @@ from sticker_manager.core.eagerness import (
 )
 from sticker_manager.core.tool_surface import build_list_tool_description, build_send_tool_description
 from sticker_manager.services.awareness import Awareness
-
-from .test_natural_baseline import _baseline, _natural
+from test_natural_baseline import _baseline, _natural
 
 _SHARED_POINTER = (
     f"{REPLY_FIRST_NOTE}"

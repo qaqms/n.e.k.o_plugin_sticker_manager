@@ -10,7 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from conftest import PNG_BYTES, FakeBus, FakeConfig, FakeHostContext, build_plugin
+from conftest import PNG_BYTES, FakeBus, FakeConfig, FakeHostContext, build_plugin, patch_plugin_clock
 from sticker_manager.core.attachment_selection import conversation_turn, parse_selection, selection_candidates
 from sticker_manager.core.configuration import StickerManagerSettings
 from sticker_manager.services import eager_attachment
@@ -19,7 +19,7 @@ from sticker_manager.services.turn_end import TurnEndLogs
 
 def _setup(tmp_path, monkeypatch, tier="eager", image=PNG_BYTES, turns=1):
     clock = [1000.0]
-    monkeypatch.setattr(eager_attachment.time, "time", lambda: clock[0])
+    patch_plugin_clock(monkeypatch, time=lambda: clock[0])
     monkeypatch.setattr(eager_attachment, "CHECK_INTERVAL_SEC", 0.001)
     host = FakeHostContext(
         data_root=tmp_path, bus=FakeBus(),
