@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, build_plugin
+from conftest import GIF_BYTES, PNG_BYTES, FakeHostContext, TailClient, build_plugin
 from sticker_manager.core.configuration import SendSettings, StickerManagerSettings
 
 CONTEXT = {
@@ -16,26 +16,6 @@ CONTEXT = {
     "role": "K", "call_id": "call-A", "source": "plugin:sticker_manager",
     "token": "host-issued-secret",
 }
-
-
-class TailClient:
-    def __init__(self):
-        self.calls = []
-        self.receipt = {"accepted": True, "status": "registered"}
-        self.state = {"accepted": True, "status": "registered"}
-        self.cancel_receipt = {"accepted": True, "status": "cancelled", "reason": "plugin_cancelled"}
-
-    async def register(self, context, *, registration_id, parts, ai_behavior="blind", timeout=5.0):
-        self.calls.append(("register", dict(context), registration_id, parts, ai_behavior, timeout))
-        return dict(self.receipt)
-
-    async def status(self, context, *, registration_id, timeout=5.0):
-        self.calls.append(("status", dict(context), registration_id, timeout))
-        return dict(self.state)
-
-    async def cancel(self, context, *, registration_id, timeout=5.0):
-        self.calls.append(("cancel", dict(context), registration_id, timeout))
-        return dict(self.cancel_receipt)
 
 
 def setup(tmp_path, *, gif=False, **settings):

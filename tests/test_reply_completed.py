@@ -6,11 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import PNG_BYTES, FakeBus, FakeConfig, FakeHostContext, build_plugin
+from conftest import PNG_BYTES, FakeBus, FakeConfig, FakeHostContext, TailClient, build_plugin
 from sticker_manager.core.configuration import StickerManagerSettings
 from sticker_manager.services import reply_completed
-
-from tests.test_host_reply_tail import TailClient
 
 
 def setup(tmp_path, monkeypatch, *, tier="natural"):

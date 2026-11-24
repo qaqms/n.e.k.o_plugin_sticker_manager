@@ -1,21 +1,24 @@
 # 0.9.6 续接开发文档：免配模型、降级与概率发图
 
-更新日期：2026-11-23
+更新日期：2026-11-24
 前一份交接：[project-handoff-2026-11-23.md](project-handoff-2026-11-23.md)（目标与宿主背景仍有效，其中“当前代码状态与已知缺口”一节已被本文取代）
 
 ## 一句话现状
 
-分支 `feature/reply-hook-0.9.6` 已推送，插件版本 `0.9.6`。新安装无需配置插件模型（宿主 #3741 自动绑定到使魔模型）；选图模型不可用时自动降级回主模型工具；发图频率改为**每条回复按概率掷一次**，默认 50%（约两轮一张）、冷却 0 秒，三个积极度档位已从面板移除。单测、ruff 与最新宿主的 check / release / hosted-tsx 门禁全部通过，**但真实宿主端到端（免费模型实际选图并显示）尚未验证**。
+`0.9.6` 已合并到 `main`，以 `v0.9.6` 标签在 GitHub 发行，**未通知插件市场**（Steam 版宿主尚未更新到 #3585 / #3741 所需版本）。新安装无需配置插件模型（宿主 #3741 自动绑定到使魔模型）；选图模型不可用时自动降级回主模型工具；发图频率改为**每条回复按概率掷一次**，默认 50%（约两轮一张）、冷却 0 秒，三个积极度档位已从面板移除；选图请求用答案预填，免费模型 1–3 秒出结果。维护者已在真实宿主中实测，效果良好。
 
-## 本分支提交
+## 提交记录（均已在 main）
 
 | 提交 | 内容 |
 | --- | --- |
 | `0912e93` | 0.9.6：宿主网关错误码分别诊断；持续失败降级回工具模式；文档改为“无需绑定” |
 | `971be5e` | 面板状态类型补 `reply_completed.fallback_reason`（修 hosted-tsx 门禁） |
 | `020a7f6` | 概率发图替代档位；一次性迁移已有用户设置；面板改为概率滑块 |
+| `175262d` | 本交接文档初版 |
+| `b11e6d4` | 选图请求预填答案开头 `{"choice":`，免费推理模型提速 |
+| 本轮 | `[permissions]` 权限声明；修复市场 Verify 的 Ruff 导入排序；发行文档 |
 
-导入包：`F:\ai\neko kaifa4\dist\sticker_manager_v0.9.6.neko-plugin`（用最新宿主构建，sha256 前缀 `5330104a2ae39231`）。分支尚未合并到主线、未打 tag、未提 PR。
+正式安装包以 GitHub Release `v0.9.6` 的 `sticker_manager.neko-plugin` 为准；本地 `dist/` 下的包只供测试。发行流程与“不通知市场”的约定见 [updates-and-release.md](updates-and-release.md)，发行说明见 [releases/0.9.6.md](releases/0.9.6.md)。
 
 ## 产品决策（来自维护者，勿擅改）
 
@@ -58,6 +61,29 @@
 - 选图提示词只剩一句 `_SELECTION_GUIDANCE`：有贴切的就选一张，不贴切就跳过。
 - 面板入口 `set_send_probability`（0–1，校验 bool/NaN/越界），写 `sticker_manager.send.probability` 后重载并回读确认。
 
+### 答案预填（`b11e6d4`）
+
+- 选图请求在消息末尾多放一条助手消息 `{"choice":`（`ANSWER_PREFIX`）。推理模型的思考发生在回复开头，开头被占后直接续写序号，免费模型实测 1.2–2.6 秒、思考 0 token。
+- 返回内容不以 `{` 或 ``` 开头时视为续写，补上前缀再交给 `parse_reply_selection`；返回完整 JSON 的供应商照常解析。`choice` 只会是整数或关键词，不会是对象，所以这条判断不会误伤。
+- 首次请求报 `upstream_request_rejected` / `invalid_request` / `unsupported_parameter` 时，改发普通请求，并把 `_prefill` 置 False 直到插件重启。宿主把几乎所有 4xx 都归为 `upstream_request_rejected`，因此无关的 4xx 也会关掉预填并多耗一次额度；重发与首次共用 12 秒上限。
+- 面板与日志的 `prefill` 字段：`used` / `off` / `rejected`。
+- 已评估并放弃“主回复开始时就并行选图”：选图必须同时看到用户的话和猫娘的回复，而回复只有说完才拿得到；宿主也只允许在 `after_reply` 回调期间登记图片。
+
+### 权限声明（`plugin.toml` 的 `[permissions]`）
+
+宿主 #3940 起，`check -r` 会把代码扫描结果与声明比对；明确用到却未声明会报错，完全没有权限表目前只是警告，以后也会变成错误。当前声明：
+
+| 权限 | 类型 | 用途 |
+| --- | --- | --- |
+| `plugin_sdk.main_agent.messages:push` | require | 发送表情包 |
+| `system.network:connect`（`127.0.0.1`） | require | 本机宿主接口查角色与状态 |
+| `system.env:read` | require | 定位宿主数据目录（规范要求环境变量一律 require） |
+| `plugin_sdk.models:invoke` | ask，background | 回复完成回调里选图 |
+| `plugin_sdk.main_agent.conversations:read` / `memory:read` | ask，background | 旧宿主补图轮询读最近一轮 |
+| `system.fs:read` | ask，background | 旧宿主读日志判断回复结束 |
+
+不声明 `system.fs:write`：插件只写自己的数据目录，扫描对此给出“不确定”警告属正常。新增代码若用到上表以外的能力，需同步补声明，否则市场 CI 会失败。
+
 ### 一次性设置迁移（`__init__.py`）
 
 - `on_startup` 在 `_reload_settings()` 前调用 `_migrate_send_settings()`。
@@ -76,13 +102,14 @@
 & "F:\ai\neko kaifa7\最新版本的宿主\N.E.K.O\.venv\Scripts\python.exe" -m pytest tests -q -p no:cacheprovider --deselect tests/test_reply_tail_transport.py
 ```
 
-- 当前 1411 passed、2 skipped，约 65 秒。`test_reply_tail_transport.py` 在本机环境下损坏，需排除。
+- 当前 1417 passed、2 skipped，约 70 秒。`test_reply_tail_transport.py` 在本机环境下损坏，需排除。
 - `tests/conftest.py` 有 autouse 夹具 `probability_always_hits`：把 `sender` 与 `reply_completed` 的 `_RNG` 换成恒命中，避免默认 0.5 让无关测试随机失败。测概率闸的测试自行替换 `_RNG`。
 - 依赖旧默认冷却 20 秒的测试已改为显式设置 `cooldown_sec=20.0`。
 - 新增：`tests/test_send_probability.py`（迁移与入口）；`tests/test_reply_completed.py` 末尾的概率用例（未命中不调模型、命中后发送器不二次掷、every_reply 不掷、概率 0 永不选）。
+- 测试共用的 `ctx.reply_tail` 桩 `TailClient` 在 `tests/conftest.py`。**不要在测试里 `from tests.xxx import`**：市场 CI 在上一级目录运行 Ruff，`tests` 会被当作第三方包，导入分组与本地不同，Verify 会因 I001 失败（0.9.6 合并前的 6 次 Verify 均因此失败）。
 - 没有 `pytest-timeout`；若怀疑卡死，先确认没有残留的 pytest 进程（之前就是两份重复运行导致误判）。
 
-门禁（在插件目录执行）：
+门禁（在插件目录执行；`ruff` 关卡与市场 CI 同参数，但目录布局不同，见上条）：
 
 ```powershell
 & "F:\ai\neko kaifa7\最新版本的宿主\N.E.K.O\.venv\Scripts\python.exe" tools/release_gate.py --host-root "F:/ai/neko kaifa7/最新版本的宿主/N.E.K.O" --only check,release,hosted-tsx
@@ -110,13 +137,13 @@ $env:PYTHONIOENCODING = 'utf-8'; & "F:\ai\neko kaifa7\最新版本的宿主\N.E.
 
 ## 待办（按优先级）
 
-1. **端到端验证**（最重要，尚未做）：用新包导入测试宿主，确认首启迁移生效（面板概率 50%、冷却 0），打开发送总开关后连续聊 10 轮左右，分别确认四个阶段——调用到宿主模型、模型选出图、图登记到原回复、前端实际显示；顺带记录 `probability_skip` 与实际发图比例。
-2. 面板“测试选图”从入口点触发时日志里未看到记录，原因未查明；需确认它确实调用了免费模型并返回结果。
-3. 覆盖降级路径的实机验证：免费额度用完（`model_quota_exceeded`）、使魔模型未配置时，工具模式是否正确恢复、恢复后是否不重复发图。
-4. `plugin.toml` 补 `[permissions]` 表：check 目前对 `system.env:read`、`system.network:connect` 给 warning，宿主后续版本会升级为 error；同时评估 `models:invoke`、`main_agent.*`、`system.fs:*` 是否要声明。
-5. 档位清理：确认没有用户依赖后，删掉 `eagerness`、`every_reply`、`eager_attachment_turns` 及 `core/eagerness.py` 相关提示路径和测试（旧工具模式仍在用档位文案，删除前需先决定工具模式的提示词）。
-6. 新手引导：宿主使魔模型不可用时，引导用户去宿主 API 设置，而不是插件模型配置。
-7. 发布：合并分支、打 tag、走 Market CI（本地门禁不代表远端 CI 通过）。
+1. **通知插件市场**：等 Steam 版宿主更新到包含 #3585、#3741 的版本后，按 [updates-and-release.md](updates-and-release.md) 的“市场发布准备”提交 `v0.9.6`（或之后的新版本）。在此之前不要调用 `neko-plugin publish`。
+2. 预填的小改进（可选）：只对宿主真正表示“不支持该参数/消息形状”的错误关闭预填；或在换绑模型后重新尝试预填。
+3. 档位清理：确认没有用户依赖后，删掉 `eagerness`、`every_reply`、`eager_attachment_turns` 及 `core/eagerness.py` 相关提示路径和测试（旧工具模式仍在用档位文案，删除前需先决定工具模式的提示词）。
+4. 新手引导：宿主使魔模型不可用时，引导用户去宿主 API 设置，而不是插件模型配置。
+5. 补充降级路径的实机记录：免费额度用完（`model_quota_exceeded`）、使魔模型未配置时，工具模式是否正确恢复、恢复后是否不重复发图。
+
+已完成：真实宿主端到端验证（维护者实测效果良好）、`[permissions]` 权限表、市场 Verify 修复、GitHub 发行。
 
 ## 主要代码位置
 
@@ -125,4 +152,6 @@ $env:PYTHONIOENCODING = 'utf-8'; & "F:\ai\neko kaifa7\最新版本的宿主\N.E.
 - 发送器概率闸与冷却：`services/sender.py`
 - 迁移与入口：`__init__.py`（`_migrate_send_settings`、`set_send_probability_entry`、`_refresh_send_tool_surface`）
 - 默认值：`core/configuration.py` 的 `SendSettings`、`plugin.toml`、`config.example.toml`
+- 权限声明：`plugin.toml` 的 `[permissions.require]` / `[permissions.ask]`
+- 发行：`docs/updates-and-release.md`、`docs/releases/0.9.6.md`、`.github/workflows/`
 - 面板：`ui/components/awareness_card.tsx`、`ui/shared.ts`；文案 `i18n/zh-CN.json`、`i18n/en.json`

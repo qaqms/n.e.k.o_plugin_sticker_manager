@@ -54,6 +54,23 @@ enabled = true
 auto_start = true
 
 # ---------------------------------------------------------------------------
+# 权限声明（宿主 #3940）。目前只供 neko-plugin check / check -r 与代码比对；
+# 安装时确认 require、首次使用时询问 ask 是宿主后续版本的计划。
+# 插件只写自己的数据目录，因此不声明 system.fs:write。
+# ---------------------------------------------------------------------------
+
+[permissions.require]
+"plugin_sdk.main_agent.messages:push" = { reason = { zh-CN = "把选好的表情包发到猫娘的回复里", en = "Attach the chosen sticker to the character's reply" } }
+"system.network:connect" = { reason = { zh-CN = "只连本机宿主接口，查询角色与运行状态", en = "Query the local host API for the active character and status (loopback only)" }, hosts = ["127.0.0.1"] }
+"system.env:read" = { reason = { zh-CN = "读取宿主的数据目录位置", en = "Locate the host's data directory" } }
+
+[permissions.ask]
+"plugin_sdk.models:invoke" = { reason = { zh-CN = "回复说完后用宿主的使魔模型判断配哪张图", en = "Ask the host's familiar model which sticker fits a finished reply" }, background = true, background_reason = { zh-CN = "选图在回复完成的回调里进行，不需要你操作", en = "Selection runs in the reply-completed callback, without user action" } }
+"plugin_sdk.main_agent.conversations:read" = { reason = { zh-CN = "旧版宿主没有回复完成通知时，读取最近一轮对话来配图", en = "On older hosts without reply notifications, read the latest turn to pick a sticker" }, background = true, background_reason = { zh-CN = "在后台按轮次检查是否需要补图", en = "Checks for a sticker in the background after each turn" } }
+"plugin_sdk.main_agent.memory:read" = { reason = { zh-CN = "旧版宿主没有回复完成通知时，读取最近一轮对话来配图", en = "On older hosts without reply notifications, read the latest turn to pick a sticker" }, background = true, background_reason = { zh-CN = "在后台按轮次检查是否需要补图", en = "Checks for a sticker in the background after each turn" } }
+"system.fs:read" = { reason = { zh-CN = "旧版宿主没有回复完成通知时，读取宿主日志判断回复是否结束", en = "On older hosts without reply notifications, read host logs to detect a finished reply" }, background = true, background_reason = { zh-CN = "在后台检查回复是否结束", en = "Checks in the background whether a reply has finished" } }
+
+# ---------------------------------------------------------------------------
 # 业务配置。这里的值是「默认值」；用户在 <用户数据根>/plugins/sticker_manager/
 # config/plugin.toml 里的覆盖层优先。config.example.toml 是同一份形状的镜像
 # （那份不含任何 [plugin*] 表）。core/configuration.py 的 dataclass 默认值是

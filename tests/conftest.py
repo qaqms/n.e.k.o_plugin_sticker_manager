@@ -271,6 +271,28 @@ class FakeConfig:
             self.data[section] = value
 
 
+class TailClient:
+    """`ctx.reply_tail` 的桩：记录 register/status/cancel 调用，回执可由测试改写。"""
+
+    def __init__(self):
+        self.calls = []
+        self.receipt = {"accepted": True, "status": "registered"}
+        self.state = {"accepted": True, "status": "registered"}
+        self.cancel_receipt = {"accepted": True, "status": "cancelled", "reason": "plugin_cancelled"}
+
+    async def register(self, context, *, registration_id, parts, ai_behavior="blind", timeout=5.0):
+        self.calls.append(("register", dict(context), registration_id, parts, ai_behavior, timeout))
+        return dict(self.receipt)
+
+    async def status(self, context, *, registration_id, timeout=5.0):
+        self.calls.append(("status", dict(context), registration_id, timeout))
+        return dict(self.state)
+
+    async def cancel(self, context, *, registration_id, timeout=5.0):
+        self.calls.append(("cancel", dict(context), registration_id, timeout))
+        return dict(self.cancel_receipt)
+
+
 class FakeImages:
     """`ctx.images.upload` 的桩：记录调用并回一个 URL part。"""
 
