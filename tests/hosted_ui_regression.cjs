@@ -272,12 +272,14 @@ function largeSurface(call, count = 201) {
   return props;
 }
 
-test("detail replaces the gallery and returning restores its exact scroll", () => {
-  const env = environment();
+test("narrow panels replace the gallery with detail and restore its exact scroll", () => {
+  const env = environment({ width: 700 });
   const Panel = env.load("ui/panel.tsx").default;
   const props = surface();
   const runner = env.runner(() => Panel(props));
   let node = runner.render();
+  walk(node, (item) => item.type.name === "SegmentedControl")[0].props.onChange("library");
+  node = runner.render();
   env.flushFrames();
   env.window.scrollTo(11, 987);
   walk(node, (item) => item.type.name === "CategorySection")[0].props.onOpen("s1");
@@ -287,6 +289,7 @@ test("detail replaces the gallery and returning restores its exact scroll", () =
   assert.equal(walk(node, (item) => item.type.name === "AwarenessCard").length, 0);
   const detail = walk(node, (item) => item.type.name === "FocusCard")[0];
   assert.equal(detail.props.row.id, "s1");
+  assert.equal(detail.props.layout, "page");
   assert.equal(env.window.scrollY, 0);
   detail.props.onExit();
   node = runner.render();
@@ -296,6 +299,32 @@ test("detail replaces the gallery and returning restores its exact scroll", () =
   assert.equal(env.window.scrollX, 11);
   assert.equal(env.window.scrollY, 987);
   assert.ok(env.scrollCalls.some((call) => call.anchor === "sticker-tile-s1"));
+  assert.ok(env.scrollCalls.some((call) => call.focus === "sticker-open-s1"));
+});
+
+test("wide panels show detail beside the gallery without moving the scroll position", () => {
+  const env = environment({ width: 1280 });
+  const Panel = env.load("ui/panel.tsx").default;
+  const props = surface();
+  const runner = env.runner(() => Panel(props));
+  let node = runner.render();
+  walk(node, (item) => item.type.name === "SegmentedControl")[0].props.onChange("library");
+  node = runner.render();
+  env.window.scrollTo(0, 640);
+  walk(node, (item) => item.type.name === "CategorySection")[0].props.onOpen("s1");
+  node = runner.render();
+  env.flushFrames();
+  const detail = walk(node, (item) => item.type.name === "FocusCard")[0];
+  assert.equal(detail.props.layout, "side");
+  assert.equal(walk(node, (item) => item.type.name === "CategorySection").length, 1);
+  assert.equal(walk(node, (item) => item.type.name === "CategorySection")[0].props.activeId, "s1");
+  assert.equal(env.window.scrollY, 640);
+  assert.ok(env.scrollCalls.some((call) => call.focus === "sticker-focus-back/button"));
+  detail.props.onExit();
+  node = runner.render();
+  env.flushFrames();
+  assert.equal(walk(node, (item) => item.type.name === "FocusCard").length, 0);
+  assert.equal(env.window.scrollY, 640);
   assert.ok(env.scrollCalls.some((call) => call.focus === "sticker-open-s1"));
 });
 
@@ -327,6 +356,8 @@ test("removing the focused row returns to the gallery without a ghost detail", (
   const props = surface();
   const runner = env.runner(() => Panel(props));
   let node = runner.render();
+  walk(node, (item) => item.type.name === "SegmentedControl")[0].props.onChange("library");
+  node = runner.render();
   walk(node, (item) => item.type.name === "CategorySection")[0].props.onOpen("s1");
   node = runner.render();
   assert.equal(walk(node, (item) => item.type.name === "FocusCard").length, 1);
@@ -585,8 +616,10 @@ test("file drops consume browser navigation, respect busy state and route to the
   assert.equal(received.length, 1);
   assert.equal(prevented, stopped);
   const Panel = env.load("ui/panel.tsx").default;
-  const node = env.runner(() => Panel(surface())).render();
-  assert.equal(typeof walk(node, (item) => item.props.className?.startsWith("sticker-workspace"))[0].props.onDrop, "function");
+  const panelRunner = env.runner(() => Panel(surface()));
+  walk(panelRunner.render(), (item) => item.type.name === "SegmentedControl")[0].props.onChange("library");
+  const node = panelRunner.render();
+  assert.equal(typeof walk(node, (item) => item.props.className?.startsWith("sticker-browse"))[0].props.onDrop, "function");
   assert.equal(typeof walk(node, (item) => item.type.name === "CategorySection")[0].props.onDropFiles, "function");
 });
 
@@ -738,17 +771,26 @@ test("zone management and category descriptions expand without hiding the image 
   assert.equal(walk(zoneMenu, (item) => item.type.name === "Button")
     .some((item) => text(item).includes("让她改用这个区")), false);
   assert.ok(button(zoneNode, "让她改用这个区"));
-  const categoryNode = env.runner(() => CategorySection({
+  const categoryProps = {
     surface: props,
-    section: { name: "One", group: "g1", desc: "Long category description", editable: false,
+    section: { name: "One", group: "g1", desc: "Long category description", editable: true,
       total: 1, rows: [props.state.stickers[0]] },
-    selected: [], descEditing: "", collectBusy: false,
-  })).render();
-  const categoryMenu = walk(categoryNode, (item) => item.type === "details")[0];
-  assert.equal(categoryMenu.props.open, undefined);
-  assert.match(text(categoryMenu), /Long category description/);
-  assert.equal(walk(categoryMenu, (item) => item.type.name === "StickerTile").length, 0);
+    selected: [], descEditing: "", collectBusy: false, selecting: false,
+  };
+  const categoryRunner = env.runner(() => CategorySection(categoryProps));
+  let categoryNode = categoryRunner.render();
+  assert.equal(walk(categoryNode, (item) => item.type === "details").length, 0);
+  const description = walk(categoryNode, (item) => item.props.className === "sticker-category-desc")[0];
+  assert.match(text(description), /Long category description/);
+  assert.ok(button(categoryNode, "编辑说明"));
+  assert.ok(button(categoryNode, "删分类"));
+  assert.ok(button(categoryNode, "添加图片"));
+  assert.equal(walk(categoryNode, (item) => text(item) === "全选本组" && item.type.name === "Button").length, 0);
   assert.equal(walk(categoryNode, (item) => item.type.name === "StickerTile").length, 1);
+  categoryProps.selecting = true;
+  categoryNode = categoryRunner.render();
+  assert.ok(button(categoryNode, "全选本组"));
+  assert.equal(walk(categoryNode, (item) => item.type.name === "StickerTile")[0].props.selecting, true);
 });
 
 test("preview retry is explicit, protects double clicks and recovers decode failures", async () => {
@@ -837,11 +879,13 @@ test("image buttons and named checkboxes are siblings with guarded disabled hand
   let selections = 0;
   const props = surface();
   const tileProps = {
-    surface: props, row: props.state.stickers[0], disabled: true,
+    surface: props, row: props.state.stickers[0], disabled: true, selecting: false,
     onOpen: () => opens++, onToggleSelect: () => selections++,
   };
   const runner = env.runner(() => StickerTile(tileProps));
-  const node = runner.render();
+  assert.equal(walk(runner.render(), (item) => item.type === "input").length, 0);
+  tileProps.selecting = true;
+  let node = runner.render();
   const imageButton = walk(node, (item) => item.type === "button")[0];
   const checkbox = walk(node, (item) => item.type === "input")[0];
   assert.equal(imageButton.props.id, "sticker-open-s1");
@@ -852,49 +896,92 @@ test("image buttons and named checkboxes are siblings with guarded disabled hand
   checkbox.props.onChange();
   assert.equal(opens, 0);
   assert.equal(selections, 0);
+  tileProps.disabled = false;
+  node = runner.render();
+  walk(node, (item) => item.type === "button")[0].props.onClick();
+  assert.equal(opens, 0);
+  assert.equal(selections, 1);
+  tileProps.selecting = false;
+  node = runner.render();
+  walk(node, (item) => item.type === "button")[0].props.onClick();
+  assert.equal(opens, 1);
 });
 
-test("library is the default view with only library and settings navigation", () => {
+test("overview is the default view and the four tabs switch pages", () => {
   const env = environment();
   const Panel = env.load("ui/panel.tsx").default;
   const props = surface();
   const runner = env.runner(() => Panel(props));
   let node = runner.render();
-  assert.equal(walk(node, (item) => item.type.name === "AwarenessCard").length, 0);
-  assert.equal(walk(node, (item) => item.type.name === "Card").length, 0);
   const navigation = walk(node, (item) => item.type.name === "SegmentedControl")[0];
-  assert.equal(navigation.props.value, "library");
-  assert.deepEqual(Array.from(navigation.props.options, (option) => option.value), ["library", "settings"]);
-  navigation.props.onChange("settings");
-  node = runner.render();
+  assert.equal(navigation.props.value, "overview");
+  assert.deepEqual(Array.from(navigation.props.options, (option) => option.value),
+    ["overview", "library", "import", "settings"]);
+  assert.equal(walk(node, (item) => item.type.name === "OverviewPage").length, 1);
   assert.equal(walk(node, (item) => item.type.name === "CategorySection").length, 0);
+  assert.equal(walk(node, (item) => item.type.name === "Card").length, 0);
+  const pages = { library: "CategoryNav", import: "ImportPage", settings: "AwarenessCard" };
+  for (const [tab, component] of Object.entries(pages)) {
+    walk(node, (item) => item.type.name === "SegmentedControl")[0].props.onChange(tab);
+    node = runner.render();
+    assert.equal(walk(node, (item) => item.type.name === component).length, 1, tab);
+    assert.equal(walk(node, (item) => item.type.name === "OverviewPage").length, 0, tab);
+  }
   assert.equal(walk(node, (item) => item.type.name === "AwarenessCard")[0].props.mode, "settings");
-  walk(node, (item) => item.type.name === "SegmentedControl")[0].props.onChange("library");
-  assert.equal(walk(runner.render(), (item) => item.type.name === "CategorySection").length, 1);
+});
+
+test("overview counts undescribed stickers and opens the missing filter in the library", () => {
+  const env = environment();
+  const Panel = env.load("ui/panel.tsx").default;
+  const props = surface();
+  props.state.enabled = true;
+  props.state.stickers.push({ id: "s3", zone: "z1", group: "g1", desc: "IMG_0412" });
+  props.state.groups[0].count = 2;
+  const runner = env.runner(() => Panel(props));
+  let node = runner.render();
+  const Overview = env.load("ui/components/overview.tsx").OverviewPage;
+  const overviewProps = walk(node, (item) => item.type.name === "OverviewPage")[0].props;
+  const overview = env.runner(() => Overview(overviewProps)).render();
+  assert.match(text(overview), /1 张图没有梗义和标签/);
+  button(overview, "去补描述").props.onClick();
+  node = runner.render();
+  const nav = walk(node, (item) => item.type.name === "CategoryNav")[0];
+  assert.equal(nav.props.value, "missing");
+  assert.equal(nav.props.missing, 1);
+  const shown = walk(node, (item) => item.type.name === "CategorySection")
+    .flatMap((item) => item.props.section.rows.map((row) => row.id));
+  assert.deepEqual(shown, ["s3"]);
 });
 
 test("category navigation survives detail return and reports selections hidden by a filter", () => {
-  const env = environment();
+  const env = environment({ width: 700 });
   const Panel = env.load("ui/panel.tsx").default;
   const props = surface();
   props.state.groups.push({ name: "g3", zone: "z1", count: 1 });
   props.state.stickers.push({ id: "s3", zone: "z1", group: "g3", desc: "Third" });
   const runner = env.runner(() => Panel(props));
   let node = runner.render();
+  walk(node, (item) => item.type.name === "SegmentedControl")[0].props.onChange("library");
+  node = runner.render();
+  walk(node, (item) => item.type.name === "LibraryToolbar")[0].props.onToggleSelecting();
+  node = runner.render();
   const categories = walk(node, (item) => item.type.name === "CategorySection");
+  assert.equal(categories[0].props.selecting, true);
   categories[0].props.onToggleSelect("s1");
   categories[1].props.onToggleSelect("s3");
   node = runner.render();
-  walk(node, (item) => item.type.name === "LibraryToolbar")[0].props.setCategoryFilter("group:g1");
+  walk(node, (item) => item.type.name === "CategoryNav")[0].props.onChange("group:g1");
   node = runner.render();
   assert.equal(walk(node, (item) => item.type.name === "CategorySection").length, 1);
   assert.equal(walk(node, (item) => item.type.name === "BatchBar")[0].props.hiddenCount, 1);
+  walk(node, (item) => item.type.name === "LibraryToolbar")[0].props.onToggleSelecting();
+  node = runner.render();
+  assert.equal(walk(node, (item) => item.type.name === "BatchBar").length, 0);
   walk(node, (item) => item.type.name === "CategorySection")[0].props.onOpen("s1");
   node = runner.render();
   walk(node, (item) => item.type.name === "FocusCard")[0].props.onExit();
   node = runner.render();
-  assert.equal(walk(node, (item) => item.type.name === "LibraryToolbar")[0].props.categoryFilter, "group:g1");
-  assert.equal(walk(node, (item) => item.type.name === "BatchBar")[0].props.hiddenCount, 1);
+  assert.equal(walk(node, (item) => item.type.name === "CategoryNav")[0].props.value, "group:g1");
 });
 
 test("malformed batch acknowledgements preserve every unconfirmed selection", async () => {
@@ -931,7 +1018,6 @@ test("send cooldown saves numeric zero independently and blocks duplicate saves 
   assert.equal(button(node, "保存发送冷却").props.disabled, true);
   input.props.onChange("0");
   node = runner.render();
-  assert.equal(walk(node, (item) => item.type.name === "Slider")[0].props.value, 0);
   assert.match(text(node), /当前发送冷却：20 秒/);
   const save = button(node, "保存发送冷却");
   save.props.onClick();
@@ -948,34 +1034,6 @@ test("send cooldown saves numeric zero independently and blocks duplicate saves 
   assert.match(text(node), /关闭发送冷却/);
   assert.match(walk(node, (item) => item.type.name === "Alert")[0].props.message, /发送冷却已保存/);
   assert.equal(button(node, "保存发送冷却").props.disabled, true);
-});
-
-test("every-reply toggle calls its own action and disables conflicting rhythm controls", async () => {
-  const calls = [];
-  const props = surface(async (action, args) => {
-    calls.push({ action, args: { ...args } });
-    return { result: { enabled: args.enabled } };
-  });
-  props.state.reply_completed = { mode: "hook" };
-  props.state.eagerness = "eager";
-  props.state.config = { every_reply: false, cooldown_sec: 20 };
-  const env = environment();
-  const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
-  const runner = env.runner(() => AwarenessCard({ surface: props, mode: "settings" }));
-  let node = runner.render();
-  const toggle = walk(node, (item) => item.type.name === "Switch")[0];
-  assert.equal(toggle.props.label, "每轮配图");
-  toggle.props.onChange(true);
-  await settle();
-  assert.deepEqual(calls, [{ action: "set_every_reply", args: { enabled: true } }]);
-  props.state.config.every_reply = true;
-  node = runner.render();
-  assert.equal(walk(node, (item) => item.type.name === "Switch")[0].props.checked, true);
-  assert.equal(walk(node, (item) => item.type.name === "SegmentedControl")[0].props.disabled, true);
-  assert.equal(walk(node, (item) => item.type.name === "Slider" && item.props.max === 10).length, 0);
-  assert.equal(walk(node, (item) => item.type.name === "Input")[0].props.disabled, true);
-  button(node, "保存发送冷却").props.onClick();
-  assert.equal(calls.length, 1);
 });
 
 test("invalid cooldown drafts never invoke an action and an external update refreshes the input", () => {
@@ -1017,67 +1075,6 @@ test("failed cooldown save keeps the draft and current setting and allows retry"
   assert.equal(button(node, "保存发送冷却").props.disabled, false);
 });
 
-test("eager selection slider saves zero once, locks controls and follows external updates", async () => {
-  const calls = [];
-  let finish;
-  const props = surface((action, args) => {
-    calls.push({ action, args: { ...args } });
-    return new Promise((resolve) => { finish = resolve; });
-  });
-  props.state.eagerness = "eager";
-  props.state.config = { eager_attachment_turns: 2 };
-  const env = environment();
-  const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
-  const runner = env.runner(() => AwarenessCard({ surface: props, mode: "settings" }));
-  const slider = (node) => walk(node, (item) => item.type.name === "Slider" && item.props.max === 10)[0];
-  let node = runner.render();
-  assert.equal(slider(node).props.value, 2);
-  assert.equal(slider(node).props.min, 0);
-  assert.equal(slider(node).props.step, 1);
-  assert.equal(button(node, "保存补图轮数").props.disabled, true);
-  slider(node).props.onChange(0);
-  node = runner.render();
-  assert.match(text(node), /每轮帮选/);
-  const save = button(node, "保存补图轮数");
-  save.props.onClick();
-  save.props.onClick();
-  node = runner.render();
-  assert.deepEqual(calls, [{ action: "set_eager_attachment_turns", args: { turns: 0 } }]);
-  assert.equal(slider(node).props.disabled, true);
-  props.state.config.eager_attachment_turns = 0;
-  finish({ result: { turns: 0 } });
-  await settle();
-  node = runner.render();
-  assert.equal(button(node, "保存补图轮数").props.disabled, true);
-  assert.equal(walk(node, (item) => item.type.name === "Alert")[0].props.message, "补图轮数已保存");
-  props.state.config.eager_attachment_turns = 10;
-  node = runner.render();
-  assert.equal(slider(node).props.value, 10);
-  assert.match(text(node), /连续 10 轮未配图后帮选/);
-  props.state.eagerness = "natural";
-  assert.equal(slider(runner.render()), undefined);
-  props.state.eagerness = "reserved";
-  assert.equal(slider(runner.render()), undefined);
-});
-
-test("failed eager selection save keeps the draft and allows retry", async () => {
-  const props = surface(async () => { throw new Error("config_unavailable"); });
-  props.state.eagerness = "eager";
-  const env = environment();
-  const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
-  const runner = env.runner(() => AwarenessCard({ surface: props, mode: "settings" }));
-  let node = runner.render();
-  const slider = (tree) => walk(tree, (item) => item.type.name === "Slider" && item.props.max === 10)[0];
-  assert.equal(slider(node).props.value, 1);
-  slider(node).props.onChange(10);
-  button(runner.render(), "保存补图轮数").props.onClick();
-  await settle();
-  node = runner.render();
-  assert.equal(slider(node).props.value, 10);
-  assert.equal(button(node, "保存补图轮数").props.disabled, false);
-  assert.equal(walk(node, (item) => item.type.name === "Alert")[0].props.tone, "danger");
-});
-
 test("advanced reminder and diagnostics stay collapsed without hiding ordinary send controls", () => {
   const env = environment();
   const AwarenessCard = env.load("ui/components/awareness_card.tsx").AwarenessCard;
@@ -1086,45 +1083,43 @@ test("advanced reminder and diagnostics stay collapsed without hiding ordinary s
   assert.equal(panels.length, 2);
   assert.ok(panels.every((item) => !item.props.open));
   assert.equal(walk(panels[0], (item) => item.type.name === "Slider").length, 1);
-  assert.equal(walk(panels[1], (item) => item.type === "dl").length, 3);
+  assert.equal(walk(panels[1], (item) => item.type === "dl").length, 2);
   assert.equal(walk(panels[0], (item) => item.type.name === "Input").length, 0);
-  assert.equal(walk(node, (item) => item.type.name === "SegmentedControl").length, 1);
   assert.equal(walk(node, (item) => item.type.name === "Input").length, 1);
 });
 
-test("library management expands explicitly and category creation keeps the form visible", () => {
+test("toolbar toggles selection mode and category creation keeps the form visible", () => {
   const env = environment();
   const Toolbar = env.load("ui/components/library_toolbar.tsx").LibraryToolbar;
-  let creates = 0;
-  const filters = [];
+  let toggles = 0;
   const props = {
-    surface: surface(), query: "", categories: [], categoryFilter: "",
-    zipInputRef: { current: null }, imgInputRef: { current: null },
-    onToggleCreating: () => creates++,
-    setCategoryFilter: (value) => filters.push(value),
+    surface: surface(), query: "", selecting: false, creating: false,
+    imgInputRef: { current: null }, onToggleSelecting: () => toggles++,
   };
   const runner = env.runner(() => Toolbar(props));
   let node = runner.render();
-  const categorySelect = walk(node, (item) => item.type.name === "Select")[0];
-  assert.equal(categorySelect.props.value, "all");
-  assert.equal(categorySelect.props.options[0].value, "all");
-  categorySelect.props.onChange("group:g1");
-  categorySelect.props.onChange("all");
-  assert.deepEqual(filters, ["group:g1", ""]);
-  const menu = () => walk(node, (item) => item.props.id === "sticker-library-management")[0];
-  const more = () => walk(node, (item) => item.props.className === "sticker-more")[0];
-  assert.equal(menu().props.hidden, true);
-  more().props.onClick();
+  assert.equal(walk(node, (item) => item.type.name === "Select").length, 0);
+  button(node, "选择").props.onClick();
+  assert.equal(toggles, 1);
+  props.selecting = true;
   node = runner.render();
-  assert.equal(menu().props.hidden, false);
-  assert.equal(more().props["aria-expanded"], "true");
-  button(node, "新建分类").props.onClick();
-  node = runner.render();
-  assert.equal(creates, 1);
-  assert.equal(menu().props.hidden, true);
+  assert.ok(button(node, "完成选择"));
   props.creating = true;
   node = runner.render();
   assert.ok(button(node, "创建分类"));
+  const Nav = env.load("ui/components/category_nav.tsx").CategoryNav;
+  const picks = [];
+  let creates = 0;
+  const navNode = env.runner(() => Nav({
+    surface: surface(), total: 3, missing: 2, value: "",
+    sections: [{ group: "g1", name: "g1", total: 1 }, { group: "", name: "未分组", total: 2 }],
+    onChange: (value) => picks.push(value), onCreate: () => creates++,
+  })).render();
+  const items = walk(navNode, (item) => item.type === "button");
+  assert.deepEqual(items.map((item) => text(item)), ["全部分类3", "g11", "未分组2", "缺描述2", "＋ 新建分类"]);
+  items.forEach((item) => item.props.onClick());
+  assert.deepEqual(picks, ["", "group:g1", "group:", "missing"]);
+  assert.equal(creates, 1);
 });
 
 test("empty batch tags disable actions and stale clicks never dispatch a request", () => {

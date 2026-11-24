@@ -60,8 +60,11 @@ export function useLibraryModel(surface: Surface) {
   const [newName, setNewName] = useState("");
   const [newDesc, setNewDesc] = useState("");
   const [collectBusy, setCollectBusy] = useState(false);
-  // 详情替换图库工作区；模型常驻，浏览条件与选择不随详情卸载。
+  // 详情：宽面板摆在网格旁边（side），窄面板替换图库工作区（page）；
+  // 模型常驻，浏览条件与选择不随详情卸载。
   const [focus, setFocus] = useState("");
+  const focusModeRef = useRef<"page" | "side">("page");
+  const returnFocusRef = useRef("");
   const browsePositionRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const restorePositionRef = useRef<{ id: string; x: number; y: number } | null>(null);
   const zipInputRef = useRef<any>(null);
@@ -142,7 +145,18 @@ export function useLibraryModel(surface: Surface) {
       endTask();
     }
   };
-  const openFocus = (id: string) => {
+  const openFocus = (id: string, mode: "page" | "side" = "page") => {
+    if (mode === "side") {
+      // 侧边详情不动滚动位置：图库还在眼前，关掉后焦点回到原来的格子即可。
+      focusModeRef.current = "side";
+      browsePositionRef.current = null;
+      restorePositionRef.current = null;
+      returnFocusRef.current = "";
+      setFocus(id);
+      return;
+    }
+    focusModeRef.current = "page";
+    returnFocusRef.current = "";
     const scrolling = document.scrollingElement || document.documentElement;
     browsePositionRef.current = {
       id,
@@ -153,7 +167,12 @@ export function useLibraryModel(surface: Surface) {
     setFocus(id);
   };
   const closeFocus = () => {
-    restorePositionRef.current = browsePositionRef.current;
+    if (focusModeRef.current === "side") {
+      returnFocusRef.current = focus;
+      restorePositionRef.current = null;
+    } else {
+      restorePositionRef.current = browsePositionRef.current;
+    }
     setFocus("");
   };
   const switchViewZone = (id: string) => {
@@ -169,6 +188,16 @@ export function useLibraryModel(surface: Surface) {
     let secondFrame = 0;
     const firstFrame = window.requestAnimationFrame(() => {
       secondFrame = window.requestAnimationFrame(() => {
+        if (focus && focusModeRef.current === "side") {
+          document.getElementById("sticker-focus-back")
+            ?.querySelector?.<HTMLButtonElement>("button")?.focus?.({ preventScroll: true });
+          return;
+        }
+        if (!focus && returnFocusRef.current) {
+          document.getElementById(`sticker-open-${returnFocusRef.current}`)?.focus?.({ preventScroll: true });
+          returnFocusRef.current = "";
+          return;
+        }
         if (focus) {
           document.getElementById("sticker-focus-workspace")?.scrollIntoView({
             block: "start",

@@ -1,4 +1,5 @@
-// Standalone detail workspace: no overlay, fixed descendant, or nested kit Card.
+// Detail workspace: beside the grid on wide panels (layout="side"), replacing it on narrow ones.
+// No overlay, fixed descendant, or nested kit Card (kit Modal is unreliable in the host iframe).
 import {
   Alert,
   Button,
@@ -21,11 +22,13 @@ export function FocusCard(props: {
   key?: string;
   surface: Surface;
   row: StickerRow;
+  layout?: "side" | "page";
   onExit: () => void;
   onRefreshFailed?: () => void;
   onRefreshRecovered?: () => void;
 }) {
   const row = props.row;
+  const side = props.layout === "side";
   const surface = props.surface;
   const t = surface.t;
   const confirm = useConfirm();
@@ -175,26 +178,72 @@ export function FocusCard(props: {
     },
   ];
 
+  const actions = (
+    <Inline gap={8} wrap>
+      <Button
+        tone="success"
+        disabled={!!busy || refreshFailed}
+        onClick={() => {
+          run("send", { id: row.id });
+        }}
+      >
+        {busy === "send"
+          ? t("panel.action.sending", { defaultValue: "发送中…" })
+          : t("panel.action.send", { defaultValue: "发到聊天" })}
+      </Button>
+      <Button
+        disabled={!!busy || refreshFailed}
+        onClick={() => {
+          if (busyRef.current || refreshFailedRef.current) return;
+          resetDraft();
+          setNote("");
+          setEditing(true);
+        }}
+      >
+        {t("panel.action.edit", { defaultValue: "编辑" })}
+      </Button>
+      <Button
+        tone="warning"
+        disabled={!!busy || refreshFailed}
+        onClick={() => {
+          run("update", { id: row.id, disabled: !row.disabled });
+        }}
+      >
+        {row.disabled
+          ? t("panel.action.enable", { defaultValue: "恢复启用" })
+          : t("panel.action.disable", { defaultValue: "禁用" })}
+      </Button>
+      <Button tone="danger" disabled={!!busy || refreshFailed} onClick={remove}>
+        {busy === "remove"
+          ? t("panel.action.removing", { defaultValue: "删除中…" })
+          : t("panel.action.remove", { defaultValue: "删除" })}
+      </Button>
+    </Inline>
+  );
+
   return (
     <div
       id="sticker-focus-workspace"
-      style={{ display: "grid", gap: "16px", minWidth: 0 }}
+      className={side ? "sticker-detail is-side" : "sticker-detail"}
+      style={{ display: "grid", gap: side ? "12px" : "16px", minWidth: 0 }}
     >
       <div
         id="sticker-focus-back"
         style={{
-          position: "sticky",
+          position: side ? "static" : "sticky",
           top: "0px",
           zIndex: 1,
           minWidth: 0,
           background: "var(--bg)",
-          padding: "8px 0",
-          borderBottom: "1px solid var(--border)",
+          padding: side ? "0px" : "8px 0",
+          borderBottom: side ? "0" : "1px solid var(--border)",
         }}
       >
         <Inline gap={8} align="center" wrap>
           <Button disabled={!!busy} onClick={props.onExit}>
-            {t("panel.focus.back", { defaultValue: "返回图库" })}
+            {side
+              ? t("panel.focus.close", { defaultValue: "关闭详情" })
+              : t("panel.focus.back", { defaultValue: "返回图库" })}
           </Button>
           <div style={{ minWidth: 0, flex: "1 1 140px", overflowWrap: "anywhere" }}>
             <Text>{row.group || t("panel.group.none", { defaultValue: "未分组" })}</Text>
@@ -210,7 +259,7 @@ export function FocusCard(props: {
       <h2
         style={{
           margin: 0,
-          fontSize: "18px",
+          fontSize: side ? "15px" : "18px",
           lineHeight: 1.5,
           overflowWrap: "anywhere",
         }}
@@ -238,8 +287,8 @@ export function FocusCard(props: {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
-          gap: "20px",
+          gridTemplateColumns: side ? "minmax(0, 1fr)" : "repeat(auto-fit, minmax(min(100%, 280px), 1fr))",
+          gap: side ? "12px" : "20px",
           minWidth: 0,
           alignItems: "start",
         }}
@@ -249,7 +298,7 @@ export function FocusCard(props: {
           style={{
             width: "100%",
             minWidth: 0,
-            height: "min(420px, 58vh)",
+            height: side ? "min(240px, 36vh)" : "min(420px, 58vh)",
             minHeight: "160px",
             display: "flex",
             alignItems: "center",
@@ -289,7 +338,8 @@ export function FocusCard(props: {
             </Stack>
           )}
         </div>
-        <div style={{ minWidth: 0 }}>
+        <div style={{ minWidth: 0, display: "grid", gap: "12px" }}>
+          {!editing && side ? actions : null}
           {editing ? (
             <Stack gap={10}>
               <Field label={t("panel.edit.desc", { defaultValue: "描述（面板里的短标签）" })}>
@@ -385,48 +435,7 @@ export function FocusCard(props: {
           )}
         </div>
       </div>
-      {!editing ? (
-        <Inline gap={8} wrap>
-          <Button
-            tone="success"
-            disabled={!!busy || refreshFailed}
-            onClick={() => {
-              run("send", { id: row.id });
-            }}
-          >
-            {busy === "send"
-              ? t("panel.action.sending", { defaultValue: "发送中…" })
-              : t("panel.action.send", { defaultValue: "发到聊天" })}
-          </Button>
-          <Button
-            disabled={!!busy || refreshFailed}
-            onClick={() => {
-              if (busyRef.current || refreshFailedRef.current) return;
-              resetDraft();
-              setNote("");
-              setEditing(true);
-            }}
-          >
-            {t("panel.action.edit", { defaultValue: "编辑" })}
-          </Button>
-          <Button
-            tone="warning"
-            disabled={!!busy || refreshFailed}
-            onClick={() => {
-              run("update", { id: row.id, disabled: !row.disabled });
-            }}
-          >
-            {row.disabled
-              ? t("panel.action.enable", { defaultValue: "恢复启用" })
-              : t("panel.action.disable", { defaultValue: "禁用" })}
-          </Button>
-          <Button tone="danger" disabled={!!busy || refreshFailed} onClick={remove}>
-            {busy === "remove"
-              ? t("panel.action.removing", { defaultValue: "删除中…" })
-              : t("panel.action.remove", { defaultValue: "删除" })}
-          </Button>
-        </Inline>
-      ) : null}
+      {!editing && !side ? actions : null}
     </div>
   );
 }

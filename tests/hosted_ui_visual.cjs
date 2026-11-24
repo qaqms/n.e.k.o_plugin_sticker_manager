@@ -48,13 +48,21 @@ print(json.dumps({"images": images, "state": {
               {"id": "z2", "name": "我的收藏", "total": 0}],
     "stickers": rows, "groups": groups,
     "counts": {"total": len(rows), "enabled": len(rows), "groups": len(groups), "sent_total": 12},
-    "config": {"cooldown_sec": 20, "eager_attachment_turns": 1},
+    "config": {"cooldown_sec": 0, "probability": 0.5},
+    "reply_completed": {"mode": "hook", "status": "subscribed", "model_result": {"duration_ms": 1840}},
+    "eager_attachment": {"status": "registered", "attempts": 9, "sent": 4},
+    "usage": [{"id": row["id"], "ok": True} for row in rows[:6]],
     "awareness": {"status": "waiting", "target": "YUI", "min_interval_sec": 60,
                   "inject_interval_n": 6, "turns_since": 2, "driver": "bus"},
-    "run": {"turns": 29, "tool_calls": 8, "sent": 7, "refused": 0, "surface_categories": 3}
+    "run": {"turns": 29, "tool_calls": 0, "sent": 4, "refused": 0, "surface_categories": 3}
 }}, ensure_ascii=False))
 `], { cwd: root, env: { ...process.env, PYTHONDONTWRITEBYTECODE: "1", PYTHONIOENCODING: "utf-8" },
   encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }));
+
+// One sticker the owner imported without describing it: the overview and the
+// library's "needs description" filter should both surface it.
+Object.assign(fixture.state.stickers[fixture.state.stickers.length - 1],
+  { desc: "IMG_0412", caption: "", tags: [], visible_text: "" });
 
 const compiled = {};
 function collect(relative) {
@@ -79,6 +87,18 @@ const factories = Object.entries(compiled).map(([key, value]) =>
 const locales = Object.fromEntries(["zh-CN", "en"].map((locale) => [
   locale, JSON.parse(fs.readFileSync(path.join(root, `i18n/${locale}.json`), "utf8")),
 ]));
+// Newer hosts embed the display SDK ahead of the kit runtime (see uiKitBundle.ts).
+function kitRuntime() {
+  const runtime = fs.readFileSync(path.join(kit, "runtime.js"), "utf8");
+  const display = path.join(host, "static/plugin-ui-sdk/display.js");
+  if (!fs.existsSync(display)) return runtime;
+  return `const createPluginDisplayClient = (function () {
+const module = { exports: {}, nekoPluginDisplayFactoryOnly: true };
+${fs.readFileSync(display, "utf8")}
+return module.exports;
+})();
+${runtime}`;
+}
 const safeJson = (value) => JSON.stringify(value).replaceAll("<", "\\u003c");
 const html = `<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -86,7 +106,7 @@ const html = `<!doctype html><html><head><meta charset="utf-8">
 <style>${fs.readFileSync(path.join(kit, "styles.css"), "utf8")}</style></head><body>
 <main id="root"></main><script>
 window.__NEKO_PAYLOAD = {locale:"zh-CN",i18n:{locale:"zh-CN",default_locale:"zh-CN",messages:${safeJson(locales)}}};
-${fs.readFileSync(path.join(kit, "runtime.js"), "utf8")}
+${kitRuntime()}
 const fixture = ${safeJson(fixture)};
 const factories = {${factories}};
 const cache = {};
@@ -111,13 +131,13 @@ const surface = {
       if (action === "preview") return {result:{mime:"image/png",
         chunk_base64:fixture.images[args.id],done:true,next_offset:0}};
       if (action === "set_send_cooldown") surface.state.config.cooldown_sec = args.cooldown_sec;
-      if (action === "set_eager_attachment_turns") surface.state.config.eager_attachment_turns = args.turns;
+      if (action === "set_send_probability") surface.state.config.probability = args.probability;
       if (action === "set_reminder_interval") surface.state.awareness.min_interval_sec = args.min_interval_sec;
-      if (action === "set_eagerness") surface.state.eagerness = args.eagerness;
       if (action === "switch") surface.state.enabled = args.enabled;
       if (action === "update") Object.assign(surface.state.stickers.find(row => row.id === args.id), args);
       return {result: action === "set_send_cooldown" ? {cooldown_sec:args.cooldown_sec}
-        : action === "set_eager_attachment_turns" ? {turns:args.turns} : {}};
+        : action === "set_send_probability" ? {probability:args.probability}
+        : action === "test_selection" ? {status:"selected"} : {}};
     },
     async refresh() { draw(); }
   }
@@ -144,6 +164,11 @@ async function layout(page) {
     const visible = (element) => element.getClientRects().length > 0;
     const outside = [...document.querySelectorAll("button,summary,input,select,img,h2")]
       .filter(visible).filter((element) => {
+        // Horizontal scrollers (the phone-width category strip) may hold off-screen items.
+        for (let node = element.parentElement; node; node = node.parentElement) {
+          if (["auto", "scroll"].includes(getComputedStyle(node).overflowX) &&
+              node.getBoundingClientRect().right <= innerWidth + 1) return false;
+        }
         const rect = element.getBoundingClientRect();
         return rect.left < -1 || rect.right > innerWidth + 1;
       }).map((element) => element.outerHTML.slice(0, 200));
@@ -153,99 +178,116 @@ async function layout(page) {
   assert.deepEqual(result.outside, []);
 }
 
+async function waitForTiles(page) {
+  await page.locator(".sticker-grid img").first().waitFor();
+  for (const tile of await page.locator(".sticker-tile").all()) {
+    await tile.scrollIntoViewIfNeeded();
+    await tile.locator("img").waitFor();
+    await tile.locator("img").evaluate((image) => image.decode());
+  }
+  await page.evaluate(() => window.scrollTo(0, 0));
+}
+
+const calls = (page, action) => page.evaluate((name) =>
+  window.previewCalls.filter((call) => call.action === name), action);
+
 async function main() {
   const browser = await chromium.launch({ channel: "chrome", headless: true });
   const errors = [];
   try {
     for (const [name, width, height, scheme] of [
-      ["desktop", 1100, 900, "light"], ["mobile", 390, 844, "light"],
-      ["narrow", 320, 740, "light"], ["dark", 900, 900, "dark"],
+      ["desktop", 1280, 900, "light"], ["tablet", 820, 900, "light"],
+      ["mobile", 390, 844, "light"], ["narrow", 320, 740, "light"], ["dark", 1100, 900, "dark"],
     ]) {
       const page = await browser.newPage({ viewport: { width, height }, colorScheme: scheme });
       page.on("pageerror", (error) => errors.push(error.message));
       await page.goto(pathToFileURL(previewFile).href);
-      await page.locator(".sticker-grid img").first().waitFor();
-      for (const tile of await page.locator(".sticker-tile").all()) {
-        await tile.scrollIntoViewIfNeeded();
-        await tile.locator("img").waitFor();
-        await tile.locator("img").evaluate((image) => image.decode());
-      }
-      await page.evaluate(() => window.scrollTo(0, 0));
+      const side = width >= 1000;
+
+      // Overview first: health, probability, the undescribed sticker, recent sends.
+      await page.getByText("需要处理", { exact: true }).first().waitFor();
+      await page.locator(".sticker-recent img").first().waitFor();
+      await page.getByText("约每 2 轮一张", { exact: true }).waitFor();
       await layout(page);
-      assert.ok(await page.locator(".sticker-grid img").first().evaluate((image) =>
-        image.complete && image.naturalWidth > 0));
-      await page.screenshot({ path: path.join(output, `${name}-library.png`), fullPage: true });
-      const filter = page.locator(".sticker-search select");
-      const secondGroup = await filter.locator("option").nth(2).getAttribute("value");
-      await page.locator('.sticker-tile input[type="checkbox"]').first().check();
+      await page.screenshot({ path: path.join(output, `${name}-overview.png`), fullPage: true, animations: "disabled" });
+      await page.getByRole("button", { name: "测试选图", exact: true }).count();
+
+      // "去补描述" lands in the library with the missing filter applied.
+      await page.getByRole("button", { name: "去补描述", exact: true }).click();
+      await page.getByText(/1 张图没有梗义和标签/).waitFor();
+      assert.equal(await page.locator(".sticker-tile").count(), 1);
+      await page.getByRole("button", { name: /^全部分类/ }).click();
+      await waitForTiles(page);
+      await layout(page);
+      await page.screenshot({ path: path.join(output, `${name}-library.png`), fullPage: true, animations: "disabled" });
+
+      // Category list filters the grid.
+      await page.locator(".sticker-catnav .sticker-nav-item").nth(1).click();
+      assert.equal(await page.locator(".sticker-category").count(), 1);
+      await page.getByRole("button", { name: /^全部分类/ }).click();
+
+      // Detail: beside the grid on wide panels, replacing it on narrow ones.
+      await page.locator(".sticker-tile button").first().click();
+      if (side) {
+        await page.getByRole("button", { name: "关闭详情", exact: true }).waitFor();
+        assert.ok(await page.locator(".sticker-grid").first().isVisible());
+        await layout(page);
+        await page.screenshot({ path: path.join(output, `${name}-detail.png`), fullPage: true, animations: "disabled" });
+        await page.locator(".sticker-tile button").nth(2).click();
+        await page.getByRole("button", { name: "关闭详情", exact: true }).click();
+      } else {
+        await page.getByRole("button", { name: "返回图库", exact: true }).waitFor();
+        await layout(page);
+        await page.screenshot({ path: path.join(output, `${name}-detail.png`), fullPage: true, animations: "disabled" });
+        await page.getByRole("button", { name: "返回图库", exact: true }).click();
+      }
+      assert.equal(await page.locator(".sticker-detail").count(), 0);
+
+      // Selection mode: checkboxes only appear after "选择"; batch bar follows the selection.
+      assert.equal(await page.locator('.sticker-tile input[type="checkbox"]').count(), 0);
+      await page.getByRole("button", { name: "选择", exact: true }).click();
+      await page.getByText("点图片勾选，可批量移动、加删标签、停用或删除。", { exact: true }).waitFor();
+      await page.locator(".sticker-tile button").first().click();
       const batch = page.locator(".sticker-batch");
+      await batch.getByText("已选 1 张").waitFor();
       await batch.locator("summary").click();
       assert.equal(await batch.getByRole("button", { name: "加标签", exact: true }).isDisabled(), true);
-      assert.equal(await batch.getByRole("button", { name: "删标签", exact: true }).isDisabled(), true);
-      await batch.locator("input").fill("，、");
-      assert.equal(await batch.getByRole("button", { name: "删标签", exact: true }).isDisabled(), true);
       await batch.locator("input").fill("温柔");
       assert.equal(await batch.getByRole("button", { name: "删标签", exact: true }).isEnabled(), true);
       await layout(page);
-      await filter.selectOption(secondGroup);
-      await page.getByRole("button", { name: "取消隐藏选择", exact: true }).waitFor();
-      await page.getByRole("button", { name: "取消隐藏选择", exact: true }).click();
-      await filter.selectOption("all");
-      await page.getByRole("button", { name: "图库管理", exact: true }).click();
-      await page.getByRole("button", { name: "新建分类", exact: true }).waitFor();
-      await layout(page);
-      await page.getByRole("button", { name: "新建分类", exact: true }).click();
+      await page.screenshot({ path: path.join(output, `${name}-select.png`), fullPage: true, animations: "disabled" });
+      await page.getByRole("button", { name: "完成选择", exact: true }).click();
+      assert.equal(await page.locator(".sticker-batch").count(), 0);
+
+      // New category form from the list.
+      await page.getByRole("button", { name: "＋ 新建分类", exact: true }).click();
       await page.getByRole("button", { name: "创建分类", exact: true }).waitFor();
+      await layout(page);
       await page.getByRole("button", { name: "取消", exact: true }).click();
+
+      // Import page.
+      await page.getByRole("tab", { name: "导入", exact: true }).click();
+      await page.getByText("把图片或 zip 套图包拖到这里", { exact: true }).waitFor();
+      await layout(page);
+      await page.screenshot({ path: path.join(output, `${name}-import.png`), fullPage: true, animations: "disabled" });
+
+      // Settings: probability and cooldown up front, diagnostics folded.
       await page.getByRole("tab", { name: "设置", exact: true }).click();
       await layout(page);
       assert.equal(await page.locator(".sticker-advanced[open]").count(), 0);
-      await page.screenshot({ path: path.join(output, `${name}-settings.png`), fullPage: true });
-      await page.getByRole("tab", { name: "爱发", exact: true }).click();
-      assert.equal(await page.evaluate(() => window.previewCalls.filter(call =>
-        call.action === "set_eagerness" && call.args.eagerness === "eager").length), 1);
-      const selectionSlider = page.locator('input[type="range"][max="10"]');
-      await selectionSlider.fill("0");
-      await page.getByText("每轮帮选", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "保存补图轮数", exact: true }).click();
-      await page.getByText("补图轮数已保存", { exact: true }).waitFor();
-      assert.equal(await page.evaluate(() => window.previewCalls.filter(call =>
-        call.action === "set_eager_attachment_turns" && call.args.turns === 0).length), 1);
-      await layout(page);
-      await page.screenshot({ path: path.join(output, `${name}-eager-every-reply.png`), fullPage: true });
-      await selectionSlider.fill("10");
-      await page.getByText("连续 10 轮未配图后帮选", { exact: true }).waitFor();
-      await page.getByRole("button", { name: "保存补图轮数", exact: true }).click();
-      await layout(page);
-      await page.screenshot({ path: path.join(output, `${name}-eager-ten-replies.png`), fullPage: true });
-      await page.evaluate(() => window.previewAttachment("model_unbound"));
-      await page.getByText("请在插件模型配置中为“爱发补图选图”绑定文字模型。", { exact: true }).waitFor();
-      await layout(page);
-      await page.screenshot({ path: path.join(output, `${name}-eager-unbound.png`), fullPage: true });
-      await page.evaluate(() => window.previewAttachment("selecting"));
-      await page.getByText("正在为本轮回复选图…", { exact: true }).waitFor();
-      await layout(page);
-      await page.locator('input[type="number"]').fill("0");
+      await page.locator('input[type="number"]').fill("5");
       await page.getByRole("button", { name: "保存发送冷却", exact: true }).click();
-      await page.getByText("关闭发送冷却", { exact: true }).waitFor();
-      assert.equal(await page.evaluate(() => window.previewCalls.filter(call =>
-        call.action === "set_send_cooldown" && call.args.cooldown_sec === 0).length), 1);
-      await page.locator(".sticker-advanced > summary").first().click();
+      await page.getByText("发送冷却已保存", { exact: true }).waitFor();
+      assert.equal((await calls(page, "set_send_cooldown")).length, 1);
       await page.locator(".sticker-advanced > summary").last().click();
       await layout(page);
-      await page.screenshot({ path: path.join(output, `${name}-advanced.png`), fullPage: true });
-      await page.getByRole("tab", { name: "图库", exact: true }).click();
-      await page.locator(".sticker-tile button").first().click();
-      await page.getByRole("button", { name: "返回图库", exact: true }).waitFor();
-      await layout(page);
-      await page.screenshot({ path: path.join(output, `${name}-detail.png`), fullPage: true });
-      await page.getByRole("button", { name: "返回图库", exact: true }).click();
+      await page.screenshot({ path: path.join(output, `${name}-settings.png`), fullPage: true, animations: "disabled" });
+
       if (name === "mobile") {
         await page.evaluate(() => window.previewLocale("en"));
+        await page.getByRole("tab", { name: "Overview", exact: true }).click();
         await layout(page);
-        await page.getByRole("tab", { name: "Settings", exact: true }).click();
-        await layout(page);
-        await page.screenshot({ path: path.join(output, "mobile-settings-en.png"), fullPage: true });
+        await page.screenshot({ path: path.join(output, "mobile-overview-en.png"), fullPage: true, animations: "disabled" });
       }
       await page.close();
     }

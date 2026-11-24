@@ -1,7 +1,8 @@
 // 格子（v0.9.1 定稿，v0.10.1 拆分自 panel.tsx）：纯图方块。
 // scale-down 只缩不放——160px 小图塞 360px 大格被放大糊脸，就是"拉伸感"的真凶
 //（实机截图钉的坑）。左上角勾选框是唯一的体外控件；
-// 点击进入独立详情；稳定锚点供返回图库时恢复原浏览位置。
+// 平时点击打开侧边详情；选择模式下点击切换勾选，勾选框也只在选择模式下出现。
+// 稳定锚点供窄屏返回图库时恢复原浏览位置。
 
 import { StatusBadge, useState } from "@neko/plugin-ui";
 import { useStickerPreview } from "../preview";
@@ -12,6 +13,8 @@ export function StickerTile(props: {
   row: StickerRow;
   surface: Surface;
   selected?: boolean;
+  selecting?: boolean;
+  active?: boolean;
   disabled?: boolean;
   onToggleSelect?: () => void;
   onOpen?: () => void;
@@ -36,7 +39,7 @@ export function StickerTile(props: {
       borderRadius: "8px",
       overflow: "hidden",
       boxSizing: "border-box",
-      border: props.selected ? "2px solid var(--primary)" : "2px solid var(--border)",
+      border: props.selected || props.active ? "2px solid var(--primary)" : "2px solid var(--border)",
       background: "var(--surface)",
       outline: focused ? "2px solid var(--primary)" : "none",
       outlineOffset: "2px",
@@ -67,14 +70,17 @@ export function StickerTile(props: {
         id={`sticker-open-${row.id}`}
         type="button"
         disabled={props.disabled}
-        aria-label={t("panel.tile.open", {
-          name: row.desc || row.id,
-          defaultValue: "查看：{name}",
-        })}
+        aria-label={props.selecting
+          ? t("panel.tile.select", { name: row.desc || row.id, defaultValue: "选择：{name}" })
+          : t("panel.tile.open", { name: row.desc || row.id, defaultValue: "查看：{name}" })}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
+        aria-pressed={props.selecting ? (props.selected ? "true" : "false") : undefined}
         onClick={() => {
-          if (!props.disabled && props.onOpen) props.onOpen();
+          if (props.disabled) return;
+          if (props.selecting) {
+            if (props.onToggleSelect) props.onToggleSelect();
+          } else if (props.onOpen) props.onOpen();
         }}
         style={{
           position: "absolute",
@@ -162,7 +168,7 @@ export function StickerTile(props: {
           {t("panel.preview.retry", { defaultValue: "重试图片" })}
         </button>
       ) : null}
-      <div
+      {props.selecting ? <div
         style={{
           position: "absolute",
           top: "3px",
@@ -187,7 +193,7 @@ export function StickerTile(props: {
             if (!props.disabled && props.onToggleSelect) props.onToggleSelect();
           }}
         />
-      </div>
+      </div> : null}
     </div>
   );
 }

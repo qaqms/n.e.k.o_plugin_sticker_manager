@@ -1,10 +1,8 @@
-// 库卡工具条（v0.10.1 拆分自 panel.tsx）：搜索、新建分类（含就地展开的创建表单）、
-// 套图包直传（v0.10.3 起单入口「导入」：收件箱按钮已退场）、导出、体检
-// ——以及全库共用的两个隐藏文件输入框。
-// 隐藏输入框放这里是因为它们的宿主 DOM 就在这一排按钮旁边；
-// 目标分类走 ref 传递的纪律在 library_model.ts（轮 I）。
+// 图库工具条（0.9.7 面板重构）：搜索、选择模式开关（添加图片在各分类的标题行），
+// 以及就地展开的新建分类表单。导入 zip、导出、体检已搬到“导入”页。
+// 全库共用的隐藏图片输入框仍放这里；目标分类走 ref 的纪律在 library_model.ts（轮 I）。
 
-import { Button, Field, Inline, Input, Select, Stack, useState } from "@neko/plugin-ui";
+import { Button, Field, Inline, Input, Stack } from "@neko/plugin-ui";
 import type { Surface } from "../shared";
 
 export function LibraryToolbar(props: {
@@ -12,30 +10,21 @@ export function LibraryToolbar(props: {
   query: string;
   setQuery: (next: string) => void;
   creating: boolean;
-  uploading: boolean;
   collectBusy: boolean;
   disabled?: boolean;
   searchDisabled?: boolean;
-  categoryFilter: string;
-  setCategoryFilter: (next: string) => void;
-  categories: Array<{ value: string; label: string }>;
+  selecting: boolean;
   newName: string;
   setNewName: (next: string) => void;
   newDesc: string;
   setNewDesc: (next: string) => void;
-  zipInputRef: any;
   imgInputRef: any;
-  onToggleCreating: () => void;
+  onToggleSelecting: () => void;
   onCreate: () => void;
   onCancelCreate: () => void;
-  onPickZip: () => void;
-  onImportFiles: (files: any) => void;
   onImageFiles: (files: any) => void;
-  onExport: () => void;
-  onRepair: () => void;
 }) {
   const t = props.surface.t;
-  const [manageOpen, setManageOpen] = useState(false);
   return (
     <div className="sticker-toolbar">
       <div className="sticker-search">
@@ -51,74 +40,16 @@ export function LibraryToolbar(props: {
             placeholder={t("panel.search", { defaultValue: "搜索名称、用途或标签" })}
           />
         </label>
-        <label style={{ minWidth: 0 }}>
-          <span className="sticker-sr-only">{t("panel.category.filter", { defaultValue: "分类" })}</span>
-          <Select
-            value={props.categoryFilter || "all"}
-            disabled={props.searchDisabled}
-            options={[
-              { value: "all", label: t("panel.category.all", { defaultValue: "全部分类" }) },
-              ...props.categories,
-            ]}
-            onChange={(next: any) => props.setCategoryFilter(next === "all" ? "" : String(next ?? ""))}
-          />
-        </label>
         <Button
-          className="sticker-import"
-          tone="primary"
-          disabled={props.disabled || props.uploading}
-          onClick={() => {
-            props.onPickZip();
-          }}
+          tone="default"
+          className={props.selecting ? "is-pressed" : ""}
+          disabled={props.searchDisabled}
+          onClick={props.onToggleSelecting}
         >
-          {props.uploading
-            ? t("panel.upload.busy", { defaultValue: "上传中…" })
-            : t("panel.upload.pick", { defaultValue: "导入" })}
+          {props.selecting
+            ? t("panel.select.done", { defaultValue: "完成选择" })
+            : t("panel.select.start", { defaultValue: "选择" })}
         </Button>
-        <button
-          type="button"
-          className="sticker-more"
-          title={t("panel.library.manage", { defaultValue: "图库管理" })}
-          aria-label={t("panel.library.manage", { defaultValue: "图库管理" })}
-          aria-expanded={manageOpen ? "true" : "false"}
-          aria-controls="sticker-library-management"
-          disabled={props.disabled}
-          onClick={() => setManageOpen(!manageOpen)}
-        >
-          <span aria-hidden="true">{"\u2026"}</span>
-        </button>
-        <input
-          ref={props.zipInputRef}
-          type="file"
-          accept=".zip,application/zip,image/png,image/jpeg,image/gif,image/webp"
-          multiple
-          disabled={props.disabled}
-          style={{ display: "none" }}
-          onChange={(event: any) => {
-            props.onImportFiles(event.target && event.target.files);
-            event.target.value = "";
-          }}
-        />
-      </div>
-      <div
-        id="sticker-library-management"
-        className="sticker-toolbar-menu"
-        hidden={!manageOpen}
-      >
-        <div className="sticker-menu-actions">
-          <Button tone="default" disabled={props.disabled} onClick={() => {
-            props.onToggleCreating();
-            setManageOpen(false);
-          }}>
-            {t("panel.group.new_button", { defaultValue: "新建分类" })}
-          </Button>
-          <Button tone="default" disabled={props.disabled} onClick={props.onExport}>
-            {t("panel.export.button", { defaultValue: "导出套图包" })}
-          </Button>
-          <Button tone="default" disabled={props.disabled} onClick={props.onRepair}>
-            {t("panel.repair.button", { defaultValue: "体检与修复" })}
-          </Button>
-        </div>
       </div>
       {props.creating ? (
         <Stack gap={6}>
@@ -173,7 +104,7 @@ export function LibraryToolbar(props: {
           </Inline>
         </Stack>
       ) : null}
-      {/* 全库共用一个隐藏图片输入框：区块头的「收图」只改 collectTargetRef 再 click。 */}
+      {/* 全库共用一个隐藏图片输入框：添加图片只改 collectTargetRef 再 click。 */}
       <input
         ref={props.imgInputRef}
         type="file"

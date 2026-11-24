@@ -121,8 +121,8 @@ export type State = {
   active_zone?: string;
   // J-2：官方区的尺——pack=随包官方装在不在，zone=它在哪个区（空=不在册），seeded=播种台账。
   official?: { pack?: boolean; zone?: string; seeded?: boolean };
-  // 注：后端 state 仍带 usage 与 inbox（台账是跨轮去重的事实记忆，收件箱是服务端旁路），
-  // 只是面板 v0.10.2/v0.10.3 起都不再展示。
+  // 使用台账（新的在前）：概览页“最近发出”只读 ok 且仍在库里的 id。收件箱面板不展示。
+  usage?: Array<{ at?: number; id?: string; lanlan?: string; source?: string; ok?: boolean }>;
   awareness?: AwarenessState;
   config?: {
     cooldown_sec?: number;
@@ -140,6 +140,85 @@ export type State = {
 };
 
 export type Surface = PluginSurfaceProps<State>;
+
+// Model gateway failures the user can act on (see core/attachment_selection.py).
+export const MODEL_FAILURES = [
+  "model_unbound", "model_unavailable", "host_model_unconfigured", "host_model_unsupported",
+  "model_quota_exceeded", "model_defaults_incompatible",
+];
+export const SELECTION_FAILURES = MODEL_FAILURES.concat(["model_timeout", "model_truncated", "invalid_result"]);
+
+// 选图模型只看文字：没有梗义也没有标签的图只剩文件名式的描述，几乎选不中。
+export function needsDescription(row: StickerRow): boolean {
+  return !String(row.caption || "").trim() && !(row.tags || []).length;
+}
+
+// 概览与顶栏共用的选图健康度：一个词说清“插件现在怎么发图、要不要主人动手”。
+export function selectionHealth(state: State, t: Translate): {
+  tone: "ok" | "warn" | "off";
+  label: string;
+  sub: string;
+  detail: string;
+  canTest: boolean;
+} {
+  const mode = String(state.reply_completed?.mode || "legacy");
+  const status = String(state.eager_attachment?.status || "");
+  if (!state.enabled) {
+    return {
+      tone: "off",
+      label: t("panel.health.off", { defaultValue: "已关闭" }),
+      sub: t("panel.health.off_sub", { defaultValue: "不会发图" }),
+      detail: "",
+      canTest: false,
+    };
+  }
+  if (mode === "fallback") {
+    const reason = String(state.reply_completed?.fallback_reason || "");
+    return {
+      tone: "warn",
+      label: t("panel.health.fallback", { defaultValue: "已降级" }),
+      sub: t("panel.health.fallback_sub", { defaultValue: "聊天模型用工具发图" }),
+      detail: [
+        t("panel.attachment.fallback", {
+          defaultValue: "选图模型暂不可用，已改由聊天模型通过工具发图；每 10 分钟自动重试，修好后点“测试选图”可立即恢复。",
+        }),
+        reason ? t(`panel.selection.status.${reason}`, { defaultValue: reason }) : "",
+      ].filter(Boolean).join(" "),
+      canTest: true,
+    };
+  }
+  if (mode === "hook" || mode === "pending") {
+    if (MODEL_FAILURES.includes(status)) {
+      return {
+        tone: "warn",
+        label: t("panel.health.attention", { defaultValue: "需要处理" }),
+        sub: t("panel.health.hook_sub", { defaultValue: "回复后选图" }),
+        detail: t(`panel.selection.status.${status}`, { defaultValue: status }),
+        canTest: true,
+      };
+    }
+    const ms = Number(state.reply_completed?.model_result?.duration_ms || 0);
+    return {
+      tone: "ok",
+      label: t("panel.health.ok", { defaultValue: "正常" }),
+      sub: ms > 0
+        ? t("panel.health.hook_last", {
+            seconds: (ms / 1000).toFixed(1),
+            defaultValue: "回复后选图 · 上次 {seconds} 秒",
+          })
+        : t("panel.health.hook_sub", { defaultValue: "回复后选图" }),
+      detail: "",
+      canTest: true,
+    };
+  }
+  return {
+    tone: "ok",
+    label: t("panel.health.ok", { defaultValue: "正常" }),
+    sub: t("panel.health.legacy_sub", { defaultValue: "聊天模型用工具发图" }),
+    detail: "",
+    canTest: false,
+  };
+}
 
 // 批量通道单次上限：防一次拖几百张把插件子进程堆满 base64；超出部分如实报数。
 export const MAX_BATCH_FILES = 64;

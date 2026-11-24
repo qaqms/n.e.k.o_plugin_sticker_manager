@@ -12,14 +12,9 @@ import {
   useRef,
   useState,
 } from "@neko/plugin-ui";
-import { callAction, extractCode } from "../shared";
+import { callAction, extractCode, MODEL_FAILURES, SELECTION_FAILURES } from "../shared";
 import type { Surface } from "../shared";
 
-// Model gateway failures the user can act on (see core/attachment_selection.py).
-const MODEL_FAILURES = [
-  "model_unbound", "model_unavailable", "host_model_unconfigured", "host_model_unsupported",
-  "model_quota_exceeded", "model_defaults_incompatible",
-];
 
 export function AwarenessCard(props: {
   surface: Surface;
@@ -89,7 +84,7 @@ export function AwarenessCard(props: {
       } else if (action === "test_selection" && result) {
         const status = String(result.status || "");
         setNote(t(`panel.selection.status.${status}`, { defaultValue: status }));
-        setFailed([...MODEL_FAILURES, "model_timeout", "model_truncated", "invalid_result"].includes(status));
+        setFailed(SELECTION_FAILURES.includes(status));
       } else if (action === "set_every_reply") {
         setNote(t("panel.every_reply.saved", { defaultValue: "配图频率已保存" }));
       }
@@ -157,12 +152,6 @@ export function AwarenessCard(props: {
       value: String(runState.surface_categories || 0) + t("panel.run.surface.unit", { defaultValue: " 类" }),
     },
   ];
-  const libraryItems = [
-    { key: "total", label: t("panel.stat.total", { defaultValue: "收藏" }), value: String(state.counts?.total || 0) },
-    { key: "available", label: t("panel.stat.available", { defaultValue: "可用" }), value: String(state.counts?.enabled || 0) },
-    { key: "sent", label: t("panel.stat.sent", { defaultValue: "累计发出" }), value: String(state.counts?.sent_total || 0) },
-    { key: "groups", label: t("panel.category.filter", { defaultValue: "分类" }), value: String(state.counts?.groups || 0) },
-  ];
   const readouts = (items: Array<{ key: string; label: string; value: string }>) => (
     <dl className="sticker-readouts">
       {items.map((item) => (
@@ -190,10 +179,6 @@ export function AwarenessCard(props: {
 
   const diagnostics = (
     <div className="sticker-diagnostics">
-      <h2 className="sticker-section-title">
-        {t("panel.library.overview", { defaultValue: "图库概况" })}
-      </h2>
-      {readouts(libraryItems)}
       <h2 className="sticker-section-title">
         {t("panel.run.title", { defaultValue: "本次运行（重启插件归零）" })}
       </h2>
