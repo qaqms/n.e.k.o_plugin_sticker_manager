@@ -19,7 +19,7 @@
 | `9ee0bf0` | `[permissions]` 权限声明；修复市场 Verify 的 Ruff 导入排序；发行文档 |
 | 本轮 | 修复市场 Verify 的测试运行：去掉测试间相对导入；假时钟只作用于插件模块 |
 
-目前没有 0.9.6 的正式安装包；本地 `dist/` 下的包只供测试。发行流程与“不通知市场”的约定见 [updates-and-release.md](updates-and-release.md)，发行说明见 [releases/0.9.6.md](releases/0.9.6.md)。
+目前没有 0.9.6 的正式安装包；本地 `dist/` 下的包只供测试。发行流程与“不通知市场”的约定见 [updates-and-release.md](updates-and-release.md)，发行说明见 [releases/0.9.7.md](releases/0.9.7.md)。
 
 ## 产品决策（来自维护者，勿擅改）
 
@@ -150,7 +150,7 @@ $env:PYTHONIOENCODING = 'utf-8'; & "F:\ai\neko kaifa7\最新版本的宿主\N.E.
 
 已完成：真实宿主端到端验证（维护者实测效果良好）、`[permissions]` 权限表、市场 Verify 修复、Release 工作流权限修复。
 
-下次发行步骤：`plugin.toml`、`pyproject.toml`、`uv.lock` 改版本号；CHANGELOG 新增版本节；把 `docs/releases/0.9.6.md` 改名并补上新改动；等 Verify 通过后推 `vX.Y.Z` 标签；Release 成功后用 `gh release edit --notes-file` 填说明并核对三个资产。是否删除悬空的 `v0.9.6` 标签由维护者决定。
+下次发行步骤：`plugin.toml`、`pyproject.toml`、`uv.lock` 改版本号；CHANGELOG 新增版本节；写好 `docs/releases/` 下的发行说明（0.9.7 这三步已完成，见 `docs/releases/0.9.7.md`）；等 Verify 通过后推 `vX.Y.Z` 标签；Release 成功后用 `gh release edit --notes-file` 填说明并核对三个资产。是否删除悬空的 `v0.9.6` 标签由维护者决定。
 
 ## 主要代码位置
 
@@ -160,5 +160,5 @@ $env:PYTHONIOENCODING = 'utf-8'; & "F:\ai\neko kaifa7\最新版本的宿主\N.E.
 - 迁移与入口：`__init__.py`（`_migrate_send_settings`、`set_send_probability_entry`、`_refresh_send_tool_surface`）
 - 默认值：`core/configuration.py` 的 `SendSettings`、`plugin.toml`、`config.example.toml`
 - 权限声明：`plugin.toml` 的 `[permissions.require]` / `[permissions.ask]`
-- 发行：`docs/updates-and-release.md`、`docs/releases/0.9.6.md`、`.github/workflows/`
+- 发行：`docs/updates-and-release.md`、`docs/releases/0.9.7.md`、`.github/workflows/`
 - 面板：`ui/components/awareness_card.tsx`、`ui/shared.ts`；文案 `i18n/zh-CN.json`、`i18n/en.json`
