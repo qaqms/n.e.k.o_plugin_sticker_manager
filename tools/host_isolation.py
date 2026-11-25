@@ -148,8 +148,12 @@ def isolated_environment(snapshot: Path, root: Path) -> dict[str, str]:
 
 
 @contextlib.contextmanager
-def isolated_host(host_root: Path, *, parent: Path | None = None) -> Iterator[SimpleNamespace]:
-    executable = host_python(host_root)
+def isolated_host(
+    host_root: Path, *, parent: Path | None = None, python: Path | None = None,
+) -> Iterator[SimpleNamespace]:
+    executable = python if python is not None else host_python(host_root)
+    if not executable.is_file():
+        raise SystemExit(f"[FAIL] Host Python not found: {executable}")
     parent = parent or PLUGIN_ROOT / ".tmpgate"
     parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="isolated-host-", dir=parent) as temporary:

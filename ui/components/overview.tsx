@@ -7,22 +7,6 @@ import type { StickerRow, Surface } from "../shared";
 
 const RECENT_LIMIT = 8;
 
-function RecentThumb(props: { key?: string; surface: Surface; row: StickerRow; onOpen: () => void }) {
-  const { preview, boxRef } = useStickerPreview(props.surface, props.row.id, false, "thumb");
-  const name = props.row.desc || props.row.caption || props.row.id;
-  return (
-    <div className="sticker-recent-item" ref={boxRef}>
-      <button
-        type="button"
-        aria-label={props.surface.t("panel.tile.open", { name, defaultValue: "查看：{name}" })}
-        onClick={props.onOpen}
-      >
-        {preview ? <img src={preview} alt={name} /> : <span aria-hidden="true">…</span>}
-      </button>
-    </div>
-  );
-}
-
 export function OverviewPage(props: {
   surface: Surface;
   disabled?: boolean;
@@ -223,6 +207,24 @@ export function OverviewPage(props: {
           <p className="sticker-muted">{t("panel.overview.recent_none", { defaultValue: "还没有发过图。" })}</p>
         )}
       </section>
+    </div>
+  );
+}
+
+// 放在导出之后：旧版宿主（2026-10 Steam 版）的模块拼接器会把 JSX 闭合标签里的“/”
+// 当成正则开头，排在 JSX 后面的 export 就漏剥，整个面板语法错误、显示空白。
+function RecentThumb(props: { key?: string; surface: Surface; row: StickerRow; onOpen: () => void }) {
+  const { preview, boxRef } = useStickerPreview(props.surface, props.row.id, false, "thumb");
+  const name = props.row.desc || props.row.caption || props.row.id;
+  return (
+    <div className="sticker-recent-item" ref={boxRef}>
+      <button
+        type="button"
+        aria-label={props.surface.t("panel.tile.open", { name, defaultValue: "查看：{name}" })}
+        onClick={props.onOpen}
+      >
+        {preview ? <img src={preview} alt={name} /> : <span aria-hidden="true">…</span>}
+      </button>
     </div>
   );
 }

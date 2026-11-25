@@ -215,15 +215,21 @@ def metadata_toml(hash_value: str) -> str:
     )
 
 
-def stage_plugin_entries(files: list[Path], host_root: Path) -> list[tuple[str, bytes]]:
-    """Probe the shipped tree with the host SDK, not the development tree."""
-    python = host_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+def stage_plugin_entries(
+    files: list[Path], host_root: Path, host_python: Path | None = None,
+) -> list[tuple[str, bytes]]:
+    """Probe the shipped tree with the host SDK, not the development tree.
+
+    The metadata schema follows the host source in ``host_root``; ``host_python`` lets a
+    newer host checkout without its own ``.venv`` borrow an existing interpreter.
+    """
+    python = host_python or host_root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
     if not python.is_file():
-        raise SystemExit(f"[FAIL] Host Python not found: {python}; pass --host-root")
+        raise SystemExit(f"[FAIL] Host Python not found: {python}; pass --host-root or --host-python")
     spec = importlib.util.spec_from_file_location("sticker_host_isolation", Path(__file__).with_name("host_isolation.py"))
     isolation = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(isolation)
-    with isolation.isolated_host(host_root) as sandbox, tempfile.TemporaryDirectory(
+    with isolation.isolated_host(host_root, python=python) as sandbox, tempfile.TemporaryDirectory(
         prefix="sticker-package-", dir=sandbox.root,
     ) as temp:
         staged = Path(temp) / PACKAGE_ID
@@ -260,7 +266,7 @@ def stage_plugin_entries(files: list[Path], host_root: Path) -> list[tuple[str, 
         return entries
 
 
-def build(out_dir: Path, *, host_root: Path | None = None) -> Path:
+def build(out_dir: Path, *, host_root: Path | None = None, host_python: Path | None = None) -> Path:
     """装配 zip。归档名与哈希用的"相对路径"是两回事，这里分开算清楚：
 
     - 归档名：`payload/plugins/<id>/<仓内相对路径>`、`payload/dependencies.toml`、
@@ -270,7 +276,9 @@ def build(out_dir: Path, *, host_root: Path | None = None) -> Path:
     """
     plugin_files = collect_plugin_files()
     plugin_entries = stage_plugin_entries(
-        plugin_files, (host_root or Path(os.environ.get("NEKO_HOST_ROOT", ROOT.parent / "N.E.K.O"))).resolve()
+        plugin_files,
+        (host_root or Path(os.environ.get("NEKO_HOST_ROOT", ROOT.parent / "N.E.K.O"))).resolve(),
+        host_python,
     )
     generated = [
         ("dependencies.toml", dependencies_toml().encode("utf-8")),
@@ -293,9 +301,14 @@ def build(out_dir: Path, *, host_root: Path | None = None) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__ or "")
     parser.add_argument("--host-root", help="Host source directory with .venv and plugin/sdk")
+    parser.add_argument("--host-python", help="Python to probe with when --host-root has no .venv")
     parser.add_argument("--out", default=str(ROOT.parent / "dist"), help="输出目录（默认 ../dist）")
     args = parser.parse_args()
-    target = build(Path(args.out), host_root=Path(args.host_root) if args.host_root else None)
+    target = build(
+        Path(args.out),
+        host_root=Path(args.host_root) if args.host_root else None,
+        host_python=Path(args.host_python) if args.host_python else None,
+    )
     with zipfile.ZipFile(target) as archive:
         names = archive.namelist()
         raw = sum(info.file_size for info in archive.infolist())
