@@ -2,6 +2,8 @@
 // 只读为主；唯一的写操作是“测试选图”，其余按钮都只是跳到对应页面。
 import { Alert, Button, useRef, useState } from "@neko/plugin-ui";
 import { useStickerPreview } from "../preview";
+import { LabelProgress } from "./label_progress";
+import type { LabelControl } from "./label_progress";
 import { callAction, extractCode, needsDescription, selectionHealth, SELECTION_FAILURES } from "../shared";
 import type { StickerRow, Surface } from "../shared";
 
@@ -9,6 +11,9 @@ const RECENT_LIMIT = 8;
 
 export function OverviewPage(props: {
   surface: Surface;
+  labelControl: LabelControl;
+  onShowFailed?: () => void;
+  onGoSettings?: () => void;
   disabled?: boolean;
   onOpenSticker: (id: string) => void;
   onShowMissing: () => void;
@@ -30,7 +35,11 @@ export function OverviewPage(props: {
   const active = zones.filter((zone) => zone.id === activeId)[0];
   const activeRows = stickers.filter((row) => String(row.zone || "") === activeId);
   const activeGroups = (state.groups || []).filter((group) => String(group.zone || "") === activeId);
-  const missing = activeRows.filter((row) => !row.disabled && needsDescription(row)).length;
+  // 排队中、正在识别的图已经在补了，不再算进“需要处理”。
+  const missing = activeRows.filter((row) =>
+    !row.disabled && needsDescription(row) && row.label_state !== "queued" && row.label_state !== "working",
+  ).length;
+  const canLabel = String(state.labeling?.status || "") !== "unsupported" && !!state.labeling;
   const probability = Math.round((state.config?.probability ?? 0.5) * 100);
   const run = state.run || {};
   const attachment = state.eager_attachment || {};
@@ -110,7 +119,20 @@ export function OverviewPage(props: {
         count: missing,
         defaultValue: "使用区里有 {count} 张图没有梗义和标签，选图模型只能看到文件名，很难选中它们。",
       }),
-      action: (
+      action: canLabel ? (
+        <div className="sticker-todo-actions">
+          <Button disabled={!!props.disabled} onClick={props.onShowMissing}>
+            {t("panel.overview.todo.missing_manual", { defaultValue: "手动补" })}
+          </Button>
+          <Button
+            tone="primary"
+            disabled={!!props.disabled || !!props.labelControl.busy}
+            onClick={() => { props.labelControl.run("start", { zone: activeId }); }}
+          >
+            {t("panel.overview.todo.missing_auto", { defaultValue: "自动识图" })}
+          </Button>
+        </div>
+      ) : (
         <Button disabled={!!props.disabled} onClick={props.onShowMissing}>
           {t("panel.overview.todo.missing_go", { defaultValue: "去补描述" })}
         </Button>
@@ -166,6 +188,15 @@ export function OverviewPage(props: {
           </span>
         </div>
       </div>
+
+      <LabelProgress
+        surface={surface}
+        control={props.labelControl}
+        variant="card"
+        disabled={props.disabled}
+        onShowFailed={props.onShowFailed}
+        onGoSettings={props.onGoSettings}
+      />
 
       <section className="sticker-block">
         <div className="sticker-block-head">

@@ -48,6 +48,10 @@ export function useLibraryModel(surface: Surface) {
   const busyRef = useRef("");
   const refreshFailedRef = useRef(false);
   const [uploading, setUploading] = useState(false);
+  // 导入页的结果卡：最近一次导入的四类计数 + 排进识图队列的张数。
+  const [lastImport, setLastImport] = useState<null | {
+    imported: number; duplicates: number; skipped: number; failed: number; queued: number; at: number;
+  }>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [batchTags, setBatchTags] = useState("");
   const [batchGroup, setBatchGroup] = useState("");
@@ -386,6 +390,14 @@ export function useLibraryModel(surface: Surface) {
         LONG_CALL,
       );
       if (fin) {
+        setLastImport({
+          imported: Number(fin.imported ?? 0),
+          duplicates: Number(fin.duplicates ?? 0),
+          skipped: Number(fin.rejected ?? 0),
+          failed: Number(fin.failed ?? 0),
+          queued: Number(fin.label_queued ?? 0),
+          at: Date.now(),
+        });
         setLibraryNote(
           t("panel.upload.done", {
             imported: fin.imported ?? 0,
@@ -539,6 +551,7 @@ export function useLibraryModel(surface: Surface) {
     let dup = 0;
     let big = 0;
     let fail = 0;
+    let queued = 0;
     let completed = 0;
     let batch: Array<{ base64: string; dataUrl: string }> = [];
     let batchChars = 0;
@@ -559,6 +572,7 @@ export function useLibraryModel(surface: Surface) {
         if (!Array.isArray(result?.results) || result.results.length !== current.length) {
           throw new Error("invalid_batch_result");
         }
+        queued += Number(result.label_queued || 0);
         result.results.forEach((row: any, index: number) => {
           if (row?.note === "sticker_added" && row.id) {
             ok += 1;
@@ -592,6 +606,7 @@ export function useLibraryModel(surface: Surface) {
       const result = await callAction(surface, "import_upload_finish", {
         session: sid, group, zone: targetZone,
       }, LONG_CALL);
+      queued += Number(result?.label_queued || 0);
       if (result?.imported === 1) ok += 1;
       else if (result?.duplicates === 1) dup += 1;
       else fail += 1;
@@ -632,6 +647,7 @@ export function useLibraryModel(surface: Surface) {
       }
       await flush();
       const extra = list.length - taken.length;
+      setLastImport({ imported: ok, duplicates: dup, skipped: big + extra, failed: fail, queued, at: Date.now() });
       setLibraryNote(
         t("panel.collect.done", {
           ok, dup, big, fail,
@@ -861,6 +877,8 @@ export function useLibraryModel(surface: Surface) {
     reportRefreshFailure,
     clearRefreshFailure,
     uploading,
+    lastImport,
+    clearLastImport: () => setLastImport(null),
     collectBusy,
     selected,
     toggleSelected,

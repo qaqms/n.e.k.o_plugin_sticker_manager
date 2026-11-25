@@ -87,6 +87,7 @@ from .core import (
 from .core.quick_candidates import quick_candidates_for_tool
 from .core.tool_surface import build_list_tool_description
 from .services import Awareness, LanlanResolver, Library, RunStats, Sender, ToolWatch, gave_shape
+from .services.auto_label import AutoLabeler
 from .services.bundled_pack import pack_exists
 from .services.eager_attachment import EagerAttachment
 from .services.reply_completed import ReplyCompletedAttachment
@@ -216,6 +217,8 @@ class StickerManagerPlugin(NekoPluginBase):
         self._eager_attachment = EagerAttachment(self)
         self._reply_completed = ReplyCompletedAttachment(self)
         self._vision_probe = VisionProbe(self)
+        # 自动识图（第 2 阶段）：后台一拍一张，结果一张一存；面板只发指令、看进度。
+        self._auto_label = AutoLabeler(self, self._library, logger=self.logger)
         # 运行账本的日志面（v0.20.0）：上一次报出去的指纹 + 时刻。见 `_maybe_log_run_ledger`。
         self._ledger_fingerprint: tuple[Any, ...] = ()
         self._ledger_logged_at = 0.0
@@ -244,6 +247,13 @@ class StickerManagerPlugin(NekoPluginBase):
         # v0.17.0：她的分类目录 + 配图意愿都装进常驻面（工具描述），不再只活在一次性注入里。
         await self._reply_completed.maintain()
         self._refresh_send_tool_surface()
+        try:
+            # 上次进程在看的那张退回排队；暂停态、今日用量从 labeling.json 读回。
+            recovered = self._auto_label.recover()
+            if recovered:
+                self.logger.info("auto label recovered {} interrupted sticker(s)", recovered)
+        except Exception:  # noqa: BLE001 - 识图续跑坏了不许拦启动
+            self.logger.warning("sticker_manager auto label recover leaked", exc_info=True)
         self.logger.info(
             "sticker_manager ready: enabled={} stickers={} io_ok={} official_seed={}",
             self._settings.enabled,
@@ -300,6 +310,11 @@ class StickerManagerPlugin(NekoPluginBase):
         if self._reply_completed.managed:
             return Ok({"status": "host_hook"})
         return Ok(await self._eager_attachment.poll())
+
+    @timer_interval(id="auto_label", seconds=2, name="sticker_manager auto label")
+    async def on_auto_label(self, **_):
+        # tick 自己兜所有异常（定时器没有看门狗），这里不再包一层。
+        return Ok(await self._auto_label.tick())
 
     @plugin_entry(id="after_reply", kind="hook", metadata={"agent_auto": False})
     async def after_reply(self, text: str, user_text: str, has_attachments: bool, _ctx=None):
@@ -401,6 +416,82 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     async def test_vision_entry(self, **_):
         return Ok(await self._vision_probe.run())
+
+    @ui.action(
+        id="auto_label", label=tr("actions.auto_label.label", default="自动识图"),
+        tone="default", refresh_context=True,
+    )
+    @plugin_entry(
+        id="auto_label", metadata={"agent_auto": False}, timeout=30,
+        name=tr("entries.auto_label.name", default="自动识图"),
+        description=tr(
+            "entries.auto_label.description",
+            default="后台识图队列：开始识别缺梗义的图、重新识别一张、暂停、继续、清空队列、重试失败的；只填空字段，主人改过的不动",
+        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "op": {
+                    "type": "string",
+                    "enum": [
+                        "start", "one", "pause", "resume", "clear", "retry_failed", "dismiss", "configure",
+                        "ignore_suggestion",
+                    ],
+                },
+                "zone": {"type": "string"},
+                "sticker_id": {"type": "string"},
+                "auto_after_import": {"type": "boolean"},
+                "daily_cap": {"type": "integer", "minimum": 1, "maximum": 5000},
+            },
+            "required": ["op"],
+            "additionalProperties": False,
+        },
+    )
+    async def auto_label_entry(
+        self, op: str = "", zone: str = "", sticker_id: str = "",
+        auto_after_import: Any = None, daily_cap: Any = None, **_,
+    ):
+        loaded = self._library.load()
+        if not loaded.ok:
+            return Err(SdkError(loaded.code))
+        labeler = self._auto_label
+        if op in ("start", "one", "retry_failed") and not labeler.supported():
+            return Err(SdkError("auto_label_unsupported"))
+        queued = 0
+        if op == "start":
+            zone_id = zone if isinstance(zone, str) and zone in self._library.zone_ids() else ""
+            queued = await asyncio.to_thread(labeler.start_missing, zone_id)
+        elif op == "one":
+            if not isinstance(sticker_id, str) or self._library.get(sticker_id) is None:
+                return Err(SdkError("sticker_not_found"))
+            queued = await asyncio.to_thread(labeler.label_one, sticker_id)
+        elif op == "pause":
+            labeler.pause()
+        elif op == "resume":
+            labeler.resume()
+        elif op == "clear":
+            queued = -await asyncio.to_thread(labeler.clear)
+        elif op == "retry_failed":
+            queued = await asyncio.to_thread(labeler.retry_failed)
+        elif op == "dismiss":
+            labeler.dismiss()
+        elif op == "configure":
+            labeler.configure(auto_after_import=auto_after_import, daily_cap=daily_cap)
+        elif op == "ignore_suggestion":
+            if not isinstance(sticker_id, str) or self._library.get(sticker_id) is None:
+                return Err(SdkError("sticker_not_found"))
+            queued = int(self._library.clear_suggestion(sticker_id))
+        else:
+            return Err(SdkError("invalid_op"))
+        return Ok({"note": "auto_label", "op": op, "changed": queued, "labeling": labeler.snapshot()})
+
+    def _queue_imported(self, since: float) -> int:
+        """导入入口收尾：新进来、还没梗义的图排上识图队列（开关关了就不排）。坏了不许拖累导入。"""
+        try:
+            return self._auto_label.after_import(since) if self._auto_label.supported() else 0
+        except Exception:  # noqa: BLE001
+            self.logger.warning("sticker_manager auto label enqueue leaked", exc_info=True)
+            return 0
 
     @ui.action(
         id="add",
@@ -537,11 +628,12 @@ class StickerManagerPlugin(NekoPluginBase):
             or sum(len(image) for image in images) > _IMPORT_BATCH_MAX_CHARS
         ):
             return Err(SdkError("invalid_image_batch"))
+        since = time.time()
         results = []
         for image in images:
             result = await self.add_entry(data_base64=image, group=group, zone=zone)
             results.append(result.value if result.is_ok() else {"code": str(result.error)})
-        return Ok({"results": results})
+        return Ok({"results": results, "label_queued": self._queue_imported(since)})
 
     @ui.action(
         id="update",
@@ -2024,12 +2116,13 @@ class StickerManagerPlugin(NekoPluginBase):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
+        since = time.time()
         summary = self._library.ingest_inbox(
             tags=parse_tags_field(tags),
             group=normalize_group(group),
             zone=zone if isinstance(zone, str) else "",
         )
-        return Ok({"note": "inbox_imported", **summary})
+        return Ok({"note": "inbox_imported", **summary, "label_queued": self._queue_imported(since)})
 
     # ------------------------------------------------------------------
     # 面板选择文件直传（v0.6.0）：zip 分块上传会话三步曲。
@@ -2166,6 +2259,7 @@ class StickerManagerPlugin(NekoPluginBase):
         loaded = self._library.load()
         if not loaded.ok:
             return Err(SdkError(loaded.code))
+        since = time.time()
         summary, error = await asyncio.to_thread(
             self._library.upload_finish,
             session,
@@ -2175,7 +2269,7 @@ class StickerManagerPlugin(NekoPluginBase):
         )
         if error:
             return Err(SdkError(error))
-        return Ok({"note": "pack_uploaded", **summary})
+        return Ok({"note": "pack_uploaded", **summary, "label_queued": self._queue_imported(since)})
 
     @ui.action(
         id="export_pack",
@@ -2296,6 +2390,8 @@ class StickerManagerPlugin(NekoPluginBase):
                 else self._eager_attachment.snapshot()
             ),
             "reply_completed": self._reply_completed.snapshot(),
+            # 自动识图进度（第 2 阶段）：面板在 status=running 时每 2 秒刷新一次。
+            "labeling": self._auto_label.snapshot(),
             "config": {
                 "cooldown_sec": settings.send.cooldown_sec,
                 "eager_attachment_turns": settings.send.eager_attachment_turns,

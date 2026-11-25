@@ -101,16 +101,34 @@ export function FocusCard(props: {
       setBusy("");
     }
   };
+  // 只送改了的字段：没动过的字段不记成“主人改过”，自动识图以后还能补它。
   const save = async () => {
-    const ok = await run("update", {
-      id: row.id,
-      desc: editDesc,
-      tags: editTags,
-      group: editGroup,
-      caption: editCaption,
-      visible_text: editVisible,
-    });
+    const args: Record<string, unknown> = { id: row.id };
+    if (editDesc !== (row.desc || "")) args.desc = editDesc;
+    if (editTags.trim() !== (row.tags || []).join(",")) args.tags = editTags;
+    if (editGroup !== (row.group || "")) args.group = editGroup;
+    if (editCaption !== (row.caption || "")) args.caption = editCaption;
+    if (editVisible !== (row.visible_text || "")) args.visible_text = editVisible;
+    if (Object.keys(args).length === 1) {
+      setEditing(false);
+      return;
+    }
+    const ok = await run("update", args);
     if (ok) setEditing(false);
+  };
+  const autoFields = row.auto_fields || [];
+  const ownerFields = row.owner_edited || [];
+  const labelState = String(row.label_state || "");
+  const canRelabel = !!surface.state?.labeling && String(surface.state?.labeling?.status || "") !== "unsupported";
+  const mark = (field: string) => autoFields.indexOf(field) >= 0
+    ? <span className="sticker-field-mark is-auto">{t("panel.detail.mark_auto", { defaultValue: "自动" })}</span>
+    : ownerFields.indexOf(field) >= 0
+      ? <span className="sticker-field-mark">{t("panel.detail.mark_owner", { defaultValue: "你改过" })}</span>
+      : null;
+  const relabel = async () => {
+    if (await run("auto_label", { op: "one", sticker_id: row.id })) {
+      setNote("");
+    }
   };
   const remove = async () => {
     if (busyRef.current || refreshFailedRef.current) return;
@@ -138,26 +156,31 @@ export function FocusCard(props: {
     { key: "id", label: "ID", value: row.id },
     {
       key: "desc",
+      mark: mark("desc"),
       label: t("panel.detail.desc", { defaultValue: "描述" }),
       value: row.desc || "—",
     },
     {
       key: "caption",
+      mark: mark("caption"),
       label: t("panel.detail.caption", { defaultValue: "梗义" }),
       value: row.caption || "—",
     },
     {
       key: "visible",
+      mark: mark("visible_text"),
       label: t("panel.detail.visible", { defaultValue: "图内原文" }),
       value: row.visible_text || "—",
     },
     {
       key: "group",
+      mark: mark("group"),
       label: t("panel.detail.group", { defaultValue: "分类" }),
       value: row.group || "—",
     },
     {
       key: "tags",
+      mark: mark("tags"),
       label: t("panel.detail.tags", { defaultValue: "标签" }),
       value: (row.tags || []).join(" / ") || "—",
     },
@@ -213,6 +236,18 @@ export function FocusCard(props: {
           ? t("panel.action.enable", { defaultValue: "恢复启用" })
           : t("panel.action.disable", { defaultValue: "禁用" })}
       </Button>
+      {canRelabel ? (
+        <Button
+          disabled={!!busy || refreshFailed || labelState === "queued" || labelState === "working"}
+          onClick={() => { relabel(); }}
+        >
+          {labelState === "queued"
+            ? t("panel.detail.relabel_queued", { defaultValue: "排队识别中" })
+            : labelState === "working"
+              ? t("panel.detail.relabel_working", { defaultValue: "正在识别…" })
+              : t("panel.detail.relabel", { defaultValue: "重新识别" })}
+        </Button>
+      ) : null}
       <Button tone="danger" disabled={!!busy || refreshFailed} onClick={remove}>
         {busy === "remove"
           ? t("panel.action.removing", { defaultValue: "删除中…" })
@@ -267,6 +302,37 @@ export function FocusCard(props: {
         {row.desc || row.caption || row.id}
       </h2>
       {note ? <Alert tone="danger" message={note} /> : null}
+      {labelState === "failed" && !editing ? (
+        <Alert
+          tone="warning"
+          message={t("panel.detail.label_failed", {
+            defaultValue: "自动识图试了 3 次都没成功。可以点“重新识别”再试，或点“编辑”手动补。",
+          })}
+        />
+      ) : null}
+      {row.suggested_group && !editing ? (
+        <div className="sticker-suggest">
+          <span>
+            {t("panel.detail.suggest", {
+              name: row.suggested_group,
+              defaultValue: "模型建议放到「{name}」",
+            })}
+          </span>
+          <Button
+            tone="primary"
+            disabled={!!busy || refreshFailed}
+            onClick={() => { run("update", { id: row.id, group: row.suggested_group }); }}
+          >
+            {t("panel.detail.suggest_move", { defaultValue: "移过去" })}
+          </Button>
+          <Button
+            disabled={!!busy || refreshFailed}
+            onClick={() => { run("auto_label", { op: "ignore_suggestion", sticker_id: row.id }); }}
+          >
+            {t("panel.detail.suggest_ignore", { defaultValue: "忽略" })}
+          </Button>
+        </div>
+      ) : null}
       {refreshFailed ? (
         <Stack gap={8}>
           <Alert
@@ -423,8 +489,9 @@ export function FocusCard(props: {
                     borderBottom: "1px solid rgba(128, 128, 128, 0.18)",
                   }}
                 >
-                  <dt style={{ fontSize: "12px", color: "var(--muted)" }}>
+                  <dt style={{ fontSize: "12px", color: "var(--muted)", display: "flex", gap: "6px", alignItems: "center" }}>
                     {item.label}
+                    {(item as any).mark || null}
                   </dt>
                   <dd style={{ margin: 0, lineHeight: 1.5, overflowWrap: "anywhere" }}>
                     {item.value}

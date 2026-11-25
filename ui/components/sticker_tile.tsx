@@ -31,6 +31,17 @@ export function StickerTile(props: {
     "thumb",
   );
 
+  // 自动识图状态角标：排队 / 识别中 / 失败；识别完成且内容由模型写的标“自动”。
+  const state = String(row.label_state || "");
+  const labelBadge = state === "queued"
+    ? { kind: "queued", text: t("panel.tile.label_queued", { defaultValue: "排队" }) }
+    : state === "working"
+      ? { kind: "working", text: t("panel.tile.label_working", { defaultValue: "识别中" }) }
+      : state === "failed"
+        ? { kind: "failed", text: t("panel.tile.label_failed", { defaultValue: "失败" }) }
+        : (row.auto_fields || []).length
+          ? { kind: "auto", text: t("panel.tile.label_auto", { defaultValue: "自动" }) }
+          : null;
   const tileBox = (extra: Record<string, unknown>) => {
     const base: Record<string, unknown> = {
       position: "relative",
@@ -39,7 +50,8 @@ export function StickerTile(props: {
       borderRadius: "8px",
       overflow: "hidden",
       boxSizing: "border-box",
-      border: props.selected || props.active ? "2px solid var(--primary)" : "2px solid var(--border)",
+      border: props.selected || props.active || state === "working"
+        ? "2px solid var(--primary)" : "2px solid var(--border)",
       background: "var(--surface)",
       outline: focused ? "2px solid var(--primary)" : "none",
       outlineOffset: "2px",
@@ -139,6 +151,9 @@ export function StickerTile(props: {
           </span>
         ) : null}
       </button>
+      {labelBadge && !props.selecting ? (
+        <span className={`sticker-tile-label is-${labelBadge.kind}`}>{labelBadge.text}</span>
+      ) : null}
       {!preview && !loading ? (
         <button
           type="button"

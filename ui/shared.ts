@@ -26,6 +26,27 @@ export type StickerRow = {
   group?: string;
   caption?: string;
   visible_text?: string;
+  // 自动识图（第 2 阶段）：排队状态、模型写的字段、主人改过的字段、模型建议的分类。
+  label_state?: string;
+  label_attempts?: number;
+  auto_fields?: string[];
+  owner_edited?: string[];
+  suggested_group?: string;
+};
+
+// 后台识图队列的读数（services/auto_label.py AutoLabeler.snapshot）。
+export type LabelingState = {
+  status?: string; // idle | running | paused | finished | unsupported
+  reason?: string; // user | quota | daily_cap | model | failures | unsupported | pil_unavailable
+  queued?: number;
+  working_id?: string;
+  failed_total?: number;
+  run?: { total?: number; done?: number; failed?: number; started_at?: number; finished_at?: number } | null;
+  eta_sec?: number;
+  day_count?: number;
+  daily_cap?: number;
+  auto_after_import?: boolean;
+  last_error?: string;
 };
 
 export type AwarenessState = {
@@ -124,6 +145,7 @@ export type State = {
   // 使用台账（新的在前）：概览页“最近发出”只读 ok 且仍在库里的 id。收件箱面板不展示。
   usage?: Array<{ at?: number; id?: string; lanlan?: string; source?: string; ok?: boolean }>;
   awareness?: AwarenessState;
+  labeling?: LabelingState;
   config?: {
     cooldown_sec?: number;
     eager_attachment_turns?: number;
@@ -218,6 +240,27 @@ export function selectionHealth(state: State, t: Translate): {
     detail: "",
     canTest: false,
   };
+}
+
+// 识图进行中、暂停或刚完成时才需要占位置；空闲时整条不出现。
+export function labelingVisible(labeling: LabelingState | undefined): boolean {
+  const status = String(labeling?.status || "");
+  if (status === "unsupported") return Number(labeling?.queued || 0) > 0;
+  return status === "running" || status === "paused" || status === "finished";
+}
+
+// 剩余时间说成人话：不到一分钟 / 约 N 分钟 / 约 N 小时。
+export function formatEta(t: Translate, seconds: number | undefined): string {
+  const value = Number(seconds || 0);
+  if (value <= 0) return "";
+  if (value < 60) return t("panel.label.eta_soon", { defaultValue: "不到 1 分钟" });
+  if (value < 3600) {
+    return t("panel.label.eta_min", { minutes: Math.round(value / 60), defaultValue: "约 {minutes} 分钟" });
+  }
+  return t("panel.label.eta_hour", {
+    hours: Math.round(value / 360) / 10,
+    defaultValue: "约 {hours} 小时",
+  });
 }
 
 // 批量通道单次上限：防一次拖几百张把插件子进程堆满 base64；超出部分如实报数。

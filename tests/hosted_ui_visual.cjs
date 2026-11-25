@@ -64,6 +64,21 @@ print(json.dumps({"images": images, "state": {
 Object.assign(fixture.state.stickers[fixture.state.stickers.length - 1],
   { desc: "IMG_0412", caption: "", tags: [], visible_text: "" });
 
+// Auto labeling in progress: one image being looked at, two queued, one failed,
+// one finished by the model with a category suggestion.
+{
+  const rows = fixture.state.stickers;
+  Object.assign(rows[0], { label_state: "done", auto_fields: ["caption", "tags"], suggested_group: rows[rows.length - 2].group });
+  Object.assign(rows[1], { label_state: "working" });
+  Object.assign(rows[2], { label_state: "queued" });
+  Object.assign(rows[3], { label_state: "queued" });
+  Object.assign(rows[4], { label_state: "failed", label_attempts: 3 });
+  fixture.state.labeling = {
+    status: "running", queued: 2, working_id: rows[1].id, failed_total: 1,
+    run: { total: 6, done: 2, failed: 1 }, eta_sec: 150, day_count: 48, daily_cap: 300, auto_after_import: true,
+  };
+}
+
 const compiled = {};
 function collect(relative) {
   const filename = path.resolve(root, relative);
@@ -216,7 +231,11 @@ async function main() {
       await page.getByRole("button", { name: "测试选图", exact: true }).count();
 
       // "去补描述" lands in the library with the missing filter applied.
-      await page.getByRole("button", { name: "去补描述", exact: true }).click();
+      assert.ok(await page.locator(".sticker-label-card").isVisible());
+      assert.match(await page.locator(".sticker-label-card").innerText(), /正在识图 3 \/ 6/);
+      assert.equal(await page.locator(".sticker-label-strip").count(), 0);
+      await page.getByRole("button", { name: "手动补", exact: true }).click();
+      assert.ok(await page.locator(".sticker-label-strip").isVisible());
       await page.getByText(/1 张图没有梗义和标签/).waitFor();
       assert.equal(await page.locator(".sticker-tile").count(), 1);
       await page.getByRole("button", { name: /^全部分类/ }).click();
@@ -270,7 +289,7 @@ async function main() {
 
       // Import page.
       await page.getByRole("tab", { name: "导入", exact: true }).click();
-      await page.getByText("把图片或 zip 套图包拖到这里", { exact: true }).waitFor();
+      await page.getByText("把图片或 zip 套图包拖到这里，或点击选择", { exact: true }).waitFor();
       await layout(page);
       await page.screenshot({ path: path.join(output, `${name}-import.png`), fullPage: true, animations: "disabled" });
 
@@ -278,7 +297,7 @@ async function main() {
       await page.getByRole("tab", { name: "设置", exact: true }).click();
       await layout(page);
       assert.equal(await page.locator(".sticker-advanced[open]").count(), 0);
-      await page.locator('input[type="number"]').fill("5");
+      await page.locator('input[type="number"]').first().fill("5");
       await page.getByRole("button", { name: "保存发送冷却", exact: true }).click();
       await page.getByText("发送冷却已保存", { exact: true }).waitFor();
       assert.equal((await calls(page, "set_send_cooldown")).length, 1);

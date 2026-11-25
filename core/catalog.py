@@ -291,6 +291,16 @@ def _lenient_int(value: Any) -> int:
 OWNER_EDITABLE_FIELDS: tuple[str, ...] = ("desc", "caption", "tags", "group", "visible_text")
 
 
+# 自动识图（第 2 阶段）：每张图自己的排队状态。空串 = 没排队；队列状态记在图上而不是另一份
+# 队列文件里——重启后按图库自然续跑，不会出现“队列里有、图库里没有”的对不上。
+LABEL_STATES: frozenset[str] = frozenset({"queued", "working", "done", "failed"})
+LABEL_MAX_ATTEMPTS = 3
+
+
+def normalize_label_state(value: Any) -> str:
+    return value if isinstance(value, str) and value in LABEL_STATES else ""
+
+
 def normalize_owner_fields(value: Any) -> list[str]:
     """宽松还原"主人改过哪些字段"（v0.13.0）：只认白名单内的字符串，去重保序。
 
@@ -326,6 +336,12 @@ class Sticker:
     # 主人亲手改过哪些文本字段（v0.13.0 J-3）：官方包刷标签时按字段让位。
     # 存字段名列表而不是一个 bool——"整条跳过"会让这张永远拿不到新分类。
     owner_edited: list[str] = field(default_factory=list)
+    # 自动识图：排队状态、已失败次数、哪些字段是模型写的（主人一改就移到 owner_edited），
+    # 以及模型建议的分类（图已有分类时只提示不挪）。
+    label_state: str = ""
+    label_attempts: int = 0
+    auto_fields: list[str] = field(default_factory=list)
+    suggested_group: str = ""
 
     def catalog_body(self, groups: dict[str, str] | None = None) -> str:
         """目录行正文（轮 F 尺）：梗义 > 主人描述 > 分组说明 > 如实「未标注」。
@@ -362,6 +378,15 @@ class Sticker:
         # v0.13.0：主人改过哪些文本字段，非空才写键（纯插入，没改过的库盘形一字不变）。
         if self.owner_edited:
             out["owner_edited"] = list(self.owner_edited)
+        # 自动识图的键同样非空才写：没识过图的库盘形不变。
+        if self.label_state:
+            out["label_state"] = self.label_state
+        if self.label_attempts:
+            out["label_attempts"] = self.label_attempts
+        if self.auto_fields:
+            out["auto_fields"] = list(self.auto_fields)
+        if self.suggested_group:
+            out["suggested_group"] = self.suggested_group
         return out
 
     @classmethod
@@ -396,6 +421,10 @@ class Sticker:
             caption=normalize_optional_text(raw.get("caption"), limit=CAPTION_MAX_CHARS),
             visible_text=normalize_optional_text(raw.get("visible_text"), limit=VISIBLE_TEXT_MAX_CHARS),
             owner_edited=normalize_owner_fields(raw.get("owner_edited")),
+            label_state=normalize_label_state(raw.get("label_state")),
+            label_attempts=min(max(_lenient_int(raw.get("label_attempts")), 0), LABEL_MAX_ATTEMPTS),
+            auto_fields=normalize_owner_fields(raw.get("auto_fields")),
+            suggested_group=normalize_group(raw.get("suggested_group")),
         )
 
     def with_touch(self, *, now: float) -> "Sticker":

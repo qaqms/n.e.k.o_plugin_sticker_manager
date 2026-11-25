@@ -745,7 +745,7 @@ test("failed zone description saves keep the editor and its draft", async () => 
   };
   const runner = env.runner(() => ZoneBar(zoneProps));
   let node = runner.render();
-  button(node, "编辑区说明").props.onClick();
+  button(node, "改说明").props.onClick();
   node = runner.render();
   walk(node, (item) => item.type.name === "Input")[0].props.onChange("Keep this draft");
   node = runner.render();
@@ -766,11 +766,11 @@ test("zone management and category descriptions expand without hiding the image 
   })).render();
   const zoneMenu = walk(zoneNode, (item) => item.type === "details")[0];
   assert.equal(zoneMenu.props.open, undefined);
-  assert.ok(button(zoneMenu, "新建区"));
-  assert.ok(button(zoneMenu, "编辑区说明"));
+  assert.ok(button(zoneMenu, "新建收藏区"));
+  assert.ok(button(zoneMenu, "改说明"));
   assert.equal(walk(zoneMenu, (item) => item.type.name === "Button")
-    .some((item) => text(item).includes("让她改用这个区")), false);
-  assert.ok(button(zoneNode, "让她改用这个区"));
+    .some((item) => text(item).includes("让猫娘用这个区")), false);
+  assert.ok(button(zoneNode, "让猫娘用这个区"));
   const categoryProps = {
     surface: props,
     section: { name: "One", group: "g1", desc: "Long category description", editable: true,
@@ -861,6 +861,8 @@ test("a successful detail save exits edit mode even when refresh fails", async (
   let node = runner.render();
   button(node, "编辑").props.onClick();
   node = runner.render();
+  walk(node, (item) => item.type.name === "Input")[1].props.onChange("New meaning");
+  node = runner.render();
   await button(node, "保存").props.onClick();
   node = runner.render();
   assert.equal(walk(node, (item) => item.type.name === "Input").length, 0);
@@ -870,6 +872,73 @@ test("a successful detail save exits edit mode even when refresh fails", async (
   await button(node, "重新刷新").props.onClick();
   assert.equal(writes, 1);
   assert.equal(button(runner.render(), "编辑").props.disabled, false);
+});
+
+test("detail save sends only changed fields so untouched ones stay open to auto labeling", async () => {
+  const calls = [];
+  const props = surface(async (action, args) => { calls.push({ action, args }); return { result: {} }; });
+  const env = environment();
+  const FocusCard = env.load("ui/components/focus_card.tsx").FocusCard;
+  const runner = env.runner(() => FocusCard({ surface: props, row: props.state.stickers[0], onExit: () => {} }));
+  let node = runner.render();
+  button(node, "编辑").props.onClick();
+  node = runner.render();
+  await button(node, "保存").props.onClick();
+  assert.equal(calls.length, 0);
+  node = runner.render();
+  assert.equal(walk(node, (item) => item.type.name === "Input").length, 0);
+  button(node, "编辑").props.onClick();
+  node = runner.render();
+  walk(node, (item) => item.type.name === "Input")[1].props.onChange("New meaning");
+  node = runner.render();
+  await button(node, "保存").props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.map((call) => call.args))), [{ id: "s1", caption: "New meaning" }]);
+});
+
+test("labeling progress, tile badges and suggestion actions follow the queue state", async () => {
+  const env = environment();
+  const calls = [];
+  const props = surface(async (action, args) => { calls.push({ action, args }); return { result: {} }; });
+  props.state.labeling = { status: "running", queued: 3, working_id: "s1", run: { total: 5, done: 1, failed: 1 }, eta_sec: 200 };
+  const control = { busy: "", note: "", run: async (op, args) => { calls.push({ action: "auto_label", args: { op, ...args } }); } };
+  const Progress = env.load("ui/components/label_progress.tsx").LabelProgress;
+  let node = env.runner(() => Progress({ surface: props, control, variant: "strip" })).render();
+  assert.match(text(node), /正在识图 2 \/ 5/);
+  assert.match(text(node), /约 3 分钟/);
+  await button(node, "暂停").props.onClick();
+  props.state.labeling = { status: "paused", reason: "quota", queued: 3, run: { total: 5, done: 2 } };
+  node = env.runner(() => Progress({ surface: props, control, variant: "strip" })).render();
+  assert.match(text(node), /免费额度用完/);
+  assert.equal(walk(node, (item) => item.type.name === "Button" && text(item) === "继续").length, 0);
+  props.state.labeling = { status: "finished", failed_total: 2, run: { total: 5, done: 3, failed: 2 } };
+  node = env.runner(() => Progress({ surface: props, control, variant: "strip", onShowFailed: () => {} })).render();
+  assert.match(text(node), /3 张成功，2 张失败/);
+  await button(node, "重试失败的").props.onClick();
+  props.state.labeling = { status: "idle" };
+  assert.equal(env.runner(() => Progress({ surface: props, control, variant: "strip" })).render(), null);
+  assert.deepEqual(calls.map((call) => call.args.op), ["pause", "retry_failed"]);
+
+  const StickerTile = env.load("ui/components/sticker_tile.tsx").StickerTile;
+  const badge = (row) => walk(env.runner(() => StickerTile({ surface: props, row })).render(),
+    (item) => String(item.props?.className || "").startsWith("sticker-tile-label"))[0];
+  assert.equal(text(badge({ id: "a", label_state: "queued" })), "排队");
+  assert.equal(text(badge({ id: "b", label_state: "failed" })), "失败");
+  assert.equal(text(badge({ id: "c", label_state: "done", auto_fields: ["caption"] })), "自动");
+  assert.equal(badge({ id: "d" }), undefined);
+
+  const FocusCard = env.load("ui/components/focus_card.tsx").FocusCard;
+  props.state.labeling = { status: "idle" };
+  const row = { id: "s1", zone: "z1", desc: "x", caption: "y", auto_fields: ["caption"], suggested_group: "g1" };
+  node = env.runner(() => FocusCard({ surface: props, row, onExit: () => {} })).render();
+  assert.match(text(node), /模型建议放到「g1」/);
+  assert.match(text(node), /自动/);
+  calls.length = 0;
+  await button(node, "移过去").props.onClick();
+  await button(env.runner(() => FocusCard({ surface: props, row, onExit: () => {} })).render(), "重新识别").props.onClick();
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.map((call) => [call.action, call.args]))), [
+    ["update", { id: "s1", group: "g1" }],
+    ["auto_label", { op: "one", sticker_id: "s1" }],
+  ]);
 });
 
 test("image buttons and named checkboxes are siblings with guarded disabled handlers", () => {

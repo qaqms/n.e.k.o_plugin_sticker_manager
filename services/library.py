@@ -21,9 +21,11 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Callable, Concatenate, Iterator, ParamSpec, TypeVar
 
+from ..core.auto_label import plan_patch
 from ..core.catalog import (
     DEFAULT_ZONE_NAME,
     GROUP_DESC_MAX_CHARS,
+    LABEL_MAX_ATTEMPTS,
     MAX_STICKER_BYTES,
     OFFICIAL_ZONE_NAME,
     UPLOAD_CHUNK_BYTES,
@@ -1078,6 +1080,11 @@ class Library:
         if touched:
             # J-3：记下主人亲手改过哪些字段（只改启停不算）——官方包刷标签时按字段让位。
             patch["owner_edited"] = sorted(set(sticker.owner_edited) | touched)
+            # 自动识图：主人一改，这个字段就归主人，不再算模型写的。
+            if set(sticker.auto_fields) & touched:
+                patch["auto_fields"] = sorted(set(sticker.auto_fields) - touched)
+        if "group" in patch and sticker.suggested_group:
+            patch["suggested_group"] = ""  # 主人定了分类，模型的建议就不再提
         if "group" in patch and patch["group"]:
             # J-1：换分类 = 换住户；图跟着分类搬区（隐式新名字就地登记到目标区）。
             mapped = self._group_zone.get(patch["group"]) or sticker.zone or self._active_zone
@@ -1116,6 +1123,91 @@ class Library:
             self._log(f"sticker file removal failed: id={sticker_id}")
         self._log(f"sticker removed: id={sticker_id}")
         return ""
+
+    # ------------------------------------------------------------------
+    # 自动识图（第 2 阶段）：状态记在图上，每张一存
+    # ------------------------------------------------------------------
+
+    @_serialized
+    def label_ids(self, state: str) -> list[str]:
+        """某个状态的图，先导入的在前（排队顺序就是这个）。"""
+        rows = sorted(
+            (s for s in self._stickers.values() if s.label_state == state),
+            key=lambda s: (s.added_at, s.id),
+        )
+        return [s.id for s in rows]
+
+    @_serialized
+    def unlabeled_ids(self, zone_id: str = "") -> list[str]:
+        """没有梗义、没停用、也没在排队的图（失败过的也算）；`zone_id` 空 = 全库。"""
+        return [
+            s.id for s in sorted(self._stickers.values(), key=lambda s: (s.added_at, s.id))
+            if not s.caption and not s.disabled and s.label_state not in ("queued", "working")
+            and (not zone_id or self.zone_of_sticker(s) == zone_id)
+        ]
+
+    @_serialized
+    def set_label_states(self, ids: list[str], state: str, *, only: tuple[str, ...] | None = None) -> list[str]:
+        """批量改状态（一次写盘）；`only` 限定原状态。回真正改了的 id。"""
+        changed: list[str] = []
+        previous: dict[str, Sticker] = {}
+        for sticker_id in ids:
+            sticker = self._stickers.get(sticker_id)
+            if sticker is None or sticker.label_state == state:
+                continue
+            if only is not None and sticker.label_state not in only:
+                continue
+            previous[sticker_id] = sticker
+            attempts = 0 if state in ("queued", "") else sticker.label_attempts
+            self._stickers[sticker_id] = replace(sticker, label_state=state, label_attempts=attempts)
+            changed.append(sticker_id)
+        if changed and not self.save().ok:
+            self._stickers.update(previous)
+            return []
+        return changed
+
+    @_serialized
+    def apply_auto_label(
+        self, sticker_id: str, answer: dict[str, Any],
+    ) -> tuple[Sticker | None, str]:
+        """把一张图的识别结果写回（只填空、主人优先），并标为 done。"""
+        sticker = self._stickers.get(sticker_id)
+        if sticker is None:
+            return None, ERR_NOT_FOUND
+        zone_id = self.zone_of_sticker(sticker)
+        patch = plan_patch(sticker, answer, self.zone_group_names(zone_id))
+        updated = replace(sticker, **patch)
+        self._stickers[sticker_id] = updated
+        if not self.save().ok:
+            self._stickers[sticker_id] = sticker
+            return None, ERR_IO
+        return updated, ""
+
+    @_serialized
+    def clear_suggestion(self, sticker_id: str) -> bool:
+        """主人忽略了模型的分类建议。"""
+        sticker = self._stickers.get(sticker_id)
+        if sticker is None or not sticker.suggested_group:
+            return False
+        self._stickers[sticker_id] = replace(sticker, suggested_group="")
+        if not self.save().ok:
+            self._stickers[sticker_id] = sticker
+            return False
+        return True
+
+    @_serialized
+    def note_label_failure(self, sticker_id: str, *, final: bool = False) -> str:
+        """记一次失败：没到上限就回队列，到了上限（或 `final`）就标 failed。回新状态。"""
+        sticker = self._stickers.get(sticker_id)
+        if sticker is None:
+            return ""
+        attempts = min(sticker.label_attempts + 1, LABEL_MAX_ATTEMPTS)
+        state = "failed" if final or attempts >= LABEL_MAX_ATTEMPTS else "queued"
+        self._stickers[sticker_id] = replace(sticker, label_state=state, label_attempts=attempts)
+        if not self.save().ok:
+            self._stickers[sticker_id] = sticker
+            return sticker.label_state
+        return state
 
     # ------------------------------------------------------------------
     # 自修复
