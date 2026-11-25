@@ -30,6 +30,12 @@ description = "支持回复完成钩子的宿主中，由插件在文字回复�
 required = false
 capabilities = ["text"]
 
+[plugin.models.labeling]
+label = "自动标注（识图）"
+description = "给主人导入的图看图写梗义、标签和图中文字。需要能看图的模型；新安装时宿主自动绑定到使魔模型。目前只用于面板“测试识图”。"
+required = false
+capabilities = ["text", "image_input"]
+
 [plugin.i18n]
 default_locale = "zh-CN"
 locales_dir = "i18n"

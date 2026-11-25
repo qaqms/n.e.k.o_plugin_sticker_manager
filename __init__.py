@@ -92,6 +92,7 @@ from .services.eager_attachment import EagerAttachment
 from .services.reply_completed import ReplyCompletedAttachment
 from .services.reply_diagnostics import reply_context_fields
 from .services.turn_end import TurnEndLogs, log_directories
+from .services.vision_probe import VisionProbe
 
 # Settings version 2 replaces eagerness tiers with a per-reply probability.
 _SETTINGS_MARKER = "settings_version.json"
@@ -214,6 +215,7 @@ class StickerManagerPlugin(NekoPluginBase):
         self._runstats = RunStats()
         self._eager_attachment = EagerAttachment(self)
         self._reply_completed = ReplyCompletedAttachment(self)
+        self._vision_probe = VisionProbe(self)
         # 运行账本的日志面（v0.20.0）：上一次报出去的指纹 + 时刻。见 `_maybe_log_run_ledger`。
         self._ledger_fingerprint: tuple[Any, ...] = ()
         self._ledger_logged_at = 0.0
@@ -385,6 +387,20 @@ class StickerManagerPlugin(NekoPluginBase):
     )
     async def test_selection_entry(self, **_):
         return Ok(await self._reply_completed.test_selection())
+
+    @ui.action(
+        id="test_vision", label=tr("actions.test_vision.label", default="测试识图"),
+    )
+    @plugin_entry(
+        id="test_vision", metadata={"agent_auto": False}, timeout=90,
+        name=tr("entries.test_vision.name", default="测试识图"),
+        description=tr(
+            "entries.test_vision.description",
+            default="用一张随机字符对照图和两张图库图片，检查“自动标注”绑定的模型能否看图；只读，不改图库",
+        ),
+    )
+    async def test_vision_entry(self, **_):
+        return Ok(await self._vision_probe.run())
 
     @ui.action(
         id="add",

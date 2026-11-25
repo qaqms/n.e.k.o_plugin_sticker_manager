@@ -48,6 +48,7 @@ export function AwarenessCard(props: {
   const [note, setNote] = useState("");
   const [failed, setFailed] = useState(false);
   const [pending, setPending] = useState("");
+  const [vision, setVision] = useState<any>(null);
   const busyRef = useRef(false);
   const disabled = !!props.disabled || !!pending;
   useEffect(() => {
@@ -85,6 +86,11 @@ export function AwarenessCard(props: {
         const status = String(result.status || "");
         setNote(t(`panel.selection.status.${status}`, { defaultValue: status }));
         setFailed(SELECTION_FAILURES.includes(status));
+      } else if (action === "test_vision" && result) {
+        setVision(result);
+        setNote(t(`panel.vision.verdict.${String(result.verdict || result.status || "")}`, {
+          defaultValue: String(result.verdict || result.status || ""),
+        }));
       } else if (action === "set_every_reply") {
         setNote(t("panel.every_reply.saved", { defaultValue: "配图频率已保存" }));
       }
@@ -193,6 +199,37 @@ export function AwarenessCard(props: {
         {hookManaged ? testSelection : null}</>
       ) : null}
       {hookFallback ? <>{fallbackNotice}{testSelection}</> : null}
+      <Button disabled={disabled} onClick={() => { run("test_vision", {}); }}>
+        {pending === "test_vision"
+          ? t("panel.vision.running", { defaultValue: "识图中…（约 10–60 秒）" })
+          : t("actions.test_vision.label", { defaultValue: "测试识图" })}
+      </Button>
+      {vision && Array.isArray(vision.results) ? (
+        <ul className="sticker-vision-results">
+          {vision.results.map((item: any, index: number) => (
+            <li key={String(index)}>
+              <strong>{String(item.name || item.kind)}</strong>
+              {" · " + String(item.status) + (item.code ? " (" + String(item.code) + ")" : "") +
+                " · " + String(item.duration_ms) + " ms" +
+                (item.finish ? " · " + String(item.finish) : "") +
+                (item.reasoning_tokens ? " · 思考 " + String(item.reasoning_tokens) + " tokens" : "") +
+                (item.text_match === true ? " · ✓ 读对文字" : item.text_match === false ? " · ✗ 文字不符" : "")}
+              {item.answer ? (
+                <div className="sticker-muted">
+                  {"读到：" + (item.answer.visible_text || "（无）") + " ｜ " + (item.answer.caption || "") +
+                    (item.answer.tags?.length ? " ｜ " + item.answer.tags.join(" / ") : "")}
+                </div>
+              ) : null}
+              {item.raw_head ? (
+                <div className="sticker-muted">{"原始回答开头：" + String(item.raw_head)}</div>
+              ) : null}
+              {item.expected_text ? (
+                <div className="sticker-muted">{"应为：" + String(item.expected_text)}</div>
+              ) : null}
+            </li>
+          ))}
+        </ul>
+      ) : null}
       {runState.last_call ? (
         <Text>
           {t("panel.run.last", { defaultValue: "最近一次" }) + "：" + runState.last_call +
