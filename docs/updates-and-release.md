@@ -6,6 +6,24 @@
 发行说明见 `releases/0.9.7.md`。只推送到 `main`，尚未打 `v0.9.7` 标签、没有 Release；
 打标签会触发 Release 工作流，需维护者明确要求后再做。仍不通知插件市场。
 
+## 本地测试包要按目标宿主选元数据版本
+
+`plugin.meta.json` 的 `schema_version` 由打包时用的宿主源码决定，必须和**要装进去的那个宿主**一致。
+不一致时宿主回退读 `plugin.toml`，平时不显眼；但宿主每次重扫插件目录（打开插件列表、检查更新等）
+都会用这份不带入口的元数据替换插件启动时登记的入口，之后面板所有 action 被拒
+（日志 `reason=no_plugin_entries`），缩略图显示“图不可用”，直到插件重启。
+
+**标准是 schema 5**（上游 main、正式发行）；schema 4 只用于在尚未更新的 Steam 宿主上做本地测试。
+
+- 2026-10 的 Steam 版宿主要 schema 4：`tools/build_package.py`（默认 `--host-root ../N.E.K.O`），仅限测试。
+- 上游 main（2026-11 起）要 schema 5：`--host-root <新宿主源码>`，该目录没有 `.venv` 时加
+  `--host-python <现有解释器>`。
+- Steam 宿主和开发版宿主共用 `%LOCALAPPDATA%\N.E.K.O\.neko-plugin-installations`，
+  装进去的包只能对上其中一个；在哪个宿主测，就装哪个版本的包。
+- 提交 `a12a937` 的说明把方向写反了（写成“旧宿主源码只能生成 schema 4 导致出错”）；
+  实际是 schema 5 的包装进了要 schema 4 的 Steam 宿主。以本节为准。
+- 通过 GitHub 发行的包由 CI 用上游 main 打包（schema 5），面向更新后的宿主。
+
 ## 0.9.6：暂缓发行
 
 2026-11-24，维护者曾要求发行 `0.9.6`（只发 GitHub，不推送插件市场，因为 Steam 版宿主

@@ -208,6 +208,9 @@ async function main() {
       await page.getByText("需要处理", { exact: true }).first().waitFor();
       await page.locator(".sticker-recent img").first().waitFor();
       await page.getByText("约每 2 轮一张", { exact: true }).waitFor();
+      // The host header already names the plugin; the character rides on the switch.
+      assert.equal(await page.locator(".neko-page-title").count(), 0);
+      await page.getByText("YUI 发表情包", { exact: true }).waitFor();
       await layout(page);
       await page.screenshot({ path: path.join(output, `${name}-overview.png`), fullPage: true, animations: "disabled" });
       await page.getByRole("button", { name: "测试选图", exact: true }).count();

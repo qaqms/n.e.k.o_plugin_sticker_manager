@@ -394,6 +394,7 @@
   "panel.run.surface.unit": " categories",
   "panel.run.last": "Last call",
   "panel.switch.compact": "Send stickers",
+  "panel.switch.named": "{name} sends stickers",
   "panel.zone.current": "Active zone: {name}",
   "panel.view.library": "Library",
   "panel.view.settings": "Settings",

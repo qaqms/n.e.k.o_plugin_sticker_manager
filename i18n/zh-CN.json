@@ -394,6 +394,7 @@
   "panel.run.surface.unit": " 类",
   "panel.run.last": "最近一次",
   "panel.switch.compact": "猫娘发表情包",
+  "panel.switch.named": "{name} 发表情包",
   "panel.zone.current": "使用区：{name}",
   "panel.view.library": "图库",
   "panel.view.settings": "设置",

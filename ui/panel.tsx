@@ -325,7 +325,8 @@ export default function Panel(props: Surface) {
     !!lib.pending || !!lib.libraryNote || !!lib.refreshFailed;
 
   return (
-    <Page className="sticker-page" title={t("panel.title", { defaultValue: "表情包管理" })} subtitle={state.lanlan || ""}>
+    // 不传 title：宿主页头已写“表情包管理”；角色名并进下方开关，不再独占一行。
+    <Page className="sticker-page">
       <style>{PANEL_STYLES}</style>
       <div className="sticker-panel" ref={panelRef}>
         {state.error_code ? (
@@ -336,7 +337,9 @@ export default function Panel(props: Surface) {
           <Switch
             checked={!!state.enabled}
             disabled={managementBusy}
-            label={t("panel.switch.compact", { defaultValue: "猫娘发表情包" })}
+            label={state.lanlan
+              ? t("panel.switch.named", { name: state.lanlan, defaultValue: "{name} 发表情包" })
+              : t("panel.switch.compact", { defaultValue: "猫娘发表情包" })}
             onChange={changeEnabled}
           />
           <div className="sticker-header-status">
