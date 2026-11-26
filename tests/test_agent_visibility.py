@@ -52,3 +52,17 @@ def test_hidden_panel_entry_still_dispatches_by_id(tmp_path, run_async):
     assert result.is_ok() and result.value["id"] == sticker.id
     assert host.push.calls[0]["visibility"] == ["chat"]
     assert plugin._library.read_usage()[0]["source"] == "panel"
+
+
+def test_every_declared_id_is_unique_across_entries_timers_and_tools():
+    # 宿主把定时器和入口放进同一张 entry 表：同名时定时器盖掉入口，
+    # 面板按钮会被拒（plugin_ui_action_forbidden）。
+    seen = {}
+    for name, member in vars(StickerManagerPlugin).items():
+        for declaration in getattr(member, "__neko_stub_meta__", []):
+            declared = declaration["kwargs"].get("id")
+            if not declared:
+                continue
+            assert declared not in seen or seen[declared] == name, (declared, seen.get(declared), name)
+            seen[declared] = name
+    assert "auto_label" in seen and "auto_label_tick" in seen

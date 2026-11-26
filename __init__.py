@@ -311,7 +311,7 @@ class StickerManagerPlugin(NekoPluginBase):
             return Ok({"status": "host_hook"})
         return Ok(await self._eager_attachment.poll())
 
-    @timer_interval(id="auto_label", seconds=2, name="sticker_manager auto label")
+    @timer_interval(id="auto_label_tick", seconds=2, name="sticker_manager auto label")
     async def on_auto_label(self, **_):
         # tick 自己兜所有异常（定时器没有看门狗），这里不再包一层。
         return Ok(await self._auto_label.tick())
